@@ -144,6 +144,29 @@ def test_unpadded_two_byte_empty_header_is_valid_safetensors(tmp_path: Path) -> 
     assert [chunk.length for chunk in entry.chunks] == [len(expected)]
 
 
+def test_valid_oversized_header_region_is_split_before_tensor_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    object_ceiling = 64
+    monkeypatch.setattr(chunking_policy, "MAX_CHUNK_SIZE", object_ceiling)
+    source = tmp_path / "large-header.safetensors"
+    header = b'{"weight":{"dtype":"U8","shape":[1],"data_offsets":[0,1]}}'
+    header_length = object_ceiling + 8
+    source.write_bytes(
+        header_length.to_bytes(8, "little")
+        + header
+        + b" " * (header_length - len(header))
+        + b"x"
+    )
+
+    cas = LocalCAS(tmp_path / "cas")
+    entry = cas.ingest_file(source)
+
+    assert [chunk.length for chunk in entry.chunks] == [object_ceiling, 16, 1]
+    restored = cas.materialize(entry, tmp_path / "restored.safetensors")
+    assert restored.stat().st_size == source.stat().st_size
+
+
 @pytest.mark.parametrize(("dtype", "bits"), _OFFICIAL_DTYPE_BITS.items())
 def test_every_current_safetensors_dtype_uses_tensor_aligned_chunks(
     tmp_path: Path, dtype: str, bits: int

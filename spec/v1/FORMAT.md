@@ -52,7 +52,7 @@ reference.
 
 HashRepo has one automatic writer policy. It first proves whether a file is
 structurally valid safetensors. A valid file's 8-byte prefix plus JSON header is
-one chunk. Tensors at least
+an isolated header region, split into one or more bounded chunks. Tensors at least
 64 MiB are split every 64 MiB from that tensor's own start; consecutive smaller
 tensors are greedily packed, in physical byte order, to at most 64 MiB. The
 ideal 50 GiB / 64 MiB body is 800 objects; one all-small 50 GiB run needs at

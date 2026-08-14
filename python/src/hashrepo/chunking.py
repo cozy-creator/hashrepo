@@ -15,6 +15,11 @@ from .manifest import MAX_CHUNK_SIZE
 _FIXED_CHUNK_BYTES = MAX_CHUNK_SIZE
 _TENSOR_FLOOR_BYTES = MAX_CHUNK_SIZE
 _TENSOR_STRIDE_BYTES = MAX_CHUNK_SIZE
+# safetensors 0.8.0's Rust reader refuses header lengths above 100,000,000
+# bytes (MAX_HEADER_SIZE in safetensors/src/tensor.rs). Match that format
+# boundary instead of conflating it with HashRepo's smaller object ceiling;
+# the header region is sub-split below when it exceeds one CAS object.
+_MAX_SAFETENSORS_HEADER_BYTES = 100_000_000
 # HashRepo v1 targets 64-bit Linux/POSIX. Safetensors decodes every shape
 # dimension into Rust usize before it checks tensor byte lengths.
 _MAX_USIZE = (1 << 64) - 1
@@ -73,7 +78,11 @@ def _tensor_spans(source: BinaryIO, size: int) -> tuple[int, tuple[tuple[int, in
         return None
     header_length = int.from_bytes(prefix, "little")
     header_end = 8 + header_length
-    if header_length < 2 or header_end > size or header_end > MAX_CHUNK_SIZE:
+    if (
+        header_length < 2
+        or header_length > _MAX_SAFETENSORS_HEADER_BYTES
+        or header_end > size
+    ):
         return None
     header_bytes = source.read(header_length)
     if len(header_bytes) != header_length or not header_bytes.startswith(b"{"):
@@ -148,7 +157,10 @@ def _tensor_spans(source: BinaryIO, size: int) -> tuple[int, tuple[tuple[int, in
 
 
 def _tensor_lengths(header_end: int, spans: tuple[tuple[int, int], ...]) -> tuple[int, ...]:
-    lengths = [header_end]
+    header_chunks, header_remainder = divmod(header_end, MAX_CHUNK_SIZE)
+    lengths = [MAX_CHUNK_SIZE] * header_chunks
+    if header_remainder:
+        lengths.append(header_remainder)
     packed = 0
 
     def flush_pack() -> None:

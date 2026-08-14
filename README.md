@@ -57,7 +57,7 @@ canonical encoders to reproduce it byte-for-byte.
 ## Tensor-aligned writer
 
 `LocalCAS.ingest_file` and `ingest_repository` automatically isolate a valid
-safetensors header,
+safetensors header region into one or more bounded chunks,
 anchors 64 MiB chunks at each large tensor, and packs consecutive small tensors
 up to 64 MiB. Files that do not pass the bounded structural parser silently use
 bounded fixed 64 MiB offsets. The manifest remains format 1 and readers use its
