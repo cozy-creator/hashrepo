@@ -36,7 +36,7 @@
         "digest": { "$ref": "#/$defs/ref" },
         "chunks": {
           "type": "array",
-          "minItems": 2,
+          "minItems": 1,
           "items": { "$ref": "#/$defs/chunk" }
         }
       }

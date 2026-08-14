@@ -1,0 +1,16 @@
+[
+  {
+    "source": "te137-canonical-member-units",
+    "observed_header_len": 8136,
+    "dtype": "F8_E4M3",
+    "shape": [192, 3072],
+    "byte_length": 589824
+  },
+  {
+    "source": "fp8-flux2-worker-output",
+    "observed_header_len": 21055,
+    "dtype": "F8_E4M3",
+    "shape": [3072, 7680],
+    "byte_length": 23592960
+  }
+]

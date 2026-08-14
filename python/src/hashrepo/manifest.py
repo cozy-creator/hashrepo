@@ -7,7 +7,9 @@ from typing import Any
 
 from .refs import CASRef
 
-CHUNK_SIZE = 64 << 20
+# Every independently addressed object remains at most 64 MiB. This is a wire
+# bound, not a promise that chunk offsets are fixed multiples of this value.
+MAX_CHUNK_SIZE = 64 << 20
 FORMAT = 1
 MAX_SIZE = (1 << 63) - 1
 
@@ -58,8 +60,8 @@ class Chunk:
         object.__setattr__(self, "digest", CASRef.parse(self.digest))
         if type(self.length) is not int:
             raise ValueError("chunk length must be an integer")
-        if not 0 < self.length <= CHUNK_SIZE:
-            raise ValueError(f"chunk length must be in [1, {CHUNK_SIZE}], got {self.length}")
+        if not 0 < self.length <= MAX_CHUNK_SIZE:
+            raise ValueError(f"chunk length must be in [1, {MAX_CHUNK_SIZE}], got {self.length}")
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> Chunk:
@@ -89,19 +91,14 @@ class FileEntry:
             raise ValueError("file size must be an integer")
         if not 0 <= self.size_bytes <= MAX_SIZE:
             raise ValueError(f"file size must be in [0, {MAX_SIZE}]")
-        if self.size_bytes <= CHUNK_SIZE:
-            if self.chunks:
-                raise ValueError("files at or below 64 MiB must be stored as one whole object")
+        if not self.chunks:
+            if self.size_bytes > MAX_CHUNK_SIZE:
+                raise ValueError("files above 64 MiB require chunks")
             return
-        expected_count = (self.size_bytes + CHUNK_SIZE - 1) // CHUNK_SIZE
-        if len(self.chunks) != expected_count:
-            raise ValueError(
-                f"chunked file requires {expected_count} chunks, got {len(self.chunks)}"
-            )
-        for index, chunk in enumerate(self.chunks):
-            expected = min(CHUNK_SIZE, self.size_bytes - index * CHUNK_SIZE)
-            if chunk.length != expected:
-                raise ValueError(f"chunk {index} length is {chunk.length}, expected {expected}")
+        if sum(chunk.length for chunk in self.chunks) != self.size_bytes:
+            raise ValueError("chunk lengths must sum exactly to the file size")
+        if len(self.chunks) == 1 and self.chunks[0].digest != self.digest:
+            raise ValueError("a whole-file chunk must match the file digest")
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> FileEntry:

@@ -16,8 +16,8 @@ import (
 const (
 	// FormatV1 is the first surviving manifest format.
 	FormatV1 = 1
-	// ChunkSize is the sole v1 writer policy: 64 MiB fixed chunks.
-	ChunkSize int64 = 64 << 20
+	// MaxChunkSize is a wire bound, not a fixed-offset layout promise.
+	MaxChunkSize int64 = 64 << 20
 )
 
 // Chunk is one independently content-addressed object in a large file.
@@ -80,24 +80,30 @@ func (f File) Validate() error {
 	if f.SizeBytes < 0 {
 		return errors.New("file size must not be negative")
 	}
-	if f.SizeBytes <= ChunkSize {
-		if len(f.Chunks) != 0 {
-			return errors.New("files at or below 64 MiB must be stored as one whole object")
+	if len(f.Chunks) == 0 {
+		if f.SizeBytes > MaxChunkSize {
+			return errors.New("files above 64 MiB require chunks")
 		}
 		return nil
 	}
-	expectedCount := int(1 + (f.SizeBytes-1)/ChunkSize)
-	if len(f.Chunks) != expectedCount {
-		return fmt.Errorf("chunked file requires %d chunks, got %d", expectedCount, len(f.Chunks))
-	}
+	var total int64
 	for index, chunk := range f.Chunks {
 		if chunk.Digest.hex == "" {
 			return fmt.Errorf("chunk %d digest is required", index)
 		}
-		expected := min(ChunkSize, f.SizeBytes-int64(index)*ChunkSize)
-		if chunk.Len != expected {
-			return fmt.Errorf("chunk %d length is %d, expected %d", index, chunk.Len, expected)
+		if chunk.Len <= 0 || chunk.Len > MaxChunkSize {
+			return fmt.Errorf("chunk %d length is %d, expected 1 through %d", index, chunk.Len, MaxChunkSize)
 		}
+		if chunk.Len > f.SizeBytes-total {
+			return errors.New("chunk lengths exceed the file size")
+		}
+		total += chunk.Len
+	}
+	if total != f.SizeBytes {
+		return errors.New("chunk lengths must sum exactly to the file size")
+	}
+	if len(f.Chunks) == 1 && f.Chunks[0].Digest != f.Digest {
+		return errors.New("a whole-file chunk must match the file digest")
 	}
 	return nil
 }

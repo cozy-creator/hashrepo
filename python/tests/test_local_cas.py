@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from hashrepo import CHUNK_SIZE, FileEntry, LocalCAS, RefConflict, RepositoryManifest
+from hashrepo import MAX_CHUNK_SIZE, FileEntry, LocalCAS, RefConflict, RepositoryManifest
 
 
 def test_local_cas_survives_restart_and_materializes_atomically(tmp_path: Path) -> None:
@@ -266,7 +266,7 @@ def test_file_above_chunk_boundary_round_trips(tmp_path: Path) -> None:
     source = tmp_path / "large.bin"
     block = b"hashrepo" * 95325
     with source.open("wb") as handle:
-        remaining = CHUNK_SIZE + 3
+        remaining = MAX_CHUNK_SIZE + 3
         while remaining:
             data = block[: min(len(block), remaining)]
             handle.write(data)
@@ -274,8 +274,8 @@ def test_file_above_chunk_boundary_round_trips(tmp_path: Path) -> None:
 
     cas = LocalCAS(tmp_path / "cas")
     entry = cas.ingest_file(source)
-    assert entry.size_bytes == CHUNK_SIZE + 3
-    assert [chunk.length for chunk in entry.chunks] == [CHUNK_SIZE, 3]
+    assert entry.size_bytes == MAX_CHUNK_SIZE + 3
+    assert [chunk.length for chunk in entry.chunks] == [MAX_CHUNK_SIZE, 3]
 
     destination = tmp_path / "rebuilt.bin"
     cas.materialize(entry, destination)

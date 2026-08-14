@@ -4,8 +4,8 @@
     "manifest": {"format": 1, "files": [{"path": "x", "size_bytes": 0, "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}]}
   },
   {
-    "name": "small file with chunks",
-    "manifest": {"format": 1, "files": [{"path": "x", "size_bytes": 3, "digest": "sha256:0af5149c7024a1c16a682b3cc35683a8649f2154d862f1240bde790e955db904", "chunks": [{"digest": "sha256:361e48d0308f20e32dba5fb56328baf18d72ef0ccb43b84f5c262d2a6a1fc6c8", "len": 3}]}]}
+    "name": "chunk lengths exceed small file",
+    "manifest": {"format": 1, "files": [{"path": "x", "size_bytes": 2, "digest": "sha256:0af5149c7024a1c16a682b3cc35683a8649f2154d862f1240bde790e955db904", "chunks": [{"digest": "sha256:361e48d0308f20e32dba5fb56328baf18d72ef0ccb43b84f5c262d2a6a1fc6c8", "len": 3}]}]}
   },
   {
     "name": "traversal",
@@ -13,7 +13,11 @@
   },
   {
     "name": "wrong chunk total",
-    "manifest": {"format": 1, "files": [{"path": "x", "size_bytes": 67108865, "digest": "sha256:0af5149c7024a1c16a682b3cc35683a8649f2154d862f1240bde790e955db904", "chunks": [{"digest": "sha256:b18efa847f7a3fa48fe0aafd4a6250aa5129740e05126859377af20cedafdeee", "len": 67108863}, {"digest": "sha256:361e48d0308f20e32dba5fb56328baf18d72ef0ccb43b84f5c262d2a6a1fc6c8", "len": 2}]}]}
+    "manifest": {"format": 1, "files": [{"path": "x", "size_bytes": 67108865, "digest": "sha256:0af5149c7024a1c16a682b3cc35683a8649f2154d862f1240bde790e955db904", "chunks": [{"digest": "sha256:b18efa847f7a3fa48fe0aafd4a6250aa5129740e05126859377af20cedafdeee", "len": 67108862}, {"digest": "sha256:361e48d0308f20e32dba5fb56328baf18d72ef0ccb43b84f5c262d2a6a1fc6c8", "len": 2}]}]}
+  },
+  {
+    "name": "one chunk disagrees with whole digest",
+    "manifest": {"format": 1, "files": [{"path": "x", "size_bytes": 16, "digest": "sha256:9bbcbf73561f6bc5d0a17ea6a2081feed2d1304e87602d8c502d9a5c4bd85576", "chunks": [{"digest": "sha256:a7937b64b8caa58f03721bb6bacf5c78cb235febe0e70b1b84cd99541461a08e", "len": 16}]}]}
   },
   {
     "name": "boolean size",

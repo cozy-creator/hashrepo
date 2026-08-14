@@ -2,9 +2,10 @@
 
 from typing import TYPE_CHECKING, Any
 
+from .chunking import WriterPolicy
 from .journal import TransferJournal, TransferSession
 from .local import DigestMismatch, LocalCAS, RefConflict
-from .manifest import CHUNK_SIZE, Chunk, FileEntry, RepositoryManifest
+from .manifest import MAX_CHUNK_SIZE, Chunk, FileEntry, RepositoryManifest
 from .refs import CASRef
 
 if TYPE_CHECKING:
@@ -34,19 +35,21 @@ def __getattr__(name: str) -> Any:
     globals()[name] = value
     return value
 
+
 __all__ = [
     "CASRef",
-    "CHUNK_SIZE",
     "Chunk",
     "DigestMismatch",
     "FileEntry",
     "LocalCAS",
+    "MAX_CHUNK_SIZE",
     "RefConflict",
     "RepositoryManifest",
     "TransferGrant",
     "TransferJournal",
     "TransferReport",
     "TransferSession",
+    "WriterPolicy",
     "download",
     "upload",
 ]
