@@ -1,6 +1,7 @@
 # hashrepo manifest v1
 
-V1 has one writer and one accepted representation.
+V1 has one canonical JSON representation. Chunk boundaries are explicit data,
+not a manifest-format version axis.
 
 ## Content references
 
@@ -11,11 +12,13 @@ hex and every other algorithm are refused.
 
 ## Files
 
-Files of at most 64 MiB are stored as one object under their whole-file digest
-and have no `chunks` member. A present `chunks` member is never null or empty.
-Larger files are split from offset zero into fixed 64 MiB objects. Every
-non-final chunk is exactly 64 MiB. The final chunk is the remaining non-zero
-length.
+Files stored as one object use their whole-file digest and have no `chunks`
+member; this representation is limited to 64 MiB. A present `chunks` member is
+never null or empty. Each chunk is 1 through 64 MiB and the ordered lengths sum
+exactly to `size_bytes`. Files larger than 64 MiB therefore require chunks, but
+readers do not impose fixed offsets. A one-chunk list is valid, including for a
+small header-only safetensors file; because that chunk is the whole file, its
+digest must equal the file digest.
 
 The manifest carries every chunk length. Readers reconstruct from the explicit
 sequence and never infer offsets from a process-global chunk-size setting.
@@ -44,6 +47,31 @@ mistaken for a language's zero value; required arrays are never null.
 
 The digest of the canonical JSON bytes is the repository-manifest content
 reference.
+
+## Writer policies
+
+`fixed-v1` is the default during rollout. It stores files through 64 MiB whole
+and splits larger files at fixed 64 MiB offsets.
+
+`tensor-aligned-v2` first proves that the file is structurally valid
+safetensors. Its 8-byte prefix plus JSON header is one chunk. Tensors at least
+64 MiB are split every 64 MiB from that tensor's own start; consecutive smaller
+tensors are greedily packed, in physical byte order, to at most 64 MiB. The
+ideal 50 GiB / 64 MiB body is 800 objects; one all-small 50 GiB run needs at
+most 1,600, while large tensors use ceiling division. A 186-layout local corpus
+measured 1.346x as many objects as fixed chunks
+at this floor, versus 2.272x at 32 MiB. The 64 MiB floor also bounds collateral
+from one changed small tensor to less than 64 MiB. Malformed and non-safetensors
+files fall back to `fixed-v1`; no filename extension can bypass parsing.
+
+Pack membership is deterministic for one ordered tensor set, not stable across
+arbitrary structural edits. Adding, removing, or resizing a small tensor can
+repack the rest of that consecutive small-tensor run until the next large
+tensor. There is deliberately no rolling hash or content-defined resync.
+
+Both policies write manifest format 1 and coexist without a backfill. Existing
+fixed chunks stay readable; a file only gains cross-version deduplication after
+it is republished with the same policy.
 
 ## Object layouts
 

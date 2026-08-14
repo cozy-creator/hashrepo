@@ -9,7 +9,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import ClassVar
 
-from hashrepo import CHUNK_SIZE, CASRef, Chunk, FileEntry, LocalCAS, TransferGrant, download, upload
+from hashrepo import (
+    MAX_CHUNK_SIZE,
+    CASRef,
+    Chunk,
+    FileEntry,
+    LocalCAS,
+    TransferGrant,
+    download,
+    upload,
+)
 
 
 class GrantServer(http.server.ThreadingHTTPServer):
@@ -112,7 +121,7 @@ def test_real_http_out_of_order_chunks_reassemble_and_check_whole_digest(
     tmp_path: Path,
 ) -> None:
     server = GrantServer(("127.0.0.1", 0), GrantHandler)
-    first_bytes = b"x" * CHUNK_SIZE
+    first_bytes = b"x" * MAX_CHUNK_SIZE
     last_bytes = b"end"
     first = CASRef.digest_bytes(first_bytes)
     last = CASRef.digest_bytes(last_bytes)
@@ -121,9 +130,9 @@ def test_real_http_out_of_order_chunks_reassemble_and_check_whole_digest(
     whole.update(last_bytes)
     entry = FileEntry(
         "large.bin",
-        CHUNK_SIZE + len(last_bytes),
+        MAX_CHUNK_SIZE + len(last_bytes),
         CASRef(whole.hexdigest()),
-        (Chunk(first, CHUNK_SIZE), Chunk(last, len(last_bytes))),
+        (Chunk(first, MAX_CHUNK_SIZE), Chunk(last, len(last_bytes))),
     )
     server.objects = {first.digest: first_bytes, last.digest: last_bytes}
     server.delay_digest = first.digest
@@ -149,7 +158,7 @@ def test_real_http_out_of_order_chunks_reassemble_and_check_whole_digest(
         assert server.completed == [last.digest, first.digest]
 
         output = cas.materialize(entry, tmp_path / "large.bin")
-        assert output.stat().st_size == CHUNK_SIZE + len(last_bytes)
+        assert output.stat().st_size == MAX_CHUNK_SIZE + len(last_bytes)
         with output.open("rb") as handle:
             assert handle.read(1) == b"x"
             handle.seek(-3, 2)

@@ -10,16 +10,23 @@ ROOT = Path(__file__).parents[2]
 VECTORS = ROOT / "spec" / "v1" / "vectors"
 
 
-def test_python_reproduces_the_shared_canonical_manifest() -> None:
-    data = (VECTORS / "manifest.json").read_bytes()
+@pytest.mark.parametrize(
+    ("name", "paths"),
+    [
+        (
+            "manifest.json",
+            ["empty.bin", "large.bin", "text/hello.txt", "unicode/<&☃\u2028.txt"],
+        ),
+        ("variable_manifest.json", ["header-only.safetensors", "small.safetensors"]),
+    ],
+)
+def test_python_reproduces_the_shared_canonical_manifests(
+    name: str, paths: list[str]
+) -> None:
+    data = (VECTORS / name).read_bytes()
     manifest = RepositoryManifest.from_bytes(data)
     assert manifest.canonical_bytes() == data.strip()
-    assert [entry.path for entry in manifest.files] == [
-        "empty.bin",
-        "large.bin",
-        "text/hello.txt",
-        "unicode/<&☃\u2028.txt",
-    ]
+    assert [entry.path for entry in manifest.files] == paths
 
 
 def test_every_shared_invalid_manifest_is_refused() -> None:

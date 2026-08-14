@@ -9,21 +9,25 @@ import (
 	"testing"
 )
 
-func TestGoReproducesSharedCanonicalManifest(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("spec", "v1", "vectors", "manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := ParseManifest(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	canonical, err := manifest.Canonical()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(canonical, bytes.TrimSpace(data)) {
-		t.Fatalf("canonical bytes differ\n got: %s\nwant: %s", canonical, data)
+func TestGoReproducesSharedCanonicalManifests(t *testing.T) {
+	for _, name := range []string{"manifest.json", "variable_manifest.json"} {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("spec", "v1", "vectors", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := ParseManifest(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonical, err := manifest.Canonical()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(canonical, bytes.TrimSpace(data)) {
+				t.Fatalf("canonical bytes differ\n got: %s\nwant: %s", canonical, data)
+			}
+		})
 	}
 }
 

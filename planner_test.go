@@ -147,6 +147,33 @@ func sharedManifest(t *testing.T) Manifest {
 	return manifest
 }
 
+func TestPlanUsesManifestLengthsForVariableChunks(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("spec", "v1", "vectors", "variable_manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ParseManifest(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resident := map[Ref]bool{}
+	for _, file := range manifest.Files {
+		for _, object := range file.Objects() {
+			resident[object.Digest] = true
+		}
+	}
+	plan, err := (Planner{Store: &memoryStore{
+		resident: resident,
+		staged:   map[Ref]bool{},
+	}}).Plan(context.Background(), "variable-layout", manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.DeclaredBytes != 27 || plan.DistinctObjects != 3 || len(plan.Have) != 3 {
+		t.Fatalf("planner ignored explicit chunk lengths: %+v", plan)
+	}
+}
+
 func TestPlanDeduplicatesResumesAndHidesUnclaimableResidency(t *testing.T) {
 	manifest := sharedManifest(t)
 	empty := manifest.Files[0].Digest

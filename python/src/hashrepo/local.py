@@ -13,7 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-from .manifest import CHUNK_SIZE, Chunk, FileEntry, RepositoryManifest
+from .chunking import WriterPolicy, plan_chunks
+from .manifest import Chunk, FileEntry, RepositoryManifest
 from .refs import CASRef
 
 _COPY_BUFFER = 1 << 20
@@ -348,23 +349,38 @@ class LocalCAS:
             temporary.unlink(missing_ok=True)
             raise
 
-    def ingest_file(self, source: str | Path, *, manifest_path: str | None = None) -> FileEntry:
+    def ingest_file(
+        self,
+        source: str | Path,
+        *,
+        manifest_path: str | None = None,
+        writer_policy: WriterPolicy = "fixed-v1",
+    ) -> FileEntry:
         path = Path(source)
         initial = path.stat()
-        if initial.st_size <= CHUNK_SIZE:
-            digest = self.put_file(path, size=initial.st_size)
-            return FileEntry(manifest_path or path.name, initial.st_size, digest)
-
         whole = hashlib.sha256()
         chunks: list[Chunk] = []
         copied = 0
         with path.open("rb") as handle:
             before = os.fstat(handle.fileno())
-            while data := handle.read(CHUNK_SIZE):
+            chunk_lengths = plan_chunks(handle, initial.st_size, writer_policy)
+            if not chunk_lengths:
+                return FileEntry(
+                    manifest_path or path.name,
+                    initial.st_size,
+                    self.put_file(path, size=initial.st_size),
+                )
+            handle.seek(0)
+            for length in chunk_lengths:
+                data = handle.read(length)
+                if len(data) != length:
+                    raise OSError(f"{path} ended while it was being ingested")
                 copied += len(data)
                 whole.update(data)
                 digest = self.put_bytes(data)
                 chunks.append(Chunk(digest, len(data)))
+            if handle.read(1):
+                raise OSError(f"{path} grew while it was being ingested")
             after = os.fstat(handle.fileno())
         if (
             copied != initial.st_size
@@ -380,7 +396,12 @@ class LocalCAS:
             tuple(chunks),
         )
 
-    def ingest_repository(self, source: str | Path) -> RepositoryManifest:
+    def ingest_repository(
+        self,
+        source: str | Path,
+        *,
+        writer_policy: WriterPolicy = "fixed-v1",
+    ) -> RepositoryManifest:
         """Ingest every regular file below a directory into one manifest.
 
         V1 manifests describe files, not symlinks or empty directories. Refusing
@@ -401,7 +422,11 @@ class LocalCAS:
                 relative = path.relative_to(root)
                 raise ValueError(f"repository contains a non-regular file: {relative}")
             entries.append(
-                self.ingest_file(path, manifest_path=path.relative_to(root).as_posix())
+                self.ingest_file(
+                    path,
+                    manifest_path=path.relative_to(root).as_posix(),
+                    writer_policy=writer_policy,
+                )
             )
         return RepositoryManifest(tuple(entries))
 
