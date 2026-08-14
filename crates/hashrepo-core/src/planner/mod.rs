@@ -174,11 +174,11 @@ fn plan_once<S: ByteSource + ?Sized>(source: &S) -> Result<Plan, PlanError> {
         plan.validate()?;
         return Ok(plan);
     }
-    if source.len() >= 24
-        && let Some(plan) = gguf::try_plan(source)?
-    {
-        plan.validate()?;
-        return Ok(plan);
+    if source.len() >= 24 {
+        if let Some(plan) = gguf::try_plan(source)? {
+            plan.validate()?;
+            return Ok(plan);
+        }
     }
     if let Some(plan) = safetensors::try_plan(source)? {
         plan.validate()?;
