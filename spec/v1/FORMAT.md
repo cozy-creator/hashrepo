@@ -48,13 +48,11 @@ mistaken for a language's zero value; required arrays are never null.
 The digest of the canonical JSON bytes is the repository-manifest content
 reference.
 
-## Writer policies
+## Writer policy
 
-`fixed-v1` is the default during rollout. It stores files through 64 MiB whole
-and splits larger files at fixed 64 MiB offsets.
-
-`tensor-aligned-v2` first proves that the file is structurally valid
-safetensors. Its 8-byte prefix plus JSON header is one chunk. Tensors at least
+HashRepo has one automatic writer policy. It first proves whether a file is
+structurally valid safetensors. A valid file's 8-byte prefix plus JSON header is
+one chunk. Tensors at least
 64 MiB are split every 64 MiB from that tensor's own start; consecutive smaller
 tensors are greedily packed, in physical byte order, to at most 64 MiB. The
 ideal 50 GiB / 64 MiB body is 800 objects; one all-small 50 GiB run needs at
@@ -62,16 +60,15 @@ most 1,600, while large tensors use ceiling division. A 186-layout local corpus
 measured 1.346x as many objects as fixed chunks
 at this floor, versus 2.272x at 32 MiB. The 64 MiB floor also bounds collateral
 from one changed small tensor to less than 64 MiB. Malformed and non-safetensors
-files fall back to `fixed-v1`; no filename extension can bypass parsing.
+files use bounded fixed 64 MiB offsets; no filename extension can bypass parsing.
 
 Pack membership is deterministic for one ordered tensor set, not stable across
 arbitrary structural edits. Adding, removing, or resizing a small tensor can
 repack the rest of that consecutive small-tensor run until the next large
 tensor. There is deliberately no rolling hash or content-defined resync.
 
-Both policies write manifest format 1 and coexist without a backfill. Existing
-fixed chunks stay readable; a file only gains cross-version deduplication after
-it is republished with the same policy.
+The writer always emits manifest format 1. Readers reconstruct files only from
+the manifest's ordered digest/length sequence and never infer writer boundaries.
 
 ## Object layouts
 

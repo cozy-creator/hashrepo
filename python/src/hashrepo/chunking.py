@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import json
-from typing import BinaryIO, Literal, TypeAlias
+from typing import BinaryIO
 
 from .manifest import MAX_CHUNK_SIZE
-
-WriterPolicy: TypeAlias = Literal["fixed-v1", "tensor-aligned-v2"]
 
 # 50 GiB / 64 MiB = 800 objects only when boundaries fill perfectly. A greedy
 # small-tensor run of S bytes needs fewer than 2*S/64MiB + 1 packs; large tensors
@@ -13,7 +11,7 @@ WriterPolicy: TypeAlias = Literal["fixed-v1", "tensor-aligned-v2"]
 # unique local layouts measured 3,226 aligned objects vs 2,397 fixed (1.346x);
 # 32/16/4 MiB floors cost 2.272x/3.378x/7.988x. Thus 64 MiB controls R2 request
 # count while bounding one changed small-tensor pack to <64 MiB. te#185 phase 4
-# must measure a real frozen-base LoRA series before this becomes the default.
+# measures the real savings of the automatic policy on a frozen-base LoRA series.
 _FIXED_CHUNK_BYTES = MAX_CHUNK_SIZE
 _TENSOR_FLOOR_BYTES = MAX_CHUNK_SIZE
 _TENSOR_STRIDE_BYTES = MAX_CHUNK_SIZE
@@ -22,7 +20,7 @@ _TENSOR_STRIDE_BYTES = MAX_CHUNK_SIZE
 _MAX_USIZE = (1 << 64) - 1
 
 # This mirrors safetensors::tensor::Dtype::bitsize at upstream 6eb4dc9. Unknown
-# future dtypes take the safe fixed-v1 fallback instead of being guessed here.
+# future dtypes take the safe fixed-boundary fallback instead of being guessed here.
 _DTYPE_BITS = {
     "F4": 4,
     "F6_E2M3": 6,
@@ -177,11 +175,14 @@ def _tensor_lengths(header_end: int, spans: tuple[tuple[int, int], ...]) -> tupl
     return tuple(lengths)
 
 
-def plan_chunks(source: BinaryIO, size: int, policy: WriterPolicy) -> tuple[int, ...]:
-    if policy == "fixed-v1":
-        return _fixed_lengths(size)
-    if policy != "tensor-aligned-v2":
-        raise ValueError(f"unknown writer policy {policy!r}")
+def plan_chunks(source: BinaryIO, size: int) -> tuple[int, ...]:
+    """Plan the sole current writer layout for one file.
+
+    Structurally valid safetensors use tensor-stable boundaries. Every other
+    file uses bounded fixed offsets. This decision is automatic and cannot be
+    selected by callers.
+    """
+
     parsed = _tensor_spans(source, size)
     if parsed is None:
         return _fixed_lengths(size)

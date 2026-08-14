@@ -1,6 +1,6 @@
 [project]
 name = "hashrepo"
-version = "0.2.0"
+version = "0.3.0"
 description = "Content-addressed local storage and resumable chunk transfer"
 readme = "README.md"
 license = "MIT"
