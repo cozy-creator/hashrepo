@@ -120,6 +120,8 @@ pub enum PlanError {
     InvalidCoverage,
     #[error("planner exceeds bounded object cardinality")]
     ObjectLimit,
+    #[error("planner could not reserve bounded working memory")]
+    ResourceExhausted,
     #[error("plan source length mismatch: expected {expected}, got {actual}")]
     SourceLengthMismatch { expected: u64, actual: u64 },
 }
@@ -167,7 +169,14 @@ pub fn plan<S: ByteSource + ?Sized>(source: &S) -> Result<Plan, PlanError> {
 }
 
 fn plan_once<S: ByteSource + ?Sized>(source: &S) -> Result<Plan, PlanError> {
-    if let Some(plan) = gguf::try_plan(source)? {
+    if source.len() < 10 {
+        let plan = raw_plan(source.len())?;
+        plan.validate()?;
+        return Ok(plan);
+    }
+    if source.len() >= 24
+        && let Some(plan) = gguf::try_plan(source)?
+    {
         plan.validate()?;
         return Ok(plan);
     }
@@ -208,7 +217,7 @@ pub(crate) fn append_split_region(
         .ok_or(PlanError::ObjectLimit)?;
     regions
         .try_reserve_exact(new_count - regions.len())
-        .map_err(|_| PlanError::ObjectLimit)?;
+        .map_err(|_| PlanError::ResourceExhausted)?;
 
     let mut cursor = offset;
     let mut remaining = length;

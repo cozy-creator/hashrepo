@@ -39,16 +39,50 @@ impl fmt::Display for ObjectDigest {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlannedObject {
-    pub digest: ObjectDigest,
-    pub length: u64,
-    pub kind: RegionKind,
+    digest: ObjectDigest,
+    length: u64,
+    kind: RegionKind,
+}
+
+impl PlannedObject {
+    #[must_use]
+    pub const fn digest(&self) -> ObjectDigest {
+        self.digest
+    }
+
+    #[must_use]
+    pub const fn length(&self) -> u64 {
+        self.length
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> RegionKind {
+        self.kind
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HashedPlan {
-    pub planner: PlannerId,
-    pub file_size: u64,
-    pub objects: Vec<PlannedObject>,
+    planner: PlannerId,
+    file_size: u64,
+    objects: Vec<PlannedObject>,
+}
+
+impl HashedPlan {
+    #[must_use]
+    pub const fn planner(&self) -> PlannerId {
+        self.planner
+    }
+
+    #[must_use]
+    pub const fn file_size(&self) -> u64 {
+        self.file_size
+    }
+
+    #[must_use]
+    pub fn objects(&self) -> &[PlannedObject] {
+        &self.objects
+    }
 }
 
 /// Selects the sole canonical planner and hashes each resulting object from one
@@ -71,8 +105,15 @@ pub(crate) fn hash_plan<S: ByteSource + ?Sized>(
         });
     }
 
-    let mut buffer = vec![0_u8; HASH_BUFFER_SIZE];
-    let mut objects = Vec::with_capacity(plan.regions.len());
+    let mut buffer = Vec::new();
+    buffer
+        .try_reserve_exact(HASH_BUFFER_SIZE)
+        .map_err(|_| PlanError::ResourceExhausted)?;
+    buffer.resize(HASH_BUFFER_SIZE, 0);
+    let mut objects = Vec::new();
+    objects
+        .try_reserve_exact(plan.regions.len())
+        .map_err(|_| PlanError::ResourceExhausted)?;
     for region in &plan.regions {
         let mut hasher = Sha256::new();
         let mut cursor = region.offset;

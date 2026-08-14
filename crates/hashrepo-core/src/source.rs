@@ -1,4 +1,4 @@
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::fs::OpenOptions;
 use std::fs::{self, File};
 use std::io;
@@ -10,13 +10,16 @@ use std::io::Seek;
 #[cfg(not(unix))]
 use std::io::{Read, Seek, SeekFrom};
 #[cfg(windows)]
-use std::os::windows::fs::MetadataExt;
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 #[cfg(not(unix))]
 use std::sync::Mutex;
 #[cfg(unix)]
 use std::{os::unix::fs::MetadataExt, os::unix::fs::OpenOptionsExt};
 
 use crate::planner::ByteSource;
+
+#[cfg(windows)]
+const FILE_SHARE_READ: u32 = 0x0000_0001;
 
 /// A bounded, random-access byte source backed by an open regular file.
 ///
@@ -95,7 +98,12 @@ impl FileByteSource {
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(path)?;
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        let file = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(path)?;
+        #[cfg(not(any(unix, windows)))]
         let file = File::open(path)?;
 
         let opened = file.metadata()?;
@@ -112,7 +120,7 @@ impl FileByteSource {
     /// current stamp without reading its contents. Unlike [`Self::open`], this
     /// accepts whatever path traversal policy the caller used to obtain the
     /// handle.
-    pub fn from_file(file: File) -> io::Result<Self> {
+    fn from_file(file: File) -> io::Result<Self> {
         let metadata = file.metadata()?;
         if !metadata.is_file() {
             return Err(not_regular_file());
@@ -285,7 +293,9 @@ fn read_exact_with(
 #[cfg(test)]
 mod tests {
     use std::fs::{self, OpenOptions};
-    use std::io::{Seek, SeekFrom, Write};
+    #[cfg(not(windows))]
+    use std::io::Write;
+    use std::io::{Seek, SeekFrom};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Barrier};
@@ -373,6 +383,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn captured_length_does_not_grow_and_truncation_is_reported() -> io::Result<()> {
         let directory = TempDirectory::new()?;
@@ -397,6 +408,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn same_length_rewrite_and_truncate_regrow_invalidate_the_snapshot() -> io::Result<()> {
         let directory = TempDirectory::new()?;
@@ -417,6 +429,33 @@ mod tests {
             second.check_unchanged().unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn path_open_denies_mutation_while_the_snapshot_is_alive() -> io::Result<()> {
+        let directory = TempDirectory::new()?;
+        let path = directory.join("source");
+        fs::write(&path, b"abcdefghij")?;
+        let source = FileByteSource::open(&path)?;
+
+        assert!(fs::write(&path, b"ABCDEFGHIJ").is_err());
+        assert!(OpenOptions::new().write(true).open(&path).is_err());
+        assert!(fs::rename(&path, directory.join("renamed")).is_err());
+        source.check_unchanged()?;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn path_open_refuses_directories_and_devices() -> io::Result<()> {
+        let directory = TempDirectory::new()?;
+        assert_eq!(
+            FileByteSource::open(&directory.0).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(FileByteSource::open(r"\\.\NUL").is_err());
         Ok(())
     }
 
@@ -447,6 +486,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn replacing_the_path_does_not_redirect_an_open_source() -> io::Result<()> {
         let directory = TempDirectory::new()?;

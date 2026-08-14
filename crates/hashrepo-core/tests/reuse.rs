@@ -59,7 +59,7 @@ fn safetensors(tensors: &[(&str, &[u8])]) -> Vec<u8> {
 fn hashed(bytes: &[u8]) -> HashedPlan {
     let source = SliceSource(bytes);
     let hashed = plan_and_hash(&source).expect("valid fixture plans and hashes");
-    assert_eq!(hashed.planner, PlannerId::SafetensorsV1);
+    assert_eq!(hashed.planner(), PlannerId::SafetensorsV1);
     hashed
 }
 
@@ -73,21 +73,21 @@ fn borrowed_slices_pass_directly_through_the_closed_registry() {
 
 fn tensor_digests(hashed: &HashedPlan) -> Vec<String> {
     hashed
-        .objects
+        .objects()
         .iter()
-        .filter(|object| object.kind == RegionKind::Tensor)
-        .map(|object| object.digest.to_string())
+        .filter(|object| object.kind() == RegionKind::Tensor)
+        .map(|object| object.digest().to_string())
         .collect()
 }
 
 fn changed_object_indexes(before: &HashedPlan, after: &HashedPlan) -> HashSet<usize> {
-    assert_eq!(before.objects.len(), after.objects.len());
+    assert_eq!(before.objects().len(), after.objects().len());
     before
-        .objects
+        .objects()
         .iter()
-        .zip(&after.objects)
+        .zip(after.objects())
         .enumerate()
-        .filter_map(|(index, (left, right))| (left.digest != right.digest).then_some(index))
+        .filter_map(|(index, (left, right))| (left.digest() != right.digest()).then_some(index))
         .collect()
 }
 

@@ -134,7 +134,11 @@ pub(crate) fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan
         Ok(size) => size,
         Err(_) => return Ok(None),
     };
-    let mut header_bytes = vec![0_u8; header_buffer_size];
+    let mut header_bytes = Vec::new();
+    header_bytes
+        .try_reserve_exact(header_buffer_size)
+        .map_err(|_| PlanError::ResourceExhausted)?;
+    header_bytes.resize(header_buffer_size, 0);
     source.read_exact_at(PREFIX_SIZE, &mut header_bytes)?;
     if header_bytes.first() != Some(&b'{') {
         return Ok(None);
@@ -147,7 +151,10 @@ pub(crate) fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan
     };
 
     let data_size = file_size - header_end;
-    let mut spans = Vec::with_capacity(header.0.len());
+    let mut spans = Vec::new();
+    spans
+        .try_reserve_exact(header.0.len())
+        .map_err(|_| PlanError::ResourceExhausted)?;
     for (_name, tensor) in header.0 {
         let [start, end] = tensor.data_offsets;
         if end < start || tensor_byte_size(&tensor).is_none_or(|size| size != end - start) {
@@ -169,23 +176,25 @@ pub(crate) fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan
     }
 
     let mut regions = Vec::new();
-    if append_split_region(&mut regions, 0, header_end, RegionKind::Header).is_err() {
-        return Ok(None);
+    match append_split_region(&mut regions, 0, header_end, RegionKind::Header) {
+        Ok(()) => {}
+        Err(PlanError::ObjectLimit) => return Ok(None),
+        Err(error) => return Err(error),
     }
     for span in spans {
         let length = span.end - span.start;
         if length == 0 {
             continue;
         }
-        if append_split_region(
+        match append_split_region(
             &mut regions,
             header_end + span.start,
             length,
             RegionKind::Tensor,
-        )
-        .is_err()
-        {
-            return Ok(None);
+        ) {
+            Ok(()) => {}
+            Err(PlanError::ObjectLimit) => return Ok(None),
+            Err(error) => return Err(error),
         }
     }
 

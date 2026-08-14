@@ -35,6 +35,7 @@ const GENERAL_ALIGNMENT: &[u8] = b"general.alignment";
 enum ParseFailure {
     Invalid,
     Read(io::Error),
+    ResourceExhausted,
 }
 
 impl From<io::Error> for ParseFailure {
@@ -132,7 +133,7 @@ impl<'a, S: ByteSource + ?Sized> Reader<'a, S> {
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(length)
-            .map_err(|_| ParseFailure::Invalid)?;
+            .map_err(|_| ParseFailure::ResourceExhausted)?;
         bytes.resize(length, 0);
         self.source.read_exact_at(self.position, &mut bytes)?;
         self.position += length as u64;
@@ -229,6 +230,7 @@ pub(crate) fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan
         Ok(plan) => Ok(Some(plan)),
         Err(ParseFailure::Invalid) => Ok(None),
         Err(ParseFailure::Read(error)) => Err(PlanError::Read(error)),
+        Err(ParseFailure::ResourceExhausted) => Err(PlanError::ResourceExhausted),
     }
 }
 
@@ -289,7 +291,7 @@ fn parse<S: ByteSource + ?Sized>(source: &S) -> ParseResult<Plan> {
     let tensor_capacity = usize::try_from(tensor_count).map_err(|_| ParseFailure::Invalid)?;
     tensors
         .try_reserve_exact(tensor_capacity)
-        .map_err(|_| ParseFailure::Invalid)?;
+        .map_err(|_| ParseFailure::ResourceExhausted)?;
     let mut expected_offset = 0_u64;
 
     for _ in 0..tensor_count {
@@ -401,16 +403,24 @@ fn validate_counts(metadata_count: u64, tensor_count: u64, remaining: u64) -> Pa
 
 fn validate_key(key: &[u8]) -> ParseResult<()> {
     if key.is_empty()
-        || key.split(|byte| *byte == b'.').any(|segment| {
-            segment.is_empty()
-                || segment.iter().any(|byte| {
-                    !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
-                })
-        })
+        || key
+            .split(|byte| *byte == b'.')
+            .any(|segment| !is_lower_snake_case(segment))
     {
         return Err(ParseFailure::Invalid);
     }
     Ok(())
+}
+
+fn is_lower_snake_case(segment: &[u8]) -> bool {
+    segment.first().is_some_and(u8::is_ascii_lowercase)
+        && segment
+            .last()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && segment.windows(2).all(|pair| pair != b"__")
+        && segment
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
 }
 
 fn validate_name(name: &[u8]) -> ParseResult<()> {
@@ -538,7 +548,12 @@ fn append_domain(
     length: u64,
     kind: RegionKind,
 ) -> ParseResult<()> {
-    append_split_region(regions, offset, length, kind).map_err(|_| ParseFailure::Invalid)
+    match append_split_region(regions, offset, length, kind) {
+        Ok(()) => Ok(()),
+        Err(PlanError::ObjectLimit) => Err(ParseFailure::Invalid),
+        Err(PlanError::ResourceExhausted) => Err(ParseFailure::ResourceExhausted),
+        Err(_) => Err(ParseFailure::Invalid),
+    }
 }
 
 // Reviewed and pinned against ggml-org/llama.cpp at
@@ -803,12 +818,12 @@ mod tests {
         .enumerate()
         {
             entries.push(metadata(
-                &format!("scalar.{index}"),
+                &format!("scalar.value_{index}"),
                 value_type,
                 vec![0; width],
             ));
             entries.push(metadata(
-                &format!("array.{index}"),
+                &format!("array.value_{index}"),
                 GGUF_TYPE_ARRAY,
                 array_value(value_type, vec![0; width * 2], 2),
             ));
@@ -880,8 +895,10 @@ mod tests {
 
     #[test]
     fn malformed_keys_small_alignment_and_int64_max_geometry_fall_back() {
-        let bad_key = metadata("Bad Key", GGUF_TYPE_UINT8, vec![0]);
-        assert_raw_fallback(&build(3, &[bad_key], &[], DEFAULT_ALIGNMENT));
+        for key in ["Bad Key", "_", "a_", "a__b", "1abc", "a.1b"] {
+            let bad_key = metadata(key, GGUF_TYPE_UINT8, vec![0]);
+            assert_raw_fallback(&build(3, &[bad_key], &[], DEFAULT_ALIGNMENT));
+        }
 
         let small_alignment = metadata("general.alignment", GGUF_TYPE_UINT32, u32_value(4));
         assert_raw_fallback(&build(3, &[small_alignment], &[], 4));
