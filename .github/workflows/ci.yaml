@@ -20,6 +20,15 @@ jobs:
       - run: uv run ruff check python
       - run: uv run mypy
       - run: uv run pytest
+      - name: Verify installed-wheel typing metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv build --wheel
+          uv venv --python 3.12 /tmp/hashrepo-wheel
+          uv pip install --python /tmp/hashrepo-wheel/bin/python dist/hashrepo-*.whl mypy
+          cd /tmp
+          /tmp/hashrepo-wheel/bin/mypy --strict -c 'from hashrepo import LocalCAS'
 
   go:
     runs-on: ubuntu-latest

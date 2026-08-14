@@ -60,8 +60,9 @@ Package releases use SemVer beginning at `0.1.0`; protocol, manifest, journal,
 and local-ref formats independently remain v1. Before launch, format v1 may be
 broken in place: no v2 or compatibility reader is added beside it.
 
-For the first release, merge the reviewed release commit to `main`, tag that
-exact commit `v0.1.0`, and push the tag. The `Publish to PyPI` workflow
+For a release, merge the reviewed release commit to `main`, tag that exact
+commit with `v` followed by the version in `pyproject.toml`, and push the tag.
+The `Publish to PyPI` workflow
 reruns the Python and Go gates, builds and smoke-tests the wheel, publishes the
 tested wheel and sdist through PyPI Trusted Publishing, and verifies the exact
 version endpoint. Tags whose name does not match `pyproject.toml`, or whose
