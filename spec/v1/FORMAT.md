@@ -62,7 +62,8 @@ argument. Exactly these profile identifiers exist in v1:
   tensors add no data object.
 - `gguf-v1` accepts little-endian GGUF v2/v3 only after validating bounded
   metadata and tensor counts/strings, unique keys/names, dimensions, the pinned
-  GGML dense/quantized block-size table, power-of-two alignment, overflow,
+  GGML dense/quantized block-size table, power-of-two alignment of at least
+  eight bytes, overflow,
   expected padded offsets and exact file coverage. Header, directory and
   padding bytes remain explicit, while every nonempty tensor uses the same
   natural-size or tensor-relative 64 MiB rule.
@@ -72,7 +73,8 @@ argument. Exactly these profile identifiers exist in v1:
 Malformed, unsupported, future-format or ambiguous semantic input falls back
 as a whole to raw planning. It never produces a partial semantic partition.
 The generic core independently validates zero-free, gap-free, overlap-free,
-ordered complete coverage and hashes the planned bytes itself. Canonical
+ordered complete coverage, a 1,000,000-object cardinality ceiling, and hashes
+the planned bytes itself. Canonical
 identity never packs neighboring small tensors; batching belongs only to the
 transfer protocol. Consequently insertion, deletion, reordering, resharing or
 absolute-offset movement changes header/manifest bytes but does not re-key an

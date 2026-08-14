@@ -1,12 +1,36 @@
 use std::cell::RefCell;
 use std::io;
 
-use hashrepo_core::planner::safetensors::try_plan;
 use hashrepo_core::planner::{
-    ByteSource, MAX_OBJECT_SIZE, PlanError, PlannerId, Region, RegionKind,
+    ByteSource, MAX_OBJECT_SIZE, Plan, PlanError, PlannerId, RegionKind, plan,
 };
 
 const MAX_HEADER_SIZE: u64 = 100_000_000;
+
+fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan>, PlanError> {
+    let planned = plan(source)?;
+    Ok((planned.planner() == PlannerId::SafetensorsV1).then_some(planned))
+}
+
+struct ShortSource(u64);
+
+impl ByteSource for ShortSource {
+    fn len(&self) -> u64 {
+        self.0
+    }
+
+    fn read_exact_at(&self, _offset: u64, _destination: &mut [u8]) -> io::Result<()> {
+        if _offset == 0 && _destination.len() == 4 {
+            _destination.fill(0);
+            return Ok(());
+        }
+        panic!("an impossible safetensors candidate must not be inspected beyond GGUF magic")
+    }
+
+    fn check_unchanged(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 struct HeaderSource {
     header: Vec<u8>,
@@ -44,6 +68,10 @@ impl ByteSource for HeaderSource {
             return Err(io::Error::other("injected read failure"));
         }
         match offset {
+            0 if destination.len() == 4 => {
+                destination.copy_from_slice(&(self.header.len() as u64).to_le_bytes()[..4]);
+                Ok(())
+            }
             0 if destination.len() == 8 => {
                 destination.copy_from_slice(&(self.header.len() as u64).to_le_bytes());
                 Ok(())
@@ -54,6 +82,10 @@ impl ByteSource for HeaderSource {
             }
             _ => Err(io::Error::other("planner read tensor body")),
         }
+    }
+
+    fn check_unchanged(&self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -69,6 +101,10 @@ impl ByteSource for PaddedHeaderSource {
 
     fn read_exact_at(&self, offset: u64, destination: &mut [u8]) -> io::Result<()> {
         self.reads.borrow_mut().push((offset, destination.len()));
+        if offset == 0 && destination.len() == 4 {
+            destination.copy_from_slice(&self.header_size.to_le_bytes()[..4]);
+            return Ok(());
+        }
         if offset == 0 && destination.len() == 8 {
             destination.copy_from_slice(&self.header_size.to_le_bytes());
             return Ok(());
@@ -80,19 +116,33 @@ impl ByteSource for PaddedHeaderSource {
         }
         Err(io::Error::other("unexpected read"))
     }
+
+    fn check_unchanged(&self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
-fn data_regions(header: &[u8], data_size: u64) -> Vec<Region> {
+fn data_regions(header: &[u8], data_size: u64) -> Vec<(u64, u64, RegionKind)> {
     try_plan(&HeaderSource::new(header, data_size))
         .unwrap()
         .unwrap()
-        .regions
-        .into_iter()
-        .filter(|region| region.kind == RegionKind::Tensor)
-        .map(|mut region| {
-            region.offset -= 8 + header.len() as u64;
-            region
+        .regions()
+        .iter()
+        .filter(|region| region.kind() == RegionKind::Tensor)
+        .map(|region| {
+            (
+                region.offset() - 8 - header.len() as u64,
+                region.length(),
+                region.kind(),
+            )
         })
+        .collect()
+}
+
+fn region_rows(plan: &Plan) -> Vec<(u64, u64, RegionKind)> {
+    plan.regions()
+        .iter()
+        .map(|region| (region.offset(), region.length(), region.kind()))
         .collect()
 }
 
@@ -105,27 +155,22 @@ fn exact_header_limit_is_valid_and_header_region_is_bounded() {
 
     let plan = try_plan(&source).unwrap().unwrap();
 
-    assert_eq!(plan.planner, PlannerId::SafetensorsV1);
+    assert_eq!(plan.planner(), PlannerId::SafetensorsV1);
     assert_eq!(
-        plan.regions,
+        region_rows(&plan),
         vec![
-            Region {
-                offset: 0,
-                length: MAX_OBJECT_SIZE,
-                kind: RegionKind::Header,
-            },
-            Region {
-                offset: MAX_OBJECT_SIZE,
-                length: 8 + MAX_HEADER_SIZE - MAX_OBJECT_SIZE,
-                kind: RegionKind::Header,
-            },
+            (0, MAX_OBJECT_SIZE, RegionKind::Header),
+            (
+                MAX_OBJECT_SIZE,
+                8 + MAX_HEADER_SIZE - MAX_OBJECT_SIZE,
+                RegionKind::Header,
+            ),
         ]
     );
     assert_eq!(
         *source.reads.borrow(),
-        vec![(0, 8), (8, MAX_HEADER_SIZE as usize)]
+        vec![(0, 4), (0, 8), (8, MAX_HEADER_SIZE as usize)]
     );
-    plan.validate().unwrap();
 }
 
 #[test]
@@ -136,7 +181,23 @@ fn header_above_upstream_limit_falls_back_without_reading_it() {
     };
 
     assert!(try_plan(&source).unwrap().is_none());
-    assert_eq!(*source.reads.borrow(), vec![(0, 8)]);
+    assert_eq!(*source.reads.borrow(), vec![(0, 4), (0, 8)]);
+}
+
+#[test]
+fn eight_and_nine_byte_candidates_fall_back_without_a_read() {
+    for length in [8, 9] {
+        let planned = plan(&ShortSource(length)).unwrap();
+        assert_eq!(planned.planner(), PlannerId::RawFixed64mV1);
+    }
+}
+
+#[test]
+fn null_metadata_matches_the_released_and_upstream_parser() {
+    let header = br#"{"__metadata__":null}"#;
+    let planned = try_plan(&HeaderSource::new(header, 0)).unwrap().unwrap();
+
+    assert_eq!(planned.planner(), PlannerId::SafetensorsV1);
 }
 
 #[test]
@@ -146,11 +207,7 @@ fn tensors_use_natural_and_tensor_relative_object_boundaries() {
     );
     assert_eq!(
         data_regions(exact.as_bytes(), MAX_OBJECT_SIZE),
-        vec![Region {
-            offset: 0,
-            length: MAX_OBJECT_SIZE,
-            kind: RegionKind::Tensor,
-        }]
+        vec![(0, MAX_OBJECT_SIZE, RegionKind::Tensor)]
     );
 
     let larger = MAX_OBJECT_SIZE + 1;
@@ -159,16 +216,8 @@ fn tensors_use_natural_and_tensor_relative_object_boundaries() {
     assert_eq!(
         data_regions(split.as_bytes(), larger),
         vec![
-            Region {
-                offset: 0,
-                length: MAX_OBJECT_SIZE,
-                kind: RegionKind::Tensor,
-            },
-            Region {
-                offset: MAX_OBJECT_SIZE,
-                length: 1,
-                kind: RegionKind::Tensor,
-            },
+            (0, MAX_OBJECT_SIZE, RegionKind::Tensor),
+            (MAX_OBJECT_SIZE, 1, RegionKind::Tensor),
         ]
     );
 }
@@ -193,14 +242,14 @@ fn inserting_a_small_tensor_does_not_pack_neighboring_tensors_together() {
     assert_eq!(
         data_regions(before, 8)
             .iter()
-            .map(|region| region.length)
+            .map(|region| region.1)
             .collect::<Vec<_>>(),
         vec![3, 5]
     );
     assert_eq!(
         data_regions(after, 10)
             .iter()
-            .map(|region| region.length)
+            .map(|region| region.1)
             .collect::<Vec<_>>(),
         vec![3, 2, 5]
     );
@@ -214,14 +263,9 @@ fn zero_length_tensors_create_no_data_objects() {
     let plan = try_plan(&HeaderSource::new(header, 0)).unwrap().unwrap();
 
     assert_eq!(
-        plan.regions,
-        vec![Region {
-            offset: 0,
-            length: 8 + header.len() as u64,
-            kind: RegionKind::Header,
-        }]
+        region_rows(&plan),
+        vec![(0, 8 + header.len() as u64, RegionKind::Header,)]
     );
-    plan.validate().unwrap();
 }
 
 #[test]
@@ -342,6 +386,6 @@ fn only_structurally_requested_reads_can_surface_io_errors() {
     assert!(try_plan(&malformed).unwrap().is_none());
     assert_eq!(
         *malformed.reads.borrow(),
-        vec![(0, 8), (8, b"not-json".len())]
+        vec![(0, 4), (0, 8), (8, b"not-json".len())]
     );
 }

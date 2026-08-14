@@ -62,16 +62,19 @@ canonical encoders to reproduce it byte-for-byte.
 ## Semantic writer profiles
 
 The production v1 writer automatically selects one built-in profile from
-bounded file bytes. Callers cannot select or supply a planner:
+bounded file bytes. Callers cannot select or supply a planner or hash a
+caller-authored partition; one `plan_and_hash` operation owns both steps:
 
 - `safetensors-v1` isolates the header and makes every nonempty tensor an
   independent object domain;
-- `gguf-v1` validates the GGUF v2/v3 directory, alignment and pinned GGML
-  dense/quantized type geometry before applying the same tensor rule; and
+- `gguf-v1` validates the little-endian GGUF v2/v3 directory, alignment,
+  bounded metadata values and pinned GGML dense/quantized type geometry before
+  applying the same tensor rule; and
 - `raw-fixed-64m-v1` is the whole-file fallback for every unrecognized,
   unsupported or malformed byte stream.
 
-Objects are at most 64 MiB. A semantic tensor at most that size is one natural
+Objects are at most 64 MiB and a plan has at most 1,000,000 objects. A semantic
+tensor at most that size is one natural
 object; a larger tensor is split every 64 MiB from its own start. There is no
 canonical packing of neighboring small tensors. Transport may batch small
 objects, but insertion, deletion, ordering, sharding and absolute file offsets

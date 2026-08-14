@@ -2,7 +2,7 @@ use std::fmt;
 
 use sha2::{Digest, Sha256};
 
-use crate::planner::{ByteSource, Plan, PlanError, PlannerId, RegionKind};
+use crate::planner::{self, ByteSource, Plan, PlanError, PlannerId, RegionKind};
 
 const HASH_BUFFER_SIZE: usize = 1024 * 1024;
 
@@ -51,7 +51,18 @@ pub struct HashedPlan {
     pub objects: Vec<PlannedObject>,
 }
 
-pub fn hash_plan<S: ByteSource + ?Sized>(source: &S, plan: &Plan) -> Result<HashedPlan, PlanError> {
+/// Selects the sole canonical planner and hashes each resulting object from one
+/// stable source snapshot. Callers cannot supply a planner ID or boundaries.
+pub fn plan_and_hash<S: ByteSource + ?Sized>(source: &S) -> Result<HashedPlan, PlanError> {
+    let plan = planner::plan(source)?;
+    hash_plan(source, &plan)
+}
+
+pub(crate) fn hash_plan<S: ByteSource + ?Sized>(
+    source: &S,
+    plan: &Plan,
+) -> Result<HashedPlan, PlanError> {
+    source.check_unchanged().map_err(PlanError::SourceChanged)?;
     plan.validate()?;
     if source.len() != plan.file_size {
         return Err(PlanError::SourceLengthMismatch {
@@ -81,15 +92,18 @@ pub fn hash_plan<S: ByteSource + ?Sized>(source: &S, plan: &Plan) -> Result<Hash
         });
     }
 
-    Ok(HashedPlan {
+    let hashed = HashedPlan {
         planner: plan.planner,
         file_size: plan.file_size,
         objects,
-    })
+    };
+    source.check_unchanged().map_err(PlanError::SourceChanged)?;
+    Ok(hashed)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::io;
 
     use super::*;
@@ -161,6 +175,10 @@ mod tests {
         fn read_exact_at(&self, _offset: u64, _destination: &mut [u8]) -> io::Result<()> {
             Err(io::Error::new(io::ErrorKind::UnexpectedEof, "broken"))
         }
+
+        fn check_unchanged(&self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     #[test]
@@ -178,6 +196,47 @@ mod tests {
         assert!(matches!(
             hash_plan(&BrokenSource, &plan),
             Err(PlanError::Read(error)) if error.kind() == io::ErrorKind::UnexpectedEof
+        ));
+    }
+
+    struct ChangingSource {
+        bytes: [u8; 3],
+        generation: Cell<u64>,
+    }
+
+    impl ByteSource for ChangingSource {
+        fn len(&self) -> u64 {
+            self.bytes.len() as u64
+        }
+
+        fn read_exact_at(&self, offset: u64, destination: &mut [u8]) -> io::Result<()> {
+            let start = offset as usize;
+            destination.copy_from_slice(&self.bytes[start..start + destination.len()]);
+            self.generation.set(1);
+            Ok(())
+        }
+
+        fn check_unchanged(&self) -> io::Result<()> {
+            if self.generation.get() != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "source generation changed",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn combined_planning_and_hashing_refuses_a_torn_source_generation() {
+        let source = ChangingSource {
+            bytes: *b"abc",
+            generation: Cell::new(0),
+        };
+
+        assert!(matches!(
+            plan_and_hash(&source),
+            Err(PlanError::SourceChanged(error)) if error.kind() == io::ErrorKind::InvalidData
         ));
     }
 }

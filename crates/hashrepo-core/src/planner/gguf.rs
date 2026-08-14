@@ -1,13 +1,15 @@
 use std::collections::HashSet;
 use std::io;
 
-use super::{ByteSource, Plan, PlanError, PlannerId, Region, RegionKind, split_region};
+use super::{ByteSource, Plan, PlanError, PlannerId, Region, RegionKind, append_split_region};
 
 const MAGIC: [u8; 4] = *b"GGUF";
 const DEFAULT_ALIGNMENT: u64 = 32;
 const MAX_METADATA_COUNT: u64 = 1_000_000;
 const MAX_TENSOR_COUNT: u64 = 1_000_000;
 const MAX_SYMBOL_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_METADATA_VALUE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_METADATA_INSPECTION_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ARRAY_ELEMENTS: u64 = 16_000_000;
 const MAX_ARRAY_DEPTH: u32 = 16;
 const MAX_METADATA_KEY_LEN: u64 = u16::MAX as u64;
@@ -49,18 +51,20 @@ struct TensorInfo {
     length: u64,
 }
 
-struct Reader<'a> {
-    source: &'a dyn ByteSource,
+struct Reader<'a, S: ?Sized> {
+    source: &'a S,
     position: u64,
     length: u64,
+    limit: Option<u64>,
 }
 
-impl<'a> Reader<'a> {
-    fn new(source: &'a dyn ByteSource) -> Self {
+impl<'a, S: ByteSource + ?Sized> Reader<'a, S> {
+    fn new(source: &'a S) -> Self {
         Self {
             source,
             position: 0,
             length: source.len(),
+            limit: None,
         }
     }
 
@@ -73,7 +77,7 @@ impl<'a> Reader<'a> {
             .position
             .checked_add(length)
             .ok_or(ParseFailure::Invalid)?;
-        if end > self.length {
+        if end > self.length || self.limit.is_some_and(|limit| end > limit) {
             return Err(ParseFailure::Invalid);
         }
         Ok(())
@@ -105,6 +109,19 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
+    fn limit_next(&mut self, length: u64) -> ParseResult<()> {
+        self.limit = Some(
+            self.position
+                .checked_add(length)
+                .ok_or(ParseFailure::Invalid)?,
+        );
+        Ok(())
+    }
+
+    fn clear_limit(&mut self) {
+        self.limit = None;
+    }
+
     fn read_bounded_bytes(&mut self, max_length: u64) -> ParseResult<Vec<u8>> {
         let length = self.read_u64()?;
         if length > max_length {
@@ -122,8 +139,9 @@ impl<'a> Reader<'a> {
         Ok(bytes)
     }
 
-    fn skip_utf8_string(&mut self) -> ParseResult<()> {
+    fn skip_utf8_string(&mut self, budget: &mut MetadataBudget) -> ParseResult<()> {
         let length = self.read_u64()?;
+        budget.charge_bytes(length)?;
         self.ensure(length)?;
 
         // Metadata strings can be large, so validate them in bounded memory rather
@@ -179,6 +197,7 @@ impl<'a> Reader<'a> {
 
 struct MetadataBudget {
     array_elements: u64,
+    value_bytes: u64,
 }
 
 impl MetadataBudget {
@@ -192,9 +211,20 @@ impl MetadataBudget {
         }
         Ok(())
     }
+
+    fn charge_bytes(&mut self, count: u64) -> ParseResult<()> {
+        self.value_bytes = self
+            .value_bytes
+            .checked_add(count)
+            .ok_or(ParseFailure::Invalid)?;
+        if self.value_bytes > MAX_METADATA_VALUE_BYTES {
+            return Err(ParseFailure::Invalid);
+        }
+        Ok(())
+    }
 }
 
-pub fn try_plan(source: &dyn ByteSource) -> Result<Option<Plan>, PlanError> {
+pub(crate) fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan>, PlanError> {
     match parse(source) {
         Ok(plan) => Ok(Some(plan)),
         Err(ParseFailure::Invalid) => Ok(None),
@@ -202,7 +232,7 @@ pub fn try_plan(source: &dyn ByteSource) -> Result<Option<Plan>, PlanError> {
     }
 }
 
-fn parse(source: &dyn ByteSource) -> ParseResult<Plan> {
+fn parse<S: ByteSource + ?Sized>(source: &S) -> ParseResult<Plan> {
     let mut reader = Reader::new(source);
     if reader.read::<4>()? != MAGIC {
         return Err(ParseFailure::Invalid);
@@ -222,8 +252,12 @@ fn parse(source: &dyn ByteSource) -> ParseResult<Plan> {
     let mut metadata_keys = HashSet::new();
     let mut tensor_names = HashSet::new();
     let mut symbol_bytes = 0_u64;
-    let mut budget = MetadataBudget { array_elements: 0 };
+    let mut budget = MetadataBudget {
+        array_elements: 0,
+        value_bytes: 0,
+    };
     let mut alignment = DEFAULT_ALIGNMENT;
+    reader.limit_next(MAX_METADATA_INSPECTION_BYTES)?;
 
     for _ in 0..metadata_count {
         let key = reader.read_bounded_bytes(MAX_METADATA_KEY_LEN)?;
@@ -238,13 +272,15 @@ fn parse(source: &dyn ByteSource) -> ParseResult<Plan> {
             if value_type != GGUF_TYPE_UINT32 {
                 return Err(ParseFailure::Invalid);
             }
+            budget.charge_bytes(4)?;
             alignment = reader.read_u32()? as u64;
         } else {
             parse_metadata_value(&mut reader, value_type, 0, &mut budget)?;
         }
     }
+    reader.clear_limit();
 
-    if alignment == 0 || !alignment.is_power_of_two() {
+    if alignment < 8 || !alignment.is_power_of_two() {
         return Err(ParseFailure::Invalid);
     }
 
@@ -303,19 +339,19 @@ fn parse(source: &dyn ByteSource) -> ParseResult<Plan> {
     }
 
     let mut regions = Vec::new();
-    append_domain(&mut regions, 0, directory_start, RegionKind::Header);
+    append_domain(&mut regions, 0, directory_start, RegionKind::Header)?;
     append_domain(
         &mut regions,
         directory_start,
         directory_end - directory_start,
         RegionKind::Header,
-    );
+    )?;
     append_domain(
         &mut regions,
         directory_end,
         data_start - directory_end,
         RegionKind::Header,
-    );
+    )?;
 
     for tensor in tensors {
         let tensor_start = data_start
@@ -326,14 +362,14 @@ fn parse(source: &dyn ByteSource) -> ParseResult<Plan> {
             tensor_start,
             tensor.length,
             RegionKind::Tensor,
-        );
+        )?;
         let padded_length = align_up(tensor.length, alignment)?;
         append_domain(
             &mut regions,
             tensor_start + tensor.length,
             padded_length - tensor.length,
             RegionKind::Header,
-        );
+        )?;
     }
 
     Ok(Plan {
@@ -364,7 +400,14 @@ fn validate_counts(metadata_count: u64, tensor_count: u64, remaining: u64) -> Pa
 }
 
 fn validate_key(key: &[u8]) -> ParseResult<()> {
-    if key.is_empty() || !key.is_ascii() || key.contains(&0) {
+    if key.is_empty()
+        || key.split(|byte| *byte == b'.').any(|segment| {
+            segment.is_empty()
+                || segment.iter().any(|byte| {
+                    !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
+                })
+        })
+    {
         return Err(ParseFailure::Invalid);
     }
     Ok(())
@@ -387,31 +430,44 @@ fn charge_symbol_bytes(total: &mut u64, length: usize) -> ParseResult<()> {
     Ok(())
 }
 
-fn parse_metadata_value(
-    reader: &mut Reader<'_>,
+fn parse_metadata_value<S: ByteSource + ?Sized>(
+    reader: &mut Reader<'_, S>,
     value_type: u32,
     depth: u32,
     budget: &mut MetadataBudget,
 ) -> ParseResult<()> {
     match value_type {
-        GGUF_TYPE_UINT8 | GGUF_TYPE_INT8 => reader.skip(1),
-        GGUF_TYPE_UINT16 | GGUF_TYPE_INT16 => reader.skip(2),
-        GGUF_TYPE_UINT32 | GGUF_TYPE_INT32 | GGUF_TYPE_FLOAT32 => reader.skip(4),
-        GGUF_TYPE_UINT64 | GGUF_TYPE_INT64 | GGUF_TYPE_FLOAT64 => reader.skip(8),
+        GGUF_TYPE_UINT8 | GGUF_TYPE_INT8 => {
+            budget.charge_bytes(1)?;
+            reader.skip(1)
+        }
+        GGUF_TYPE_UINT16 | GGUF_TYPE_INT16 => {
+            budget.charge_bytes(2)?;
+            reader.skip(2)
+        }
+        GGUF_TYPE_UINT32 | GGUF_TYPE_INT32 | GGUF_TYPE_FLOAT32 => {
+            budget.charge_bytes(4)?;
+            reader.skip(4)
+        }
+        GGUF_TYPE_UINT64 | GGUF_TYPE_INT64 | GGUF_TYPE_FLOAT64 => {
+            budget.charge_bytes(8)?;
+            reader.skip(8)
+        }
         GGUF_TYPE_BOOL => {
+            budget.charge_bytes(1)?;
             if reader.read_u8()? > 1 {
                 return Err(ParseFailure::Invalid);
             }
             Ok(())
         }
-        GGUF_TYPE_STRING => reader.skip_utf8_string(),
+        GGUF_TYPE_STRING => reader.skip_utf8_string(budget),
         GGUF_TYPE_ARRAY => parse_metadata_array(reader, depth, budget),
         _ => Err(ParseFailure::Invalid),
     }
 }
 
-fn parse_metadata_array(
-    reader: &mut Reader<'_>,
+fn parse_metadata_array<S: ByteSource + ?Sized>(
+    reader: &mut Reader<'_, S>,
     depth: u32,
     budget: &mut MetadataBudget,
 ) -> ParseResult<()> {
@@ -433,9 +489,12 @@ fn parse_metadata_array(
         _ => None,
     };
     if let Some(size) = fixed_size {
-        return reader.skip(count.checked_mul(size).ok_or(ParseFailure::Invalid)?);
+        let bytes = count.checked_mul(size).ok_or(ParseFailure::Invalid)?;
+        budget.charge_bytes(bytes)?;
+        return reader.skip(bytes);
     }
     if element_type == GGUF_TYPE_BOOL {
+        budget.charge_bytes(count)?;
         return reader.check_bool_bytes(count);
     }
 
@@ -454,7 +513,7 @@ fn tensor_length(dimensions: [u64; 4], block_elements: u64, block_bytes: u64) ->
         .try_fold(1_u64, |product, dimension| {
             product.checked_mul(dimension).ok_or(ParseFailure::Invalid)
         })?;
-    if element_count > i64::MAX as u64 {
+    if element_count >= i64::MAX as u64 {
         return Err(ParseFailure::Invalid);
     }
     (dimensions[0] / block_elements)
@@ -473,8 +532,13 @@ fn align_up(value: u64, alignment: u64) -> ParseResult<u64> {
         .ok_or(ParseFailure::Invalid)
 }
 
-fn append_domain(regions: &mut Vec<Region>, offset: u64, length: u64, kind: RegionKind) {
-    regions.extend(split_region(offset, length, kind));
+fn append_domain(
+    regions: &mut Vec<Region>,
+    offset: u64,
+    length: u64,
+    kind: RegionKind,
+) -> ParseResult<()> {
+    append_split_region(regions, offset, length, kind).map_err(|_| ParseFailure::Invalid)
 }
 
 // Reviewed and pinned against ggml-org/llama.cpp at
@@ -554,6 +618,10 @@ mod tests {
         fn read_exact_at(&self, offset: u64, destination: &mut [u8]) -> io::Result<()> {
             self.0.read_exact_at(offset, destination)
         }
+
+        fn check_unchanged(&self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     impl ByteSource for SparseFixture {
@@ -574,6 +642,10 @@ mod tests {
                 destination[..available as usize]
                     .copy_from_slice(&self.prefix[offset as usize..(offset + available) as usize]);
             }
+            Ok(())
+        }
+
+        fn check_unchanged(&self) -> io::Result<()> {
             Ok(())
         }
     }
@@ -770,6 +842,57 @@ mod tests {
         let plan = try_plan(&SliceFixture(&bytes)).unwrap().unwrap();
         assert_eq!(plan.planner, PlannerId::GgufV1);
         plan.validate().unwrap();
+    }
+
+    #[test]
+    fn metadata_inspection_has_an_exact_total_byte_budget() {
+        const KEY: &[u8] = b"general.description";
+
+        fn sparse_string(length: u64) -> SparseFixture {
+            let mut prefix = Vec::new();
+            prefix.extend_from_slice(&MAGIC);
+            push_u32(&mut prefix, 3);
+            push_u64(&mut prefix, 0);
+            push_u64(&mut prefix, 1);
+            push_string(&mut prefix, KEY);
+            push_u32(&mut prefix, GGUF_TYPE_STRING);
+            push_u64(&mut prefix, length);
+            SparseFixture {
+                length: prefix.len() as u64 + length,
+                prefix,
+            }
+        }
+
+        let encoded_overhead = 8 + KEY.len() as u64 + 4 + 8;
+        let exact_value_length = MAX_METADATA_INSPECTION_BYTES - encoded_overhead;
+
+        assert!(
+            try_plan(&sparse_string(exact_value_length))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            try_plan(&sparse_string(exact_value_length + 1))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn malformed_keys_small_alignment_and_int64_max_geometry_fall_back() {
+        let bad_key = metadata("Bad Key", GGUF_TYPE_UINT8, vec![0]);
+        assert_raw_fallback(&build(3, &[bad_key], &[], DEFAULT_ALIGNMENT));
+
+        let small_alignment = metadata("general.alignment", GGUF_TYPE_UINT32, u32_value(4));
+        assert_raw_fallback(&build(3, &[small_alignment], &[], 4));
+
+        let too_many_elements = [i64::MAX as u64];
+        assert_raw_fallback(&build(
+            3,
+            &[],
+            &[tensor("impossible", &too_many_elements, 24)],
+            DEFAULT_ALIGNMENT,
+        ));
     }
 
     #[test]

@@ -2,10 +2,11 @@ use std::io;
 
 use thiserror::Error;
 
-pub mod gguf;
-pub mod safetensors;
+mod gguf;
+mod safetensors;
 
 pub const MAX_OBJECT_SIZE: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_OBJECT_COUNT: usize = 1_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlannerId {
@@ -34,20 +35,55 @@ pub enum RegionKind {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Region {
-    pub offset: u64,
-    pub length: u64,
-    pub kind: RegionKind,
+    pub(crate) offset: u64,
+    pub(crate) length: u64,
+    pub(crate) kind: RegionKind,
+}
+
+impl Region {
+    #[must_use]
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    #[must_use]
+    pub const fn length(&self) -> u64 {
+        self.length
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> RegionKind {
+        self.kind
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Plan {
-    pub planner: PlannerId,
-    pub file_size: u64,
-    pub regions: Vec<Region>,
+    pub(crate) planner: PlannerId,
+    pub(crate) file_size: u64,
+    pub(crate) regions: Vec<Region>,
 }
 
 impl Plan {
-    pub fn validate(&self) -> Result<(), PlanError> {
+    #[must_use]
+    pub const fn planner(&self) -> PlannerId {
+        self.planner
+    }
+
+    #[must_use]
+    pub const fn file_size(&self) -> u64 {
+        self.file_size
+    }
+
+    #[must_use]
+    pub fn regions(&self) -> &[Region] {
+        &self.regions
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), PlanError> {
+        if self.regions.len() > MAX_OBJECT_COUNT {
+            return Err(PlanError::ObjectLimit);
+        }
         if self.file_size == 0 {
             if self.regions.is_empty() {
                 return Ok(());
@@ -78,8 +114,12 @@ impl Plan {
 pub enum PlanError {
     #[error("source read failed")]
     Read(#[from] io::Error),
+    #[error("source changed during planning or hashing")]
+    SourceChanged(#[source] io::Error),
     #[error("planner produced invalid file coverage")]
     InvalidCoverage,
+    #[error("planner exceeds bounded object cardinality")]
+    ObjectLimit,
     #[error("plan source length mismatch: expected {expected}, got {actual}")]
     SourceLengthMismatch { expected: u64, actual: u64 },
 }
@@ -87,6 +127,9 @@ pub enum PlanError {
 pub trait ByteSource {
     fn len(&self) -> u64;
     fn read_exact_at(&self, offset: u64, destination: &mut [u8]) -> io::Result<()>;
+    /// Refuses if this source no longer represents the immutable snapshot
+    /// captured when it was constructed.
+    fn check_unchanged(&self) -> io::Result<()>;
 
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -110,9 +153,20 @@ impl ByteSource for [u8] {
         destination.copy_from_slice(source);
         Ok(())
     }
+
+    fn check_unchanged(&self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
-pub fn plan(source: &dyn ByteSource) -> Result<Plan, PlanError> {
+pub fn plan<S: ByteSource + ?Sized>(source: &S) -> Result<Plan, PlanError> {
+    source.check_unchanged().map_err(PlanError::SourceChanged)?;
+    let result = plan_once(source);
+    source.check_unchanged().map_err(PlanError::SourceChanged)?;
+    result
+}
+
+fn plan_once<S: ByteSource + ?Sized>(source: &S) -> Result<Plan, PlanError> {
     if let Some(plan) = gguf::try_plan(source)? {
         plan.validate()?;
         return Ok(plan);
@@ -121,23 +175,41 @@ pub fn plan(source: &dyn ByteSource) -> Result<Plan, PlanError> {
         plan.validate()?;
         return Ok(plan);
     }
-    let plan = raw_plan(source.len());
+    let plan = raw_plan(source.len())?;
     plan.validate()?;
     Ok(plan)
 }
 
-#[must_use]
-pub fn raw_plan(file_size: u64) -> Plan {
-    Plan {
+pub(crate) fn raw_plan(file_size: u64) -> Result<Plan, PlanError> {
+    let mut regions = Vec::new();
+    append_split_region(&mut regions, 0, file_size, RegionKind::Raw)?;
+    Ok(Plan {
         planner: PlannerId::RawFixed64mV1,
         file_size,
-        regions: split_region(0, file_size, RegionKind::Raw),
-    }
+        regions,
+    })
 }
 
-#[must_use]
-pub(crate) fn split_region(offset: u64, length: u64, kind: RegionKind) -> Vec<Region> {
-    let mut regions = Vec::new();
+pub(crate) fn append_split_region(
+    regions: &mut Vec<Region>,
+    offset: u64,
+    length: u64,
+    kind: RegionKind,
+) -> Result<(), PlanError> {
+    let object_count = if length == 0 {
+        0
+    } else {
+        usize::try_from(length.div_ceil(MAX_OBJECT_SIZE)).map_err(|_| PlanError::ObjectLimit)?
+    };
+    let new_count = regions
+        .len()
+        .checked_add(object_count)
+        .filter(|count| *count <= MAX_OBJECT_COUNT)
+        .ok_or(PlanError::ObjectLimit)?;
+    regions
+        .try_reserve_exact(new_count - regions.len())
+        .map_err(|_| PlanError::ObjectLimit)?;
+
     let mut cursor = offset;
     let mut remaining = length;
     while remaining > 0 {
@@ -150,7 +222,7 @@ pub(crate) fn split_region(offset: u64, length: u64, kind: RegionKind) -> Vec<Re
         cursor += part;
         remaining -= part;
     }
-    regions
+    Ok(())
 }
 
 #[cfg(test)]
@@ -159,7 +231,7 @@ mod tests {
 
     #[test]
     fn raw_plan_uses_bounded_contiguous_regions() {
-        let plan = raw_plan(MAX_OBJECT_SIZE + 1);
+        let plan = raw_plan(MAX_OBJECT_SIZE + 1).unwrap();
         assert_eq!(plan.planner, PlannerId::RawFixed64mV1);
         assert_eq!(
             plan.regions,
@@ -242,8 +314,48 @@ mod tests {
     }
 
     #[test]
+    fn coverage_validation_refuses_unbounded_object_cardinality() {
+        let regions = (0..=MAX_OBJECT_COUNT)
+            .map(|offset| Region {
+                offset: offset as u64,
+                length: 1,
+                kind: RegionKind::Raw,
+            })
+            .collect();
+        let plan = Plan {
+            planner: PlannerId::RawFixed64mV1,
+            file_size: MAX_OBJECT_COUNT as u64 + 1,
+            regions,
+        };
+
+        assert!(matches!(plan.validate(), Err(PlanError::ObjectLimit)));
+    }
+
+    struct HugeSource;
+
+    impl ByteSource for HugeSource {
+        fn len(&self) -> u64 {
+            (MAX_OBJECT_COUNT as u64 + 1) * MAX_OBJECT_SIZE
+        }
+
+        fn read_exact_at(&self, _offset: u64, destination: &mut [u8]) -> io::Result<()> {
+            destination.fill(0);
+            Ok(())
+        }
+
+        fn check_unchanged(&self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn raw_planning_refuses_cardinality_before_allocating_regions() {
+        assert!(matches!(plan(&HugeSource), Err(PlanError::ObjectLimit)));
+    }
+
+    #[test]
     fn empty_file_has_one_canonical_empty_partition() {
-        let empty = raw_plan(0);
+        let empty = raw_plan(0).unwrap();
         assert!(empty.regions.is_empty());
         empty.validate().unwrap();
 

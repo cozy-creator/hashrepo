@@ -1,61 +1,139 @@
-use std::fs::File;
+#[cfg(unix)]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
 use std::io;
 use std::path::Path;
+use std::time::SystemTime;
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(all(test, unix))]
+use std::io::Seek;
+#[cfg(not(unix))]
 use std::io::{Read, Seek, SeekFrom};
-#[cfg(not(any(unix, windows)))]
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
+#[cfg(not(unix))]
 use std::sync::Mutex;
+#[cfg(unix)]
+use std::{os::unix::fs::MetadataExt, os::unix::fs::OpenOptionsExt};
 
 use crate::planner::ByteSource;
 
 /// A bounded, random-access byte source backed by an open regular file.
 ///
-/// The file length is captured when the source is constructed. Reads use the
-/// open handle rather than reopening its path, so replacing the path cannot
-/// redirect an existing source to different bytes. Callers must still treat a
-/// file being mutated through another handle as an I/O error boundary: a
-/// truncation is reported as [`io::ErrorKind::UnexpectedEof`].
+/// File identity, length, and high-resolution mutation metadata are captured
+/// when the source is constructed. Reads use the open handle rather than
+/// reopening its path, so replacing the path cannot redirect an existing
+/// source. The closed plan-and-hash path checks the captured stamp before and
+/// after both phases and refuses ordinary concurrent mutation. The future
+/// writable filesystem supplies the stronger boundary: a finalized immutable
+/// workspace generation rather than a concurrently writable external file.
 #[derive(Debug)]
 pub struct FileByteSource {
-    #[cfg(any(unix, windows))]
+    #[cfg(unix)]
     file: File,
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     file: Mutex<File>,
     length: u64,
+    stamp: FileStamp,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FileStamp {
+    length: u64,
+    modified: Option<SystemTime>,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    changed_seconds: i64,
+    #[cfg(unix)]
+    changed_nanoseconds: i64,
+    #[cfg(windows)]
+    creation_time: u64,
+    #[cfg(windows)]
+    last_write_time: u64,
+    #[cfg(windows)]
+    attributes: u32,
+}
+
+impl FileStamp {
+    fn capture(metadata: &fs::Metadata) -> Self {
+        Self {
+            length: metadata.len(),
+            modified: metadata.modified().ok(),
+            #[cfg(unix)]
+            device: metadata.dev(),
+            #[cfg(unix)]
+            inode: metadata.ino(),
+            #[cfg(unix)]
+            changed_seconds: metadata.ctime(),
+            #[cfg(unix)]
+            changed_nanoseconds: metadata.ctime_nsec(),
+            #[cfg(windows)]
+            creation_time: metadata.creation_time(),
+            #[cfg(windows)]
+            last_write_time: metadata.last_write_time(),
+            #[cfg(windows)]
+            attributes: metadata.file_attributes(),
+        }
+    }
 }
 
 impl FileByteSource {
     /// Opens `path` and captures its current length without reading its
     /// contents.
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
-        Self::from_file(File::open(path)?)
+        let path = path.as_ref();
+        let before = fs::symlink_metadata(path)?;
+        if !before.file_type().is_file() {
+            return Err(not_regular_file());
+        }
+
+        #[cfg(unix)]
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)?;
+        #[cfg(not(unix))]
+        let file = File::open(path)?;
+
+        let opened = file.metadata()?;
+        if !opened.is_file() || FileStamp::capture(&before) != FileStamp::capture(&opened) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "byte source path changed while it was opened",
+            ));
+        }
+        Self::from_file(file)
     }
 
     /// Creates a source from an already-open regular file and captures its
-    /// current length without reading its contents.
+    /// current stamp without reading its contents. Unlike [`Self::open`], this
+    /// accepts whatever path traversal policy the caller used to obtain the
+    /// handle.
     pub fn from_file(file: File) -> io::Result<Self> {
         let metadata = file.metadata()?;
         if !metadata.is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "byte source must be a regular file",
-            ));
+            return Err(not_regular_file());
         }
+        let stamp = FileStamp::capture(&metadata);
 
-        #[cfg(any(unix, windows))]
+        #[cfg(unix)]
         {
             Ok(Self {
                 file,
                 length: metadata.len(),
+                stamp,
             })
         }
 
-        #[cfg(not(any(unix, windows)))]
+        #[cfg(not(unix))]
         {
             Ok(Self {
                 file: Mutex::new(file),
                 length: metadata.len(),
+                stamp,
             })
         }
     }
@@ -77,19 +155,47 @@ impl FileByteSource {
         std::os::unix::fs::FileExt::read_at(&self.file, destination, offset)
     }
 
-    #[cfg(windows)]
-    fn read_at(&self, destination: &mut [u8], offset: u64) -> io::Result<usize> {
-        std::os::windows::fs::FileExt::seek_read(&self.file, destination, offset)
-    }
-
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     fn read_at(&self, destination: &mut [u8], offset: u64) -> io::Result<usize> {
         let mut file = self
             .file
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let original = file.stream_position()?;
         file.seek(SeekFrom::Start(offset))?;
-        file.read(destination)
+        let result = file.read(destination);
+        let restored = file.seek(SeekFrom::Start(original));
+        match (result, restored) {
+            (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+            (Ok(read), Ok(_)) => Ok(read),
+        }
+    }
+
+    fn current_stamp(&self) -> io::Result<FileStamp> {
+        #[cfg(unix)]
+        let metadata = self.file.metadata()?;
+        #[cfg(not(unix))]
+        let metadata = self
+            .file
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .metadata()?;
+        Ok(FileStamp::capture(&metadata))
+    }
+
+    #[cfg(test)]
+    fn stream_position_for_test(&mut self) -> io::Result<u64> {
+        #[cfg(unix)]
+        {
+            self.file.stream_position()
+        }
+        #[cfg(not(unix))]
+        {
+            self.file
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .stream_position()
+        }
     }
 }
 
@@ -123,6 +229,23 @@ impl ByteSource for FileByteSource {
     fn is_empty(&self) -> bool {
         self.is_empty()
     }
+
+    fn check_unchanged(&self) -> io::Result<()> {
+        if self.current_stamp()? != self.stamp {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "byte source changed after it was opened",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn not_regular_file() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "byte source must be a non-symlink regular file",
+    )
 }
 
 fn read_exact_with(
@@ -214,7 +337,7 @@ mod tests {
         source.read_exact_at(2, &mut bytes)?;
 
         assert_eq!(&bytes, b"2345");
-        assert_eq!(source.file.stream_position()?, 9);
+        assert_eq!(source.stream_position_for_test()?, 9);
         Ok(())
     }
 
@@ -271,6 +394,56 @@ mod tests {
         let error = source.read_exact_at(2, &mut [0_u8; 6]).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
         assert_eq!(source.len(), 10);
+        Ok(())
+    }
+
+    #[test]
+    fn same_length_rewrite_and_truncate_regrow_invalidate_the_snapshot() -> io::Result<()> {
+        let directory = TempDirectory::new()?;
+        let path = directory.join("source");
+        fs::write(&path, b"abcdefghij")?;
+        let source = FileByteSource::open(&path)?;
+
+        fs::write(&path, b"ABCDEFGHIJ")?;
+        assert_eq!(
+            source.check_unchanged().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        let second = FileByteSource::open(&path)?;
+        OpenOptions::new().write(true).open(&path)?.set_len(0)?;
+        OpenOptions::new().write(true).open(&path)?.set_len(10)?;
+        assert_eq!(
+            second.check_unchanged().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_open_refuses_symlinks_and_fifos_before_blocking() -> io::Result<()> {
+        use std::os::unix::fs::symlink;
+        use std::process::Command;
+
+        let directory = TempDirectory::new()?;
+        let target = directory.join("target");
+        let link = directory.join("link");
+        fs::write(&target, b"bytes")?;
+        symlink(&target, &link)?;
+        assert_eq!(
+            FileByteSource::open(&link).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        let fifo = directory.join("fifo");
+        if !Command::new("mkfifo").arg(&fifo).status()?.success() {
+            return Err(io::Error::other("mkfifo failed"));
+        }
+        assert_eq!(
+            FileByteSource::open(&fifo).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
         Ok(())
     }
 
@@ -369,7 +542,7 @@ mod tests {
         source.read_exact_at(OFFSET, &mut bytes)?;
 
         assert_eq!(&bytes, b"hashrepo");
-        assert_eq!(source.file.stream_position()?, OFFSET + 8);
+        assert_eq!(source.stream_position_for_test()?, OFFSET + 8);
         Ok(())
     }
 }

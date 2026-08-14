@@ -4,7 +4,9 @@ use std::fmt;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
-use super::{ByteSource, Plan, PlanError, PlannerId, RegionKind, split_region};
+use super::{
+    ByteSource, MAX_OBJECT_COUNT, Plan, PlanError, PlannerId, RegionKind, append_split_region,
+};
 
 const PREFIX_SIZE: u64 = 8;
 const MAX_HEADER_SIZE: u64 = 100_000_000;
@@ -45,10 +47,15 @@ impl<'de> Deserialize<'de> for Header {
                         return Err(de::Error::custom("duplicate safetensors header key"));
                     }
                     if name == "__metadata__" {
-                        map.next_value::<Metadata>()?;
+                        map.next_value::<Option<Metadata>>()?;
                     } else {
                         if name.is_empty() {
                             return Err(de::Error::custom("empty safetensors tensor name"));
+                        }
+                        if tensors.len() >= MAX_OBJECT_COUNT {
+                            return Err(de::Error::custom(
+                                "safetensors tensor count exceeds object limit",
+                            ));
                         }
                         tensors.push((name, map.next_value::<TensorDescriptor>()?));
                     }
@@ -104,9 +111,9 @@ struct TensorSpan {
 
 /// Returns a tensor-aligned plan only after proving the complete safetensors
 /// structure from its bounded JSON header. Tensor body bytes are never read.
-pub fn try_plan(source: &dyn ByteSource) -> Result<Option<Plan>, PlanError> {
+pub(crate) fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan>, PlanError> {
     let file_size = source.len();
-    if file_size < PREFIX_SIZE {
+    if file_size < PREFIX_SIZE + 2 {
         return Ok(None);
     }
 
@@ -161,17 +168,25 @@ pub fn try_plan(source: &dyn ByteSource) -> Result<Option<Plan>, PlanError> {
         return Ok(None);
     }
 
-    let mut regions = split_region(0, header_end, RegionKind::Header);
+    let mut regions = Vec::new();
+    if append_split_region(&mut regions, 0, header_end, RegionKind::Header).is_err() {
+        return Ok(None);
+    }
     for span in spans {
         let length = span.end - span.start;
         if length == 0 {
             continue;
         }
-        regions.extend(split_region(
+        if append_split_region(
+            &mut regions,
             header_end + span.start,
             length,
             RegionKind::Tensor,
-        ));
+        )
+        .is_err()
+        {
+            return Ok(None);
+        }
     }
 
     Ok(Some(Plan {
