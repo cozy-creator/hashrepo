@@ -4,6 +4,8 @@ use std::io;
 use hashrepo_core::object::{HashedPlan, plan_and_hash};
 use hashrepo_core::planner::{ByteSource, MAX_OBJECT_SIZE, PlannerId, RegionKind, plan};
 
+const MIB: u64 = 1024 * 1024;
+
 struct SliceSource<'a>(&'a [u8]);
 
 impl ByteSource for SliceSource<'_> {
@@ -80,6 +82,10 @@ fn tensor_digests(hashed: &HashedPlan) -> Vec<String> {
         .collect()
 }
 
+fn tensor_digest_set(hashed: &HashedPlan) -> HashSet<String> {
+    tensor_digests(hashed).into_iter().collect()
+}
+
 fn changed_object_indexes(before: &HashedPlan, after: &HashedPlan) -> HashSet<usize> {
     assert_eq!(before.objects().len(), after.objects().len());
     before
@@ -138,7 +144,7 @@ fn removing_one_small_tensor_does_not_repack_any_surviving_tensor() {
 }
 
 #[test]
-fn actual_serialized_bytes_not_training_declarations_determine_reuse() {
+fn masked_or_selected_updates_only_change_reuse_when_serialized_bytes_change() {
     let attention = b"attention".as_slice();
     let mlp = b"mlp-weights".as_slice();
     let norm = b"norm".as_slice();
@@ -150,17 +156,17 @@ fn actual_serialized_bytes_not_training_declarations_determine_reuse() {
         ("block.bias", bias),
     ]));
 
-    // A selected or trainable tensor that serializes byte-identically changes
-    // neither its object nor the header.
-    let selected_but_identical = hashed(&safetensors(&[
+    // A selected tensor whose optimizer update is masked, or otherwise
+    // serializes byte-identically, changes neither its object nor the header.
+    let masked_or_selected_but_identical = hashed(&safetensors(&[
         ("block.attention", attention),
         ("block.mlp", mlp),
         ("block.norm", norm),
         ("block.bias", bias),
     ]));
-    assert!(changed_object_indexes(&base, &selected_but_identical).is_empty());
+    assert_eq!(base, masked_or_selected_but_identical);
 
-    let changed_bias = b"BIAS".as_slice();
+    let changed_bias = b"bIas".as_slice();
     let bias_only = hashed(&safetensors(&[
         ("block.attention", attention),
         ("block.mlp", mlp),
@@ -181,6 +187,93 @@ fn actual_serialized_bytes_not_training_declarations_determine_reuse() {
     assert_eq!(
         changed_object_indexes(&base, &dense),
         HashSet::from([1, 2, 3, 4])
+    );
+}
+
+#[test]
+fn standalone_composite_and_merged_lora_follow_serialized_tensor_semantics() {
+    let base_weight = b"base-weight-v1".as_slice();
+    let merged_weight = b"base-weight-v2".as_slice();
+    let norm = b"shared-norm".as_slice();
+    let lora_a = b"low-rank-a".as_slice();
+    let lora_b = b"low-rank-b".as_slice();
+
+    let standalone = hashed(&safetensors(&[
+        ("block.lora_A.weight", lora_a),
+        ("block.lora_B.weight", lora_b),
+    ]));
+    let composite = hashed(&safetensors(&[
+        ("block.weight", base_weight),
+        ("block.norm", norm),
+        ("block.lora_A.weight", lora_a),
+        ("block.lora_B.weight", lora_b),
+    ]));
+    let merged = hashed(&safetensors(&[
+        ("block.weight", merged_weight),
+        ("block.norm", norm),
+    ]));
+
+    let standalone_tensors = tensor_digests(&standalone);
+    let composite_tensors = tensor_digests(&composite);
+    let merged_tensors = tensor_digests(&merged);
+
+    // A composite file stores the adapter tensors verbatim, so it reuses the
+    // standalone adapter objects even though the file header is different.
+    assert_eq!(standalone_tensors, composite_tensors[2..]);
+    // Merging changes the serialized base weight. HashRepo does not infer that
+    // the new weight was produced from the LoRA delta, but still reuses norm.
+    assert_ne!(merged_tensors[0], composite_tensors[0]);
+    assert_eq!(merged_tensors[1], composite_tensors[1]);
+    assert!(tensor_digest_set(&standalone).is_disjoint(&tensor_digest_set(&merged)));
+}
+
+#[test]
+fn norm_only_and_embedding_only_updates_replace_only_the_named_tensor_objects() {
+    let attention = b"attention-v1".as_slice();
+    let base = hashed(&safetensors(&[
+        ("model.embed_tokens.weight", b"tok0tok1tok2"),
+        ("model.layers.0.attention.weight", attention),
+        ("model.layers.0.norm.weight", b"norm-v1!"),
+    ]));
+    let norm_only = hashed(&safetensors(&[
+        ("model.embed_tokens.weight", b"tok0tok1tok2"),
+        ("model.layers.0.attention.weight", attention),
+        ("model.layers.0.norm.weight", b"NORM-v2!"),
+    ]));
+    let embedding_only = hashed(&safetensors(&[
+        ("model.embed_tokens.weight", b"tok0TOK1tok2"),
+        ("model.layers.0.attention.weight", attention),
+        ("model.layers.0.norm.weight", b"norm-v1!"),
+    ]));
+
+    assert_eq!(
+        changed_object_indexes(&base, &norm_only),
+        HashSet::from([3])
+    );
+    assert_eq!(
+        changed_object_indexes(&base, &embedding_only),
+        HashSet::from([1])
+    );
+}
+
+#[test]
+fn expert_per_tensor_moe_updates_replace_only_the_changed_expert() {
+    let base = hashed(&safetensors(&[
+        ("model.gate.weight", b"router-v1"),
+        ("model.experts.0.weight", b"expert-000"),
+        ("model.experts.1.weight", b"expert-111"),
+        ("model.experts.2.weight", b"expert-222"),
+    ]));
+    let expert_one_only = hashed(&safetensors(&[
+        ("model.gate.weight", b"router-v1"),
+        ("model.experts.0.weight", b"expert-000"),
+        ("model.experts.1.weight", b"EXPERT-111"),
+        ("model.experts.2.weight", b"expert-222"),
+    ]));
+
+    assert_eq!(
+        changed_object_indexes(&base, &expert_one_only),
+        HashSet::from([3])
     );
 }
 
@@ -258,6 +351,34 @@ fn hash_pattern(source: &PatternTensorSource) -> HashedPlan {
 }
 
 #[test]
+fn tensor_chunking_covers_every_64_mib_boundary_length() {
+    let cases = [
+        (0, Vec::new()),
+        (1, vec![1]),
+        (MAX_OBJECT_SIZE - 1, vec![MAX_OBJECT_SIZE - 1]),
+        (MAX_OBJECT_SIZE, vec![MAX_OBJECT_SIZE]),
+        (MAX_OBJECT_SIZE + 1, vec![MAX_OBJECT_SIZE, 1]),
+    ];
+
+    for (tensor_length, expected_lengths) in cases {
+        let source = PatternTensorSource::new(tensor_length, vec![]);
+        let planned = plan(&source).expect("boundary fixture plans");
+        let actual_lengths = planned
+            .regions()
+            .iter()
+            .filter(|region| region.kind() == RegionKind::Tensor)
+            .map(|region| region.length())
+            .collect::<Vec<_>>();
+
+        assert_eq!(planned.planner(), PlannerId::SafetensorsV1);
+        assert_eq!(
+            actual_lengths, expected_lengths,
+            "tensor length {tensor_length}"
+        );
+    }
+}
+
+#[test]
 fn localized_and_boundary_crossing_updates_replace_exactly_intersected_objects() {
     let tensor_length = MAX_OBJECT_SIZE + 1;
     let base = hash_pattern(&PatternTensorSource::new(tensor_length, vec![]));
@@ -281,23 +402,106 @@ fn localized_and_boundary_crossing_updates_replace_exactly_intersected_objects()
 }
 
 #[test]
-fn eight_object_tensor_uses_tensor_relative_64_mib_boundaries() {
-    let tensor_length = 7 * MAX_OBJECT_SIZE + 50_000_000;
-    let source = PatternTensorSource::new(tensor_length, vec![]);
-    let planned = plan(&source).expect("large tensor plans");
-    let tensor_regions = planned
-        .regions()
+fn one_byte_mutation_inside_an_eight_object_tensor_replaces_one_object() {
+    let tensor_length = 7 * MAX_OBJECT_SIZE + 1;
+    let mutation_offset = 3 * MAX_OBJECT_SIZE + 17;
+    let changed = hash_pattern(&PatternTensorSource::new(
+        tensor_length,
+        vec![(mutation_offset, 0xa5)],
+    ));
+    let tensor_objects = changed
+        .objects()
         .iter()
-        .filter(|region| region.kind() == RegionKind::Tensor)
+        .filter(|object| object.kind() == RegionKind::Tensor)
         .collect::<Vec<_>>();
 
-    assert_eq!(tensor_regions.len(), 8);
+    assert_eq!(tensor_objects.len(), 8);
     assert!(
-        tensor_regions[..7]
+        tensor_objects[..7]
             .iter()
-            .all(|region| region.length() == MAX_OBJECT_SIZE)
+            .all(|object| object.length() == MAX_OBJECT_SIZE)
     );
-    assert_eq!(tensor_regions[7].length(), 50_000_000);
+    assert_eq!(tensor_objects[7].length(), 1);
+
+    // Every unmodified full-size object contains the same generated bytes and
+    // therefore has the same digest. Only the object containing the one-byte
+    // mutation loses that reusable identity; the eighth tail remains separate.
+    let reusable_digest = tensor_objects[0].digest();
+    for index in [0, 1, 2, 4, 5, 6] {
+        assert_eq!(tensor_objects[index].digest(), reusable_digest);
+    }
+    assert_ne!(tensor_objects[3].digest(), reusable_digest);
+}
+
+#[test]
+fn packed_moe_update_replaces_every_64_mib_object_intersecting_the_expert() {
+    const EXPERT_BYTES: u64 = 40 * MIB;
+    let tensor_length = 3 * EXPERT_BYTES;
+    let base = hash_pattern(&PatternTensorSource::new(tensor_length, vec![]));
+
+    // Packed expert 1 occupies [40 MiB, 80 MiB), crossing the 64 MiB object
+    // boundary. Representative changed bytes on both sides replace both and
+    // only those intersecting objects.
+    let expert_one = hash_pattern(&PatternTensorSource::new(
+        tensor_length,
+        vec![(EXPERT_BYTES, 0xa5), (2 * EXPERT_BYTES - 1, 0xa5)],
+    ));
+    let tensor_lengths = base
+        .objects()
+        .iter()
+        .filter(|object| object.kind() == RegionKind::Tensor)
+        .map(|object| object.length())
+        .collect::<Vec<_>>();
+
+    assert_eq!(tensor_lengths, vec![MAX_OBJECT_SIZE, 56 * MIB]);
+    assert_eq!(
+        changed_object_indexes(&base, &expert_one),
+        HashSet::from([1, 2])
+    );
+}
+
+#[test]
+fn cross_shard_updates_and_tensor_moves_preserve_unaffected_objects() {
+    let shard_zero = hashed(&safetensors(&[
+        ("model.layers.0.weight", b"layer-zero"),
+        ("model.layers.1.weight", b"layer-one!"),
+    ]));
+    let shard_one = hashed(&safetensors(&[
+        ("model.layers.2.weight", b"layer-two!"),
+        ("model.norm.weight", b"final-norm"),
+    ]));
+
+    let revised_shard_zero = hashed(&safetensors(&[
+        ("model.layers.0.weight", b"layer-zero"),
+        ("model.layers.1.weight", b"LAYER-ONE!"),
+    ]));
+    let unchanged_shard_one = hashed(&safetensors(&[
+        ("model.layers.2.weight", b"layer-two!"),
+        ("model.norm.weight", b"final-norm"),
+    ]));
+
+    assert_eq!(
+        changed_object_indexes(&shard_zero, &revised_shard_zero),
+        HashSet::from([2])
+    );
+    assert_eq!(shard_one, unchanged_shard_one);
+
+    let moved_left = hashed(&safetensors(&[("model.layers.0.weight", b"layer-zero")]));
+    let moved_right = hashed(&safetensors(&[
+        ("model.layers.1.weight", b"layer-one!"),
+        ("model.layers.2.weight", b"layer-two!"),
+        ("model.norm.weight", b"final-norm"),
+    ]));
+    let before_move = tensor_digest_set(&shard_zero)
+        .union(&tensor_digest_set(&shard_one))
+        .cloned()
+        .collect::<HashSet<_>>();
+    let after_move = tensor_digest_set(&moved_left)
+        .union(&tensor_digest_set(&moved_right))
+        .cloned()
+        .collect::<HashSet<_>>();
+
+    assert_eq!(before_move, after_move);
 }
 
 #[test]
