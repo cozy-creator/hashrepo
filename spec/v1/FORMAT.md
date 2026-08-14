@@ -50,22 +50,33 @@ reference.
 
 ## Writer policy
 
-HashRepo has one automatic writer policy. It first proves whether a file is
-structurally valid safetensors. A valid file's 8-byte prefix plus JSON header is
-an isolated header region, split into one or more bounded chunks. Tensors at least
-64 MiB are split every 64 MiB from that tensor's own start; consecutive smaller
-tensors are greedily packed, in physical byte order, to at most 64 MiB. The
-ideal 50 GiB / 64 MiB body is 800 objects; one all-small 50 GiB run needs at
-most 1,600, while large tensors use ceiling division. A 186-layout local corpus
-measured 1.346x as many objects as fixed chunks
-at this floor, versus 2.272x at 32 MiB. The 64 MiB floor also bounds collateral
-from one changed small tensor to less than 64 MiB. Malformed and non-safetensors
-files use bounded fixed 64 MiB offsets; no filename extension can bypass parsing.
+HashRepo has one automatic writer with a closed built-in planner registry.
+Planner selection uses bounded file bytes, never the path extension or a caller
+argument. Exactly these profile identifiers exist in v1:
 
-Pack membership is deterministic for one ordered tensor set, not stable across
-arbitrary structural edits. Adding, removing, or resizing a small tensor can
-repack the rest of that consecutive small-tensor run until the next large
-tensor. There is deliberately no rolling hash or content-defined resync.
+- `safetensors-v1` validates the bounded JSON header, unique tensor names,
+  known dtype/shape byte geometry and complete contiguous data coverage. Its
+  8-byte prefix plus header is an isolated region. Every nonempty tensor is an
+  independent domain; tensors through 64 MiB are one natural-sized object and
+  larger tensors are split every 64 MiB relative to their own start. Zero-byte
+  tensors add no data object.
+- `gguf-v1` accepts little-endian GGUF v2/v3 only after validating bounded
+  metadata and tensor counts/strings, unique keys/names, dimensions, the pinned
+  GGML dense/quantized block-size table, power-of-two alignment, overflow,
+  expected padded offsets and exact file coverage. Header, directory and
+  padding bytes remain explicit, while every nonempty tensor uses the same
+  natural-size or tensor-relative 64 MiB rule.
+- `raw-fixed-64m-v1` splits every other byte stream at file-relative 64 MiB
+  offsets.
+
+Malformed, unsupported, future-format or ambiguous semantic input falls back
+as a whole to raw planning. It never produces a partial semantic partition.
+The generic core independently validates zero-free, gap-free, overlap-free,
+ordered complete coverage and hashes the planned bytes itself. Canonical
+identity never packs neighboring small tensors; batching belongs only to the
+transfer protocol. Consequently insertion, deletion, reordering, resharing or
+absolute-offset movement changes header/manifest bytes but does not re-key an
+unchanged tensor's data objects.
 
 The writer always emits manifest format 1. Readers reconstruct files only from
 the manifest's ordered digest/length sequence and never infer writer boundaries.

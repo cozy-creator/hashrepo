@@ -1,7 +1,7 @@
 # hashrepo
 
-`hashrepo` is a small content-addressed storage library for immutable files
-and repositories. It provides:
+`hashrepo` is a content-addressed storage and snapshot engine for ordinary
+files and repositories. It provides:
 
 - a canonical SHA-256 manifest with explicit bounded chunk lengths;
 - an authoritative local CAS that works without a network or hub;
@@ -11,11 +11,11 @@ and repositories. It provides:
 - Go missing-object planning and staged verification/promotion; and
 - one set of v1 golden vectors consumed by both Python and Go.
 
-The Python and Go implementations are native. They share a format and
-conformance corpus, not a C ABI. Python's hashing uses OpenSSL through
-`hashlib`, while its filesystem and network operations release the GIL. This
-keeps installation and debugging simple without putting a second runtime and
-cgo boundary inside Python processes.
+The released 0.3.1 Python and Go implementations are the measured prototype
+and migration source. The production v1 data plane is now being hard-cut to
+one Rust implementation. Python becomes a typed local control client, Go
+remains Tensorhub's non-authoring verifier/promoter, and neither retains a
+second chunker, local CAS, filesystem, or materializer.
 
 Importing the local CAS does not load the HTTP transport. Transfer exports are
 resolved lazily, so offline/local-only use has no network-stack side effect.
@@ -24,12 +24,13 @@ resolved lazily, so offline/local-only use has no network-stack side effect.
 
 This repository is the pre-launch v1 extraction from Cozy Creator's existing
 model-repository CAS. The Python and Go packages are public; their intentionally
-narrow API may still hard-cut before 1.0.
+narrow API and pre-launch format may still hard-cut before 1.0. The native Rust
+workspace is under active construction and is not a released filesystem yet.
 
 The supported v1 shape is intentionally narrow:
 
 - SHA-256 only;
-- one automatic tensor-aware writer with a fixed-boundary fallback;
+- one closed automatic planner registry with safetensors, GGUF and raw fallback;
 - local storage and opaque remote grants;
 - Linux/POSIX durability semantics; and
 - no Xet, OCI, plugin, or self-hostable-server compatibility layer.
@@ -38,6 +39,7 @@ The supported v1 shape is intentionally narrow:
 
 ```text
 spec/v1/                 format documentation, JSON Schema, golden vectors
+crates/hashrepo-core/     Rust canonical formats, planners and storage engine
 python/src/hashrepo/     Python local CAS and grant-transfer data plane
 *.go                     Go manifest, planning, and promotion engine
 ```
@@ -49,12 +51,34 @@ uv sync --all-extras
 uv run pytest
 uv run mypy python/src
 go test ./...
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
 ```
 
 The two test suites both read `spec/v1/vectors/manifest.json` and require their
 canonical encoders to reproduce it byte-for-byte.
 
-## Tensor-aligned writer
+## Semantic writer profiles
+
+The production v1 writer automatically selects one built-in profile from
+bounded file bytes. Callers cannot select or supply a planner:
+
+- `safetensors-v1` isolates the header and makes every nonempty tensor an
+  independent object domain;
+- `gguf-v1` validates the GGUF v2/v3 directory, alignment and pinned GGML
+  dense/quantized type geometry before applying the same tensor rule; and
+- `raw-fixed-64m-v1` is the whole-file fallback for every unrecognized,
+  unsupported or malformed byte stream.
+
+Objects are at most 64 MiB. A semantic tensor at most that size is one natural
+object; a larger tensor is split every 64 MiB from its own start. There is no
+canonical packing of neighboring small tensors. Transport may batch small
+objects, but insertion, deletion, ordering, sharding and absolute file offsets
+never become part of an unchanged tensor object's digest. Readers remain
+format-blind and reconstruct solely from ordered digest/length records.
+
+### Released 0.3.1 evidence
 
 `LocalCAS.ingest_file` and `ingest_repository` automatically isolate a valid
 safetensors header region into one or more bounded chunks,
@@ -90,9 +114,10 @@ time, throughput, peak RSS, filesystem I/O blocks, and verified materialization.
 It needs about 4 GiB of temporary disk. Timing is deliberately not a shared-CI
 gate; compare runs on the same idle machine and filesystem.
 
-Package `0.2.0` introduced the measured tensor planner and `MAX_CHUNK_SIZE`.
-Package `0.3.0` removes the transitional public writer selector: callers cannot
-request the retired fixed-safetensors layout or choose a second policy.
+Package `0.2.0` introduced that measured planner and `MAX_CHUNK_SIZE`. Package
+`0.3.0` removed the transitional public writer selector. The native hard cut
+keeps its proven header/tensor validation vectors but deliberately removes its
+greedy-small-run weakness rather than preserving it as a compatibility mode.
 
 Every consumer must reconstruct from the manifest's `(digest, len)` sequence.
 `chunk_size_bytes` and `MAX_CHUNK_SIZE` are per-object ceilings, never exact
