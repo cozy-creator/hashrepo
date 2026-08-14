@@ -24,6 +24,29 @@ class RefConflict(RuntimeError):
     """A logical ref changed from the value the caller observed."""
 
 
+class _ObjectWriter:
+    def __init__(self, handle: BinaryIO) -> None:
+        self._handle = handle
+        self._digest = hashlib.sha256()
+        self.size = 0
+
+    def write(self, data: bytes) -> int:
+        written = self._handle.write(data)
+        self._digest.update(data[:written])
+        self.size += written
+        return written
+
+    def flush(self) -> None:
+        self._handle.flush()
+
+    def fileno(self) -> int:
+        return self._handle.fileno()
+
+    @property
+    def ref(self) -> CASRef:
+        return CASRef(self._digest.hexdigest())
+
+
 def _fsync_dir(path: Path) -> None:
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
@@ -69,8 +92,7 @@ class LocalCAS:
         parsed = CASRef.parse(ref)
         return self.root / parsed.object_key()
 
-    def verify_object(self, ref: str | CASRef, *, size: int | None = None) -> Path:
-        parsed = CASRef.parse(ref)
+    def _verify_object_unlocked(self, parsed: CASRef, size: int | None) -> Path:
         path = self.object_path(parsed)
         stat = path.stat()
         if size is not None and stat.st_size != size:
@@ -82,6 +104,11 @@ class LocalCAS:
         if digest.hexdigest() != parsed.digest:
             raise DigestMismatch(f"{parsed}: local object bytes do not match their digest")
         return path
+
+    def verify_object(self, ref: str | CASRef, *, size: int | None = None) -> Path:
+        parsed = CASRef.parse(ref)
+        with self._object_lock(parsed):
+            return self._verify_object_unlocked(parsed, size)
 
     def contains(self, ref: str | CASRef, *, size: int | None = None, verify: bool = True) -> bool:
         path = self.object_path(ref)
@@ -95,13 +122,20 @@ class LocalCAS:
     def _commit_temp(self, temporary: Path, ref: CASRef, size: int) -> Path:
         destination = self.object_path(ref)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.link(temporary, destination)
-            _fsync_dir(destination.parent)
-        except FileExistsError:
-            self.verify_object(ref, size=size)
-        finally:
-            temporary.unlink(missing_ok=True)
+        with self._object_lock(ref):
+            try:
+                os.link(temporary, destination)
+                _fsync_dir(destination.parent)
+            except FileExistsError:
+                try:
+                    self._verify_object_unlocked(ref, size)
+                except DigestMismatch:
+                    # The named object is already unusable. Replace it atomically
+                    # with bytes that were verified before reaching this method.
+                    os.replace(temporary, destination)
+                    _fsync_dir(destination.parent)
+            finally:
+                temporary.unlink(missing_ok=True)
         return destination
 
     def put_bytes(self, data: bytes, *, expected: str | CASRef | None = None) -> CASRef:
@@ -122,25 +156,128 @@ class LocalCAS:
             raise
         return ref
 
-    def _put_small_file(self, source: Path, size: int) -> CASRef:
-        fd, raw_path = tempfile.mkstemp(prefix="put-", dir=self.tmp)
+    @contextmanager
+    def open_writer(
+        self,
+        expected: str | CASRef,
+        *,
+        size: int,
+    ) -> Iterator[_ObjectWriter]:
+        """Hash a byte stream and atomically install its CAS object.
+
+        The object becomes visible only after the context exits successfully,
+        its digest and size match the declaration, and its bytes are durable.
+        """
+
+        expected_ref = CASRef.parse(expected)
+        if type(size) is not int or size < 0:
+            raise ValueError("object size must be a non-negative integer")
+        fd, raw_path = tempfile.mkstemp(prefix="stream-", dir=self.tmp)
         temporary = Path(raw_path)
         try:
-            with os.fdopen(fd, "wb") as writer:
-                with source.open("rb") as reader:
-                    before = os.fstat(reader.fileno())
-                    digest, copied = _copy_and_hash(reader, writer)
-                    after = os.fstat(reader.fileno())
+            with os.fdopen(fd, "wb") as handle:
+                writer = _ObjectWriter(handle)
+                yield writer
                 writer.flush()
                 os.fsync(writer.fileno())
+                written = os.fstat(writer.fileno()).st_size
+                if writer.size != size or written != size:
+                    raise DigestMismatch(
+                        f"{expected_ref}: stream is {written} bytes, expected {size}"
+                    )
+                if writer.ref != expected_ref:
+                    raise DigestMismatch(f"stream hashes to {writer.ref}, expected {expected_ref}")
+            self._commit_temp(temporary, expected_ref, size)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+
+    def adopt_file(
+        self,
+        temporary: str | Path,
+        *,
+        expected: str | CASRef,
+        size: int,
+    ) -> CASRef:
+        """Verify and consume a file created in this CAS's temporary directory.
+
+        The verified file itself is linked into the object namespace; its bytes
+        are never copied into another temporary file. The input path is removed
+        after either a successful install or a verification failure.
+        """
+
+        source = Path(temporary)
+        expected_ref = CASRef.parse(expected)
+        if type(size) is not int or size < 0:
+            raise ValueError("object size must be a non-negative integer")
+        if source.parent.resolve() != self.tmp.resolve():
+            raise ValueError(f"adopted files must be direct children of {self.tmp}")
+
+        try:
+            digest = hashlib.sha256()
+            with source.open("rb+") as handle:
+                before = os.fstat(handle.fileno())
+                copied = 0
+                while data := handle.read(_COPY_BUFFER):
+                    digest.update(data)
+                    copied += len(data)
+                os.fsync(handle.fileno())
+                after = os.fstat(handle.fileno())
             if (
                 copied != size
                 or before.st_size != size
                 or after.st_size != size
                 or after.st_mtime_ns != before.st_mtime_ns
             ):
-                raise OSError(f"{source} changed while it was being ingested")
+                raise DigestMismatch(f"{source}: file is not the declared {size} bytes")
+            actual_ref = CASRef(digest.hexdigest())
+            if actual_ref != expected_ref:
+                raise DigestMismatch(
+                    f"{source}: bytes hash to {actual_ref}, expected {expected_ref}"
+                )
+            self._commit_temp(source, expected_ref, size)
+            return expected_ref
+        except BaseException:
+            source.unlink(missing_ok=True)
+            raise
+
+    def put_file(
+        self,
+        source: str | Path,
+        *,
+        expected: str | CASRef | None = None,
+        size: int | None = None,
+    ) -> CASRef:
+        """Install one object from a file after hashing it exactly once."""
+
+        source_path = Path(source)
+        initial = source_path.stat()
+        expected_size = initial.st_size if size is None else size
+        if initial.st_size != expected_size:
+            raise DigestMismatch(
+                f"{source_path}: source is {initial.st_size} bytes, expected {expected_size}"
+            )
+        fd, raw_path = tempfile.mkstemp(prefix="put-", dir=self.tmp)
+        temporary = Path(raw_path)
+        try:
+            with os.fdopen(fd, "wb") as writer:
+                with source_path.open("rb") as reader:
+                    before = os.fstat(reader.fileno())
+                    digest, copied = _copy_and_hash(reader, writer)
+                    after = os.fstat(reader.fileno())
+                writer.flush()
+                os.fsync(writer.fileno())
+            if (
+                copied != expected_size
+                or before.st_size != expected_size
+                or after.st_size != expected_size
+                or after.st_mtime_ns != before.st_mtime_ns
+            ):
+                raise OSError(f"{source_path} changed while it was being ingested")
             ref = CASRef(digest)
+            expected_ref = CASRef.parse(expected) if expected is not None else None
+            if expected_ref is not None and ref != expected_ref:
+                raise DigestMismatch(f"{source_path}: bytes hash to {ref}, expected {expected_ref}")
             self._commit_temp(temporary, ref, copied)
             return ref
         except BaseException:
@@ -151,7 +288,7 @@ class LocalCAS:
         path = Path(source)
         initial = path.stat()
         if initial.st_size <= CHUNK_SIZE:
-            digest = self._put_small_file(path, initial.st_size)
+            digest = self.put_file(path, size=initial.st_size)
             return FileEntry(manifest_path or path.name, initial.st_size, digest)
 
         whole = hashlib.sha256()
@@ -243,6 +380,16 @@ class LocalCAS:
 
     def read_ref(self, name: str) -> CASRef | None:
         return self._read_ref_unlocked(name)
+
+    @contextmanager
+    def _object_lock(self, ref: CASRef) -> Iterator[None]:
+        path = self.locks / f"object-{ref.digest}"
+        with path.open("a+b") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     @contextmanager
     def _ref_lock(self, name: str) -> Iterator[None]:

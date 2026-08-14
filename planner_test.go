@@ -1,13 +1,65 @@
 package chunkedcas
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestGrantMatchesSharedV1Vector(t *testing.T) {
+	vector, err := os.ReadFile(filepath.Join("spec", "v1", "vectors", "upload_grant.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vector = bytes.TrimSpace(vector)
+
+	var grant Grant
+	if err := json.Unmarshal(vector, &grant); err != nil {
+		t.Fatalf("decode shared grant vector: %v", err)
+	}
+	wantDigest, err := ParseRef("sha256:0ad1863ee4d0195b751580cc2e1be191255b27964174273c2ace87fad35123c9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantExpiry := time.Date(2026, 8, 13, 12, 10, 0, 0, time.UTC)
+	if grant.Digest != wantDigest || grant.SizeBytes != 18 ||
+		grant.StagingKey != "staging/session-1/"+wantDigest.Hex() ||
+		grant.URL != "https://objects.invalid/upload?token=v1" ||
+		grant.ExpiresAt != wantExpiry {
+		t.Fatalf("decoded grant does not match v1 vector: %+v", grant)
+	}
+	if grant.Headers == nil || len(grant.Headers) != 0 {
+		t.Fatalf("headers = %#v, want a non-nil empty map", grant.Headers)
+	}
+
+	// A store adapter is allowed to return nil for no headers. The public wire
+	// contract still requires an empty JSON object rather than null.
+	grant.Headers = nil
+	encoded, err := json.Marshal(grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(encoded, vector) {
+		t.Fatalf("grant wire mismatch\n got: %s\nwant: %s", encoded, vector)
+	}
+}
+
+func TestGrantRefusesNullOrAbsentHeaders(t *testing.T) {
+	for _, raw := range []string{
+		`{"digest":"sha256:0ad1863ee4d0195b751580cc2e1be191255b27964174273c2ace87fad35123c9","size_bytes":18,"staging_key":"staging/session/x","url":"https://objects.invalid","headers":null,"expires_at":"2026-08-13T12:10:00Z"}`,
+		`{"digest":"sha256:0ad1863ee4d0195b751580cc2e1be191255b27964174273c2ace87fad35123c9","size_bytes":18,"staging_key":"staging/session/x","url":"https://objects.invalid","expires_at":"2026-08-13T12:10:00Z"}`,
+	} {
+		var grant Grant
+		if err := json.Unmarshal([]byte(raw), &grant); err == nil {
+			t.Fatalf("accepted invalid grant: %s", raw)
+		}
+	}
+}
 
 type memoryStore struct {
 	resident map[Ref]bool

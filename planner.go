@@ -2,6 +2,7 @@ package chunkedcas
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -31,9 +32,58 @@ type StagedObject struct {
 // Grant is a verbatim, expiring HTTP PUT authorization.
 type Grant struct {
 	StagedObject
-	PutURL    string            `json:"put_url"`
+	URL       string            `json:"url"`
 	Headers   map[string]string `json:"headers"`
 	ExpiresAt time.Time         `json:"expires_at"`
+}
+
+type wireGrant struct {
+	Digest     Ref               `json:"digest"`
+	SizeBytes  int64             `json:"size_bytes"`
+	StagingKey string            `json:"staging_key"`
+	URL        string            `json:"url"`
+	Headers    map[string]string `json:"headers"`
+	ExpiresAt  time.Time         `json:"expires_at"`
+}
+
+// MarshalJSON keeps the v1 grant wire shape stable. In particular, no headers
+// is an empty object rather than null: clients can always pass the value
+// directly to an HTTP request without a nullable special case.
+func (g Grant) MarshalJSON() ([]byte, error) {
+	headers := g.Headers
+	if headers == nil {
+		headers = map[string]string{}
+	}
+	return json.Marshal(wireGrant{
+		Digest:     g.Digest,
+		SizeBytes:  g.SizeBytes,
+		StagingKey: g.StagingKey,
+		URL:        g.URL,
+		Headers:    headers,
+		ExpiresAt:  g.ExpiresAt,
+	})
+}
+
+// UnmarshalJSON refuses nullable headers so readers enforce the same v1 shape
+// writers emit.
+func (g *Grant) UnmarshalJSON(data []byte) error {
+	var wire wireGrant
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.Headers == nil {
+		return errors.New("grant headers must be an object, not null or absent")
+	}
+	*g = Grant{
+		StagedObject: StagedObject{
+			Object:     Object{Digest: wire.Digest, SizeBytes: wire.SizeBytes},
+			StagingKey: wire.StagingKey,
+		},
+		URL:       wire.URL,
+		Headers:   wire.Headers,
+		ExpiresAt: wire.ExpiresAt,
+	}
+	return nil
 }
 
 // Plan is the complete answer to a repository declaration.
@@ -250,7 +300,7 @@ func (p Planner) Plan(ctx context.Context, sessionID string, manifest Manifest) 
 		}
 		result.Need = append(result.Need, Grant{
 			StagedObject: stagedObject,
-			PutURL:       url,
+			URL:          url,
 			Headers:      headers,
 			ExpiresAt:    now.Add(ttl),
 		})

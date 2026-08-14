@@ -52,3 +52,35 @@ objects/sha256/ab/cd/abcdef...
 Remote adapters may map the same content reference into an existing physical
 namespace such as `blobs/sha256/...`; the physical prefix is not part of the
 manifest format.
+
+## Transfer and promotion
+
+An upload grant has exactly these fields:
+
+```json
+{"digest":"sha256:...","size_bytes":18,"staging_key":"staging/session-1/...","url":"https://objects.invalid/upload?token=v1","headers":{},"expires_at":"2026-08-13T12:10:00Z"}
+```
+
+- `digest` is the exact object content reference.
+- `size_bytes` is the exact non-negative request-body length.
+- `staging_key` is the server-owned session-scoped destination key.
+- `url` is an opaque upload URL; clients must not infer its provider.
+- `headers` is an object of verbatim request headers and is `{}` when empty,
+  never `null`.
+- `expires_at` is the grant deadline as an RFC 3339 UTC timestamp.
+
+The field is always named `url`, not `put_url` or a provider-specific name.
+The Python executor verifies local source objects before upload and installs
+downloaded bytes into `LocalCAS` only after digest and length match. Already
+verified local objects are the restart journal: a new process skips them and
+fetches only absent or corrupt objects. An expired grant is a typed re-plan
+result, distinct from a byte failure.
+
+Server-side publication is staged. A store adapter must attest the SHA-256 and
+length of a staged PUT as part of an atomic, version-bound promotion into the
+immutable content key. The destination must also carry a store-asserted SHA-256
+checksum; existence and length alone are never called complete. A serialized
+plan is untrusted until its manifest partition, session ID, object sizes, and
+derived staging keys have all been validated. Promotion is per-object,
+idempotent, and retryable. The generic promoter never deletes staging keys;
+stores lifecycle-expire the session-scoped staging namespace.

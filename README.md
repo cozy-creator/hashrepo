@@ -6,7 +6,8 @@ and repositories. It provides:
 - a canonical SHA-256 manifest format with fixed 64 MiB chunks;
 - an authoritative local CAS that works without a network or hub;
 - atomic materialization and compare-and-swap logical refs;
-- a Go planning package for missing-object and resumable upload decisions; and
+- opaque grant-driven Python upload/download with verified restart resume;
+- Go missing-object planning and staged verification/promotion; and
 - one set of v1 golden vectors consumed by both Python and Go.
 
 The Python and Go implementations are native. They share a format and
@@ -14,6 +15,9 @@ conformance corpus, not a C ABI. Python's hashing uses OpenSSL through
 `hashlib`, while its filesystem and network operations release the GIL. This
 keeps installation and debugging simple without putting a second runtime and
 cgo boundary inside Python processes.
+
+Importing the local CAS does not load the HTTP transport. Transfer exports are
+resolved lazily, so offline/local-only use has no network-stack side effect.
 
 ## Status
 
@@ -33,8 +37,8 @@ The supported v1 shape is intentionally narrow:
 
 ```text
 spec/v1/                 format documentation, JSON Schema, golden vectors
-python/src/chunked_cas/  Python client and authoritative local CAS
-*.go                     Go manifest and server-planning package
+python/src/chunked_cas/  Python local CAS and grant-transfer data plane
+*.go                     Go manifest, planning, and promotion engine
 ```
 
 ## Development
