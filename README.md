@@ -78,6 +78,18 @@ policy is not content-defined chunking and has no rolling-hash resynchronization
 te#185 phase 4 measures real stored-byte and object-count deltas over a 25-step
 frozen-base LoRA series; it is measurement, not a runtime selector or rollout gate.
 
+For an opt-in, real-scale local measurement, run:
+
+```bash
+uv run python python/benchmarks/safetensors_dedup.py
+```
+
+The default builds a 1 GiB, 16-tensor parent, changes eight bytes in one tensor,
+ingests both into one local CAS, and reports retained/reused bytes, wall/CPU
+time, throughput, peak RSS, filesystem I/O blocks, and verified materialization.
+It needs about 4 GiB of temporary disk. Timing is deliberately not a shared-CI
+gate; compare runs on the same idle machine and filesystem.
+
 Package `0.2.0` introduced the measured tensor planner and `MAX_CHUNK_SIZE`.
 Package `0.3.0` removes the transitional public writer selector: callers cannot
 request the retired fixed-safetensors layout or choose a second policy.
