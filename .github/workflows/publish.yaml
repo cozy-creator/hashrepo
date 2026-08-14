@@ -43,6 +43,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: clippy,rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
       - name: Install locked Python dependencies
         run: uv sync --locked --all-extras
 
@@ -56,6 +62,12 @@ jobs:
         run: |
           go test -race ./...
           go vet ./...
+
+      - name: Verify Rust workspace
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test --workspace --all-features
 
       - name: Build distributions
         run: uv build
