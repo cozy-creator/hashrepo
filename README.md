@@ -53,6 +53,18 @@ go test ./...
 The two test suites both read `spec/v1/vectors/manifest.json` and require their
 canonical encoders to reproduce it byte-for-byte.
 
+## Releasing
+
+Set the intended version in `pyproject.toml`, refresh `uv.lock`, and merge that
+release commit to `main`. Tag that exact commit as `v<version>` and push the
+tag. The `Publish to PyPI` workflow reruns the Python and Go gates, builds and
+smoke-tests the wheel, publishes the tested wheel and sdist through PyPI
+Trusted Publishing, and verifies the exact version endpoint. Tags whose name
+does not match `pyproject.toml`, or whose commit is not on `main`, are refused.
+
+No PyPI token is stored in GitHub. The repository's `pypi` environment and the
+PyPI publisher must both identify `.github/workflows/publish.yml`.
+
 ## License
 
 MIT

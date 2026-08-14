@@ -1,0 +1,137 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+jobs:
+  build:
+    name: Test and build tagged release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require the project version tag on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match pyproject version ${version}" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "Tagged commit ${GITHUB_SHA} is not on origin/main" >&2
+            exit 1
+          fi
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install locked Python dependencies
+        run: uv sync --locked --all-extras
+
+      - name: Verify Python package
+        run: |
+          uv run ruff check python
+          uv run mypy
+          uv run pytest -q
+
+      - name: Verify Go package
+        run: |
+          go test -race ./...
+          go vet ./...
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Smoke-test built wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv venv --python 3.12 /tmp/chunked-cas-wheel
+          uv pip install --python /tmp/chunked-cas-wheel/bin/python dist/chunked_cas-*.whl
+          cd /tmp
+          /tmp/chunked-cas-wheel/bin/python - <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          from chunked_cas import LocalCAS
+
+          with TemporaryDirectory() as root:
+              cas = LocalCAS(Path(root))
+              ref = cas.put_bytes(b"release-smoke")
+              assert cas.verify_object(ref).read_bytes() == b"release-smoke"
+          PY
+
+      - name: Preserve exact distributions for publishing
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish tagged distributions
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Retrieve tested distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  verify:
+    name: Verify PyPI release
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Wait for exact version metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          url="https://pypi.org/pypi/chunked-cas/${version}/json"
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error "${url}" > release.json; then
+              python3 - <<'PY'
+          import json
+
+          with open("release.json", encoding="utf-8") as source:
+              release = json.load(source)
+          filenames = {item["filename"] for item in release["urls"]}
+          assert any(name.endswith(".whl") for name in filenames), filenames
+          assert any(name.endswith(".tar.gz") for name in filenames), filenames
+          PY
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "PyPI did not expose chunked-cas ${version} within 60 seconds" >&2
+          exit 1
