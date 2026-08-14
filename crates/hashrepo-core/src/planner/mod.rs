@@ -178,4 +178,87 @@ mod tests {
         );
         plan.validate().unwrap();
     }
+
+    #[test]
+    fn coverage_validation_refuses_every_partition_escape() {
+        let invalid = [
+            vec![Region {
+                offset: 1,
+                length: 3,
+                kind: RegionKind::Raw,
+            }],
+            vec![
+                Region {
+                    offset: 0,
+                    length: 2,
+                    kind: RegionKind::Raw,
+                },
+                Region {
+                    offset: 3,
+                    length: 1,
+                    kind: RegionKind::Raw,
+                },
+            ],
+            vec![
+                Region {
+                    offset: 0,
+                    length: 3,
+                    kind: RegionKind::Raw,
+                },
+                Region {
+                    offset: 2,
+                    length: 2,
+                    kind: RegionKind::Raw,
+                },
+            ],
+            vec![Region {
+                offset: 0,
+                length: 0,
+                kind: RegionKind::Raw,
+            }],
+            vec![Region {
+                offset: 0,
+                length: MAX_OBJECT_SIZE + 1,
+                kind: RegionKind::Raw,
+            }],
+            vec![Region {
+                offset: 0,
+                length: 3,
+                kind: RegionKind::Raw,
+            }],
+        ];
+
+        for regions in invalid {
+            let plan = Plan {
+                planner: PlannerId::RawFixed64mV1,
+                file_size: 4,
+                regions,
+            };
+            assert_eq!(
+                plan.validate().unwrap_err().to_string(),
+                "planner produced invalid file coverage"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_file_has_one_canonical_empty_partition() {
+        let empty = raw_plan(0);
+        assert!(empty.regions.is_empty());
+        empty.validate().unwrap();
+
+        let noncanonical = Plan {
+            planner: PlannerId::RawFixed64mV1,
+            file_size: 0,
+            regions: vec![Region {
+                offset: 0,
+                length: 0,
+                kind: RegionKind::Raw,
+            }],
+        };
+        assert!(matches!(
+            noncanonical.validate(),
+            Err(PlanError::InvalidCoverage)
+        ));
+    }
 }
