@@ -114,12 +114,14 @@ fn tagged_sha256(source: &impl ByteSource) -> String {
 }
 
 fn decode_fixture(encoded: &str) -> Vec<u8> {
-    let hex = encoded
-        .strip_suffix('\n')
-        .expect("planner fixture must end in exactly one LF");
+    let mut lines = encoded.lines();
+    let hex = lines
+        .next()
+        .expect("planner fixture must have one hex line");
+    assert!(lines.next().is_none(), "planner fixture has extra lines");
     assert!(
-        !hex.contains(['\r', '\n']),
-        "fixture has embedded whitespace"
+        encoded.ends_with('\n'),
+        "planner fixture must end in a line terminator"
     );
     assert_eq!(hex.len() % 2, 0, "fixture has an odd hex digit count");
     assert!(
@@ -135,6 +137,12 @@ fn decode_fixture(encoded: &str) -> Vec<u8> {
             u8::from_str_radix(digits, 16).expect("validated hexadecimal pair")
         })
         .collect()
+}
+
+#[test]
+fn fixture_decoder_accepts_one_lf_or_crlf_terminated_hex_line() {
+    assert_eq!(decode_fixture("00ff\n"), [0x00, 0xff]);
+    assert_eq!(decode_fixture("00ff\r\n"), [0x00, 0xff]);
 }
 
 const fn kind_name(kind: RegionKind) -> &'static str {
