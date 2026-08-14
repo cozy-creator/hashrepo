@@ -27,19 +27,19 @@ _RFC3339_UTC = re.compile(
 )
 
 
-class GrantExpired(RuntimeError):
+class _GrantExpired(RuntimeError):
     """The caller should obtain a fresh remote plan, not retry this URL."""
 
 
-class TransferRefused(RuntimeError):
+class _TransferRefused(RuntimeError):
     """The remote endpoint rejected the bytes or authorization terminally."""
 
 
-class TransientTransferError(RuntimeError):
+class _TransientTransferError(RuntimeError):
     """A transport failure that may succeed on the same grant after backoff."""
 
 
-class HTTPStatusError(RuntimeError):
+class _HTTPStatusError(RuntimeError):
     def __init__(self, status: int, detail: str = "") -> None:
         super().__init__(f"HTTP {status}: {detail}".rstrip())
         self.status = status
@@ -135,13 +135,13 @@ class TransferGrant:
         }
 
 
-class GrantTransport(Protocol):
+class _GrantTransport(Protocol):
     def upload(self, grant: TransferGrant, source: Path) -> None: ...
 
     def download(self, grant: TransferGrant, destination: Path) -> None: ...
 
 
-class HTTPTransport:
+class _HTTPTransport:
     """Small stdlib transport for verbatim grant URLs and headers."""
 
     def __init__(self, *, timeout: float = 120.0, block_bytes: int = 1 << 20) -> None:
@@ -156,9 +156,9 @@ class HTTPTransport:
                 detail = exc.read(1024).decode("utf-8", "replace")
             finally:
                 exc.close()
-            raise HTTPStatusError(exc.code, detail) from exc
+            raise _HTTPStatusError(exc.code, detail) from exc
         except (OSError, urllib.error.URLError) as exc:
-            raise TransientTransferError(str(exc)) from exc
+            raise _TransientTransferError(str(exc)) from exc
 
     def upload(self, grant: TransferGrant, source: Path) -> None:
         if source.stat().st_size != grant.size_bytes:
@@ -177,7 +177,7 @@ class HTTPTransport:
             value for key, value in headers.items() if key.lower() == "content-length"
         ]
         if content_lengths and content_lengths != [str(grant.size_bytes)]:
-            raise TransferRefused(f"{grant.digest}: grant has an incorrect Content-Length")
+            raise _TransferRefused(f"{grant.digest}: grant has an incorrect Content-Length")
         if not content_lengths:
             headers["Content-Length"] = str(grant.size_bytes)
         request = urllib.request.Request(
@@ -187,7 +187,7 @@ class HTTPTransport:
         with response:  # type: ignore[attr-defined]
             status = int(getattr(response, "status", 0))
             if not 200 <= status < 300:
-                raise HTTPStatusError(status)
+                raise _HTTPStatusError(status)
 
     def download(self, grant: TransferGrant, destination: Path) -> None:
         request = urllib.request.Request(grant.url, headers=dict(grant.headers), method="GET")
@@ -197,7 +197,7 @@ class HTTPTransport:
             with response:  # type: ignore[attr-defined]
                 status = int(getattr(response, "status", 0))
                 if not 200 <= status < 300:
-                    raise HTTPStatusError(status)
+                    raise _HTTPStatusError(status)
                 with destination.open("wb") as output:
                     while block := response.read(self.block_bytes):  # type: ignore[attr-defined]
                         copied += len(block)
@@ -209,17 +209,11 @@ class HTTPTransport:
                     output.flush()
                     os.fsync(output.fileno())
         except (http.client.IncompleteRead, OSError, urllib.error.URLError) as exc:
-            raise TransientTransferError(str(exc)) from exc
+            raise _TransientTransferError(str(exc)) from exc
         if copied != grant.size_bytes:
             raise DigestMismatch(
                 f"{grant.digest}: response is {copied} bytes, expected {grant.size_bytes}"
             )
-
-
-@dataclass(frozen=True, slots=True)
-class TransferFailure:
-    digest: CASRef
-    detail: str
 
 
 @dataclass(slots=True)
@@ -229,7 +223,7 @@ class TransferReport:
     skipped_resident: int = 0
     bytes_transferred: int = 0
     expired: list[CASRef] = field(default_factory=list)
-    failures: list[TransferFailure] = field(default_factory=list)
+    failures: list[tuple[CASRef, str]] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -256,22 +250,22 @@ def _retry(
     last: BaseException | None = None
     for attempt in range(max_attempts):
         if grant.expired():
-            raise GrantExpired(f"grant for {grant.digest} is expired or inside its safety margin")
+            raise _GrantExpired(f"grant for {grant.digest} is expired or inside its safety margin")
         try:
             action()
             return
-        except HTTPStatusError as exc:
+        except _HTTPStatusError as exc:
             if exc.status == 403 and grant.expired(margin=0):
-                raise GrantExpired(f"grant for {grant.digest} expired during transfer") from exc
+                raise _GrantExpired(f"grant for {grant.digest} expired during transfer") from exc
             if exc.status not in (408, 425, 429) and exc.status < 500:
-                raise TransferRefused(f"{grant.digest}: {exc}") from exc
+                raise _TransferRefused(f"{grant.digest}: {exc}") from exc
             last = exc
-        except TransientTransferError as exc:
+        except _TransientTransferError as exc:
             last = exc
         if attempt + 1 < max_attempts:
             ceiling = min(30.0, 0.25 * (2**attempt))
             sleep(random.uniform(ceiling / 2, ceiling))
-    raise TransientTransferError(
+    raise _TransientTransferError(
         f"{grant.digest}: transfer failed after {max_attempts} attempts: {last}"
     )
 
@@ -303,7 +297,7 @@ def _run_parallel(
             try:
                 skipped = worker(grant)
                 results[index] = ("skipped" if skipped else "succeeded", "")
-            except GrantExpired as exc:
+            except _GrantExpired as exc:
                 results[index] = ("expired", str(exc))
             except Exception as exc:
                 results[index] = ("failed", f"{type(exc).__name__}: {exc}")
@@ -327,15 +321,15 @@ def _run_parallel(
         elif status == "expired":
             report.expired.append(grant.digest)
         else:
-            report.failures.append(TransferFailure(grant.digest, detail))
+            report.failures.append((grant.digest, detail))
     return report
 
 
-def upload(
+def _upload(
     grants: Sequence[TransferGrant],
     source: LocalCAS,
     *,
-    transport: GrantTransport | None = None,
+    transport: _GrantTransport,
     parallel: int = _DEFAULT_PARALLEL,
     max_attempts: int = 5,
     sleep: Callable[[float], None] = time.sleep,
@@ -343,13 +337,11 @@ def upload(
 ) -> TransferReport:
     """Upload a remote plan's missing objects from an authoritative local CAS."""
 
-    client = transport or HTTPTransport()
-
     def one(grant: TransferGrant) -> bool:
         path = source.verify_object(grant.digest, size=grant.size_bytes)
         _retry(
             grant,
-            lambda: client.upload(grant, path),
+            lambda: transport.upload(grant, path),
             max_attempts=max_attempts,
             sleep=sleep,
         )
@@ -358,19 +350,37 @@ def upload(
     return _run_parallel(grants, one, parallel=parallel, progress=progress)
 
 
-def download(
+def upload(
+    grants: Sequence[TransferGrant],
+    source: LocalCAS,
+    *,
+    parallel: int = _DEFAULT_PARALLEL,
+    max_attempts: int = 5,
+    progress: Callable[[CASRef, int], None] | None = None,
+) -> TransferReport:
+    """Upload a remote plan's missing objects through their HTTP grants."""
+
+    return _upload(
+        grants,
+        source,
+        transport=_HTTPTransport(),
+        parallel=parallel,
+        max_attempts=max_attempts,
+        progress=progress,
+    )
+
+
+def _download(
     grants: Sequence[TransferGrant],
     destination: LocalCAS,
     *,
-    transport: GrantTransport | None = None,
+    transport: _GrantTransport,
     parallel: int = _DEFAULT_PARALLEL,
     max_attempts: int = 5,
     sleep: Callable[[float], None] = time.sleep,
     progress: Callable[[CASRef, int], None] | None = None,
 ) -> TransferReport:
     """Fetch missing objects; resident verified objects are the resume journal."""
-
-    client = transport or HTTPTransport()
 
     def one(grant: TransferGrant) -> bool:
         try:
@@ -386,7 +396,7 @@ def download(
         try:
             _retry(
                 grant,
-                lambda: client.download(grant, temporary),
+                lambda: transport.download(grant, temporary),
                 max_attempts=max_attempts,
                 sleep=sleep,
             )
@@ -396,3 +406,23 @@ def download(
         return False
 
     return _run_parallel(grants, one, parallel=parallel, progress=progress)
+
+
+def download(
+    grants: Sequence[TransferGrant],
+    destination: LocalCAS,
+    *,
+    parallel: int = _DEFAULT_PARALLEL,
+    max_attempts: int = 5,
+    progress: Callable[[CASRef, int], None] | None = None,
+) -> TransferReport:
+    """Download missing objects through HTTP grants into an authoritative CAS."""
+
+    return _download(
+        grants,
+        destination,
+        transport=_HTTPTransport(),
+        parallel=parallel,
+        max_attempts=max_attempts,
+        progress=progress,
+    )

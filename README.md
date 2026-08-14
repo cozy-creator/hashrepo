@@ -5,7 +5,8 @@ and repositories. It provides:
 
 - a canonical SHA-256 manifest format with fixed 64 MiB chunks;
 - an authoritative local CAS that works without a network or hub;
-- atomic materialization and compare-and-swap logical refs;
+- atomic file/tree materialization and compare-and-swap logical refs;
+- durable transfer-session journals and reachability-driven local collection;
 - opaque grant-driven Python upload/download with verified restart resume;
 - Go missing-object planning and staged verification/promotion; and
 - one set of v1 golden vectors consumed by both Python and Go.
@@ -55,15 +56,19 @@ canonical encoders to reproduce it byte-for-byte.
 
 ## Releasing
 
-Set the intended version in `pyproject.toml`, refresh `uv.lock`, and merge that
-release commit to `main`. Tag that exact commit as `v<version>` and push the
-tag. The `Publish to PyPI` workflow reruns the Python and Go gates, builds and
-smoke-tests the wheel, publishes the tested wheel and sdist through PyPI
-Trusted Publishing, and verifies the exact version endpoint. Tags whose name
-does not match `pyproject.toml`, or whose commit is not on `main`, are refused.
+Package releases use SemVer beginning at `0.1.0`; protocol, manifest, journal,
+and local-ref formats independently remain v1. Before launch, format v1 may be
+broken in place: no v2 or compatibility reader is added beside it.
+
+For the first release, merge the reviewed release commit to `main`, tag that
+exact commit `v0.1.0`, and push the tag. The `Publish to PyPI` workflow
+reruns the Python and Go gates, builds and smoke-tests the wheel, publishes the
+tested wheel and sdist through PyPI Trusted Publishing, and verifies the exact
+version endpoint. Tags whose name does not match `pyproject.toml`, or whose
+commit is not on `main`, are refused.
 
 No PyPI token is stored in GitHub. The repository's `pypi` environment and the
-PyPI publisher must both identify `.github/workflows/publish.yml`.
+PyPI publisher must both identify `.github/workflows/publish.yaml`.
 
 ## License
 

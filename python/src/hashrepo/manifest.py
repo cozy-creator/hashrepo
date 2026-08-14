@@ -13,6 +13,10 @@ MAX_SIZE = (1 << 63) - 1
 
 
 def _valid_path(path: str) -> str:
+    try:
+        path.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"manifest path {path!r} must be valid UTF-8") from exc
     if not path or path.startswith("/") or "\\" in path:
         raise ValueError(f"manifest path {path!r} must be a relative forward-slash path")
     if any(ord(char) < 32 or ord(char) == 127 for char in path):

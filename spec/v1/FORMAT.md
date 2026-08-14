@@ -58,12 +58,13 @@ manifest format.
 An upload grant has exactly these fields:
 
 ```json
-{"digest":"sha256:...","size_bytes":18,"staging_key":"staging/session-1/...","url":"https://objects.invalid/upload?token=v1","headers":{},"expires_at":"2026-08-13T12:10:00Z"}
+{"digest":"sha256:...","size_bytes":18,"staging_key":"staging/sha256/session-1/...","url":"https://objects.invalid/upload?token=v1","headers":{},"expires_at":"2026-08-13T12:10:00Z"}
 ```
 
 - `digest` is the exact object content reference.
 - `size_bytes` is the exact non-negative request-body length.
-- `staging_key` is the server-owned session-scoped destination key.
+- `staging_key` is the server-owned, algorithm-qualified, session-scoped
+  destination key `staging/sha256/<session>/<digest hex>`.
 - `url` is an opaque upload URL; clients must not infer its provider.
 - `headers` is an object of verbatim request headers and is `{}` when empty,
   never `null`.
@@ -84,3 +85,12 @@ plan is untrusted until its manifest partition, session ID, object sizes, and
 derived staging keys have all been validated. Promotion is per-object,
 idempotent, and retryable. The generic promoter never deletes staging keys;
 stores lifecycle-expire the session-scoped staging namespace.
+
+## Local reachability
+
+Logical refs are atomic roots into immutable objects. A ref may target an
+ordinary object or a repository manifest; a manifest root reaches every object
+listed by its files. Local collection takes additional roots and manifests
+from consumers plus a mandatory age cutoff. HashRepo computes and deletes the
+unreachable set, but never invents model, graph, tenant, quota, or retention
+policy.

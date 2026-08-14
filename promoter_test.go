@@ -48,11 +48,11 @@ func promotionPlan(t *testing.T) (Plan, StagedObject, StagedObject) {
 	t.Helper()
 	first := StagedObject{
 		Object:     Object{Digest: RefBytes([]byte("first")), SizeBytes: 5},
-		StagingKey: "staging/session/" + RefBytes([]byte("first")).Hex(),
+		StagingKey: "staging/sha256/session/" + RefBytes([]byte("first")).Hex(),
 	}
 	second := StagedObject{
 		Object:     Object{Digest: RefBytes([]byte("second")), SizeBytes: 6},
-		StagingKey: "staging/session/" + RefBytes([]byte("second")).Hex(),
+		StagingKey: "staging/sha256/session/" + RefBytes([]byte("second")).Hex(),
 	}
 	return Plan{
 		SessionID: "session",

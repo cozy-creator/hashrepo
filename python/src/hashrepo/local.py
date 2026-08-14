@@ -4,9 +4,12 @@ import fcntl
 import hashlib
 import json
 import os
+import shutil
 import tempfile
-from collections.abc import Iterator
+import time
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
@@ -22,6 +25,16 @@ class DigestMismatch(ValueError):
 
 class RefConflict(RuntimeError):
     """A logical ref changed from the value the caller observed."""
+
+
+@dataclass(frozen=True, slots=True)
+class GCReport:
+    """One reachability collection pass."""
+
+    examined: int
+    reachable: int
+    deleted: int
+    bytes_deleted: int
 
 
 class _ObjectWriter:
@@ -88,6 +101,18 @@ class LocalCAS:
         for directory in (self.objects, self.refs, self.locks, self.tmp):
             directory.mkdir(parents=True, exist_ok=True)
 
+    @contextmanager
+    def _store_lock(self, *, exclusive: bool = False) -> Iterator[None]:
+        """Coordinate collection with object and logical-ref operations."""
+
+        with (self.locks / "store").open("a+b") as handle:
+            mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+            fcntl.flock(handle.fileno(), mode)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
     def object_path(self, ref: str | CASRef) -> Path:
         parsed = CASRef.parse(ref)
         return self.root / parsed.object_key()
@@ -107,35 +132,35 @@ class LocalCAS:
 
     def verify_object(self, ref: str | CASRef, *, size: int | None = None) -> Path:
         parsed = CASRef.parse(ref)
-        with self._object_lock(parsed):
-            return self._verify_object_unlocked(parsed, size)
+        with self._store_lock():
+            with self._object_lock(parsed):
+                return self._verify_object_unlocked(parsed, size)
 
-    def contains(self, ref: str | CASRef, *, size: int | None = None, verify: bool = True) -> bool:
-        path = self.object_path(ref)
-        if not path.is_file():
+    def contains(self, ref: str | CASRef, *, size: int | None = None) -> bool:
+        try:
+            self.verify_object(ref, size=size)
+        except FileNotFoundError:
             return False
-        if not verify:
-            return size is None or path.stat().st_size == size
-        self.verify_object(ref, size=size)
         return True
 
     def _commit_temp(self, temporary: Path, ref: CASRef, size: int) -> Path:
         destination = self.object_path(ref)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with self._object_lock(ref):
-            try:
-                os.link(temporary, destination)
-                _fsync_dir(destination.parent)
-            except FileExistsError:
+        with self._store_lock():
+            with self._object_lock(ref):
                 try:
-                    self._verify_object_unlocked(ref, size)
-                except DigestMismatch:
-                    # The named object is already unusable. Replace it atomically
-                    # with bytes that were verified before reaching this method.
-                    os.replace(temporary, destination)
+                    os.link(temporary, destination)
                     _fsync_dir(destination.parent)
-            finally:
-                temporary.unlink(missing_ok=True)
+                except FileExistsError:
+                    try:
+                        self._verify_object_unlocked(ref, size)
+                    except DigestMismatch:
+                        # The named object is already unusable. Replace it atomically
+                        # with bytes that were verified before reaching this method.
+                        os.replace(temporary, destination)
+                        _fsync_dir(destination.parent)
+                finally:
+                    temporary.unlink(missing_ok=True)
         return destination
 
     def put_bytes(self, data: bytes, *, expected: str | CASRef | None = None) -> CASRef:
@@ -316,8 +341,36 @@ class LocalCAS:
             tuple(chunks),
         )
 
+    def ingest_repository(self, source: str | Path) -> RepositoryManifest:
+        """Ingest every regular file below a directory into one manifest.
+
+        V1 manifests describe files, not symlinks or empty directories. Refusing
+        those filesystem entry types keeps materialization portable and prevents
+        a source-tree link from escaping the repository root.
+        """
+
+        root = Path(source)
+        if not root.is_dir():
+            raise NotADirectoryError(root)
+        entries: list[FileEntry] = []
+        for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+            if path.is_symlink():
+                raise ValueError(f"repository contains a symlink: {path.relative_to(root)}")
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                relative = path.relative_to(root)
+                raise ValueError(f"repository contains a non-regular file: {relative}")
+            entries.append(
+                self.ingest_file(path, manifest_path=path.relative_to(root).as_posix())
+            )
+        return RepositoryManifest(tuple(entries))
+
     def materialize(self, entry: FileEntry, destination: str | Path) -> Path:
-        target = Path(destination)
+        with self._store_lock():
+            return self._materialize_unlocked(entry, Path(destination))
+
+    def _materialize_unlocked(self, entry: FileEntry, target: Path) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, raw_path = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
         temporary = Path(raw_path)
@@ -326,7 +379,8 @@ class LocalCAS:
         try:
             with os.fdopen(fd, "wb") as writer:
                 for ref, size in entry.objects():
-                    source = self.verify_object(ref, size=size)
+                    with self._object_lock(ref):
+                        source = self._verify_object_unlocked(ref, size)
                     with source.open("rb") as reader:
                         object_hash = hashlib.sha256()
                         remaining = size
@@ -356,12 +410,41 @@ class LocalCAS:
             temporary.unlink(missing_ok=True)
             raise
 
+    def materialize_repository(
+        self, manifest: RepositoryManifest, destination: str | Path
+    ) -> Path:
+        """Atomically publish a complete repository tree at an absent path."""
+
+        target = Path(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            raise FileExistsError(target)
+        with self._store_lock():
+            stage = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=target.parent))
+            try:
+                for entry in manifest.files:
+                    self._materialize_unlocked(entry, stage / entry.path)
+                directories = [stage, *(path for path in stage.rglob("*") if path.is_dir())]
+                for directory in sorted(
+                    directories, key=lambda item: len(item.parts), reverse=True
+                ):
+                    _fsync_dir(directory)
+                os.rename(stage, target)
+                _fsync_dir(target.parent)
+                return target
+            except BaseException:
+                shutil.rmtree(stage, ignore_errors=True)
+                raise
+
     def store_manifest(self, manifest: RepositoryManifest) -> CASRef:
         return self.put_bytes(manifest.canonical_bytes())
 
     def load_manifest(self, ref: str | CASRef) -> RepositoryManifest:
-        path = self.verify_object(ref)
-        return RepositoryManifest.from_bytes(path.read_bytes())
+        parsed = CASRef.parse(ref)
+        with self._store_lock():
+            with self._object_lock(parsed):
+                path = self._verify_object_unlocked(parsed, None)
+                return RepositoryManifest.from_bytes(path.read_bytes())
 
     @staticmethod
     def _ref_id(name: str) -> str:
@@ -374,12 +457,18 @@ class LocalCAS:
         if not path.exists():
             return None
         raw = json.loads(path.read_bytes())
-        if not isinstance(raw, dict) or raw.get("format") != 1 or raw.get("name") != name:
+        if (
+            not isinstance(raw, dict)
+            or set(raw) != {"format", "name", "target"}
+            or raw.get("format") != 1
+            or raw.get("name") != name
+        ):
             raise ValueError(f"logical ref {name!r} is malformed")
         return CASRef.parse(str(raw.get("target", "")))
 
     def read_ref(self, name: str) -> CASRef | None:
-        return self._read_ref_unlocked(name)
+        with self._store_lock():
+            return self._read_ref_unlocked(name)
 
     @contextmanager
     def _object_lock(self, ref: CASRef) -> Iterator[None]:
@@ -404,35 +493,130 @@ class LocalCAS:
     def compare_and_swap_ref(
         self,
         name: str,
-        target: str | CASRef,
+        target: str | CASRef | None,
         *,
         expected: str | CASRef | None,
-    ) -> CASRef:
-        desired = CASRef.parse(target)
+    ) -> CASRef | None:
+        desired = CASRef.parse(target) if target is not None else None
         expected_ref = CASRef.parse(expected) if expected is not None else None
-        if not self.contains(desired):
-            raise FileNotFoundError(f"cannot point {name!r} at absent object {desired}")
-        with self._ref_lock(name):
-            current = self._read_ref_unlocked(name)
-            if current == desired:
-                return desired
-            if current != expected_ref:
-                raise RefConflict(f"logical ref {name!r} is {current}, expected {expected_ref}")
-            record = json.dumps(
-                {"format": 1, "name": name, "target": str(desired)},
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-            fd, raw_path = tempfile.mkstemp(prefix="ref-", dir=self.refs)
-            temporary = Path(raw_path)
-            try:
-                with os.fdopen(fd, "wb") as writer:
-                    writer.write(record)
-                    writer.flush()
-                    os.fsync(writer.fileno())
-                os.replace(temporary, self.refs / self._ref_id(name))
-                _fsync_dir(self.refs)
-            except BaseException:
-                temporary.unlink(missing_ok=True)
-                raise
+        with self._store_lock():
+            if desired is not None:
+                try:
+                    with self._object_lock(desired):
+                        self._verify_object_unlocked(desired, None)
+                except FileNotFoundError:
+                    raise FileNotFoundError(
+                        f"cannot point {name!r} at absent object {desired}"
+                    ) from None
+            with self._ref_lock(name):
+                current = self._read_ref_unlocked(name)
+                if current == desired:
+                    return desired
+                if current != expected_ref:
+                    raise RefConflict(f"logical ref {name!r} is {current}, expected {expected_ref}")
+                destination = self.refs / self._ref_id(name)
+                if desired is None:
+                    destination.unlink(missing_ok=True)
+                    _fsync_dir(self.refs)
+                    return None
+                record = json.dumps(
+                    {"format": 1, "name": name, "target": str(desired)},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                fd, raw_path = tempfile.mkstemp(prefix="ref-", dir=self.tmp)
+                temporary = Path(raw_path)
+                try:
+                    with os.fdopen(fd, "wb") as writer:
+                        writer.write(record)
+                        writer.flush()
+                        os.fsync(writer.fileno())
+                    os.replace(temporary, destination)
+                    _fsync_dir(self.refs)
+                except BaseException:
+                    temporary.unlink(missing_ok=True)
+                    raise
         return desired
+
+    def _logical_roots_unlocked(self) -> set[CASRef]:
+        roots: set[CASRef] = set()
+        for path in self.refs.iterdir():
+            if not path.is_file():
+                continue
+            if len(path.name) != 64 or any(char not in "0123456789abcdef" for char in path.name):
+                continue
+            raw = json.loads(path.read_bytes())
+            if (
+                not isinstance(raw, dict)
+                or set(raw) != {"format", "name", "target"}
+                or raw.get("format") != 1
+                or not isinstance(raw.get("name"), str)
+                or self._ref_id(raw["name"]) != path.name
+            ):
+                raise ValueError(f"logical ref record {path.name!r} is malformed")
+            roots.add(CASRef.parse(str(raw.get("target", ""))))
+        return roots
+
+    def collect_garbage(
+        self,
+        reachable: Iterable[str | CASRef] = (),
+        *,
+        manifests: Iterable[RepositoryManifest] = (),
+        older_than: float,
+    ) -> GCReport:
+        """Delete unreferenced immutable objects older than a caller cutoff.
+
+        Current logical refs are always roots. Consumers add active byte refs
+        and repository manifests; HashRepo deliberately owns no retention
+        policy. A required age cutoff protects freshly produced bytes during the
+        gap before a consumer installs its logical ref.
+        """
+
+        if older_than <= 0:
+            raise ValueError("garbage collection requires a positive age grace")
+        with self._store_lock(exclusive=True):
+            keep = self._logical_roots_unlocked()
+            keep.update(CASRef.parse(ref) for ref in reachable)
+            for manifest in manifests:
+                for entry in manifest.files:
+                    keep.update(ref for ref, _size in entry.objects())
+
+            # A logical ref commonly targets a stored repository manifest.
+            # Expand valid manifests; arbitrary object bytes simply remain roots.
+            for root in tuple(keep):
+                with self._object_lock(root):
+                    path = self._verify_object_unlocked(root, None)
+                try:
+                    manifest = RepositoryManifest.from_bytes(path.read_bytes())
+                except (OSError, UnicodeDecodeError, ValueError):
+                    continue
+                for entry in manifest.files:
+                    keep.update(ref for ref, _size in entry.objects())
+
+            cutoff = time.time() - older_than
+            examined = deleted = bytes_deleted = 0
+            namespace = self.objects / "sha256"
+            if namespace.exists():
+                for path in namespace.glob("*/*/*"):
+                    if not path.is_file():
+                        continue
+                    try:
+                        ref = CASRef(path.name)
+                    except ValueError:
+                        continue
+                    examined += 1
+                    stat = path.stat()
+                    if ref in keep or stat.st_mtime > cutoff:
+                        continue
+                    with self._object_lock(ref):
+                        try:
+                            current = path.stat()
+                        except FileNotFoundError:
+                            continue
+                        if current.st_mtime > cutoff:
+                            continue
+                        path.unlink()
+                        _fsync_dir(path.parent)
+                        deleted += 1
+                        bytes_deleted += current.st_size
+            return GCReport(examined, len(keep), deleted, bytes_deleted)

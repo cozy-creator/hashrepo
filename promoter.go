@@ -84,11 +84,7 @@ func requireStoredObject(state StoredObject, object StagedObject, where string) 
 }
 
 func declaredObjects(manifest Manifest) (map[Ref]int64, error) {
-	canonical, err := manifest.Canonical()
-	if err != nil {
-		return nil, err
-	}
-	validated, err := ParseManifest(canonical)
+	validated, err := ValidateManifest(manifest, Limits{})
 	if err != nil {
 		return nil, err
 	}

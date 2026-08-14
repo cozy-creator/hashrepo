@@ -2,34 +2,23 @@
 
 from typing import TYPE_CHECKING, Any
 
+from .journal import TransferJournal, TransferSession
 from .local import DigestMismatch, LocalCAS, RefConflict
 from .manifest import CHUNK_SIZE, Chunk, FileEntry, RepositoryManifest
 from .refs import CASRef
 
 if TYPE_CHECKING:
     from .transfer import (
-        GrantExpired,
-        HTTPStatusError,
-        HTTPTransport,
-        TransferFailure,
         TransferGrant,
-        TransferRefused,
         TransferReport,
-        TransientTransferError,
         download,
         upload,
     )
 
 _TRANSFER_EXPORTS = frozenset(
     (
-        "GrantExpired",
-        "HTTPStatusError",
-        "HTTPTransport",
-        "TransferFailure",
         "TransferGrant",
-        "TransferRefused",
         "TransferReport",
-        "TransientTransferError",
         "download",
         "upload",
     )
@@ -51,17 +40,13 @@ __all__ = [
     "Chunk",
     "DigestMismatch",
     "FileEntry",
-    "GrantExpired",
-    "HTTPStatusError",
-    "HTTPTransport",
     "LocalCAS",
     "RefConflict",
     "RepositoryManifest",
-    "TransferFailure",
     "TransferGrant",
-    "TransferRefused",
+    "TransferJournal",
     "TransferReport",
-    "TransientTransferError",
+    "TransferSession",
     "download",
     "upload",
 ]
