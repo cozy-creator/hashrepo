@@ -63,6 +63,21 @@ def test_same_object_is_idempotent_across_concurrent_writers(tmp_path: Path) -> 
     assert cas.verify_object(refs[0]).read_bytes() == payload
 
 
+def test_resident_put_bytes_never_creates_a_temporary_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    payload = b"already durable"
+    expected = cas.put_bytes(payload)
+
+    def reject_temporary(*args: object, **kwargs: object) -> tuple[int, str]:
+        pytest.fail("verified resident object must return before creating a temporary file")
+
+    monkeypatch.setattr(tempfile, "mkstemp", reject_temporary)
+    assert cas.put_bytes(payload) == expected
+    assert cas.verify_object(expected, size=len(payload)).read_bytes() == payload
+
+
 def test_same_object_is_idempotent_across_processes(tmp_path: Path) -> None:
     root = tmp_path / "cas"
     script = """
@@ -142,6 +157,14 @@ def test_put_file_atomically_repairs_only_a_corrupt_digest_object(tmp_path: Path
     ref = cas.put_file(source)
     cas.object_path(ref).write_bytes(b"evil")
     cas.put_file(source, expected=ref, size=4)
+    assert cas.verify_object(ref, size=4).read_bytes() == b"good"
+
+
+def test_put_bytes_atomically_repairs_only_a_corrupt_digest_object(tmp_path: Path) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    ref = cas.put_bytes(b"good")
+    cas.object_path(ref).write_bytes(b"evil")
+    assert cas.put_bytes(b"good", expected=ref) == ref
     assert cas.verify_object(ref, size=4).read_bytes() == b"good"
 
 

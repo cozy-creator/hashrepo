@@ -203,6 +203,14 @@ class LocalCAS:
         expected_ref = CASRef.parse(expected) if expected is not None else None
         if expected_ref is not None and ref != expected_ref:
             raise DigestMismatch(f"bytes hash to {ref}, expected {expected_ref}")
+        with self._store_lock():
+            with self._object_lock(ref):
+                try:
+                    self._verify_object_unlocked(ref, len(data))
+                except (FileNotFoundError, DigestMismatch):
+                    pass
+                else:
+                    return ref
         fd, raw_path = tempfile.mkstemp(prefix="put-", dir=self.tmp)
         temporary = Path(raw_path)
         try:
