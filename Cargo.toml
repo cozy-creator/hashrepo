@@ -1,0 +1,15 @@
+[workspace]
+members = ["crates/hashrepo-core"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/cozy-creator/hashrepo"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
