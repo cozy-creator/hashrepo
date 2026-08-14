@@ -80,6 +80,8 @@ pub enum PlanError {
     Read(#[from] io::Error),
     #[error("planner produced invalid file coverage")]
     InvalidCoverage,
+    #[error("plan source length mismatch: expected {expected}, got {actual}")]
+    SourceLengthMismatch { expected: u64, actual: u64 },
 }
 
 pub trait ByteSource {
