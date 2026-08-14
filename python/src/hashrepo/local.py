@@ -143,13 +143,38 @@ class LocalCAS:
             return False
         return True
 
-    def _commit_temp(self, temporary: Path, ref: CASRef, size: int) -> Path:
+    @staticmethod
+    def _require_identity(path: Path, expected: tuple[int, int]) -> None:
+        try:
+            current = path.stat(follow_symlinks=False)
+        except FileNotFoundError as exc:
+            raise OSError(f"{path} changed after verification") from exc
+        if (current.st_dev, current.st_ino) != expected:
+            raise OSError(f"{path} changed after verification")
+
+    def _commit_temp(
+        self,
+        temporary: Path,
+        ref: CASRef,
+        size: int,
+        *,
+        verified_identity: tuple[int, int] | None = None,
+    ) -> Path:
         destination = self.object_path(ref)
         destination.parent.mkdir(parents=True, exist_ok=True)
         with self._store_lock():
             with self._object_lock(ref):
                 try:
-                    os.link(temporary, destination)
+                    if verified_identity is not None:
+                        self._require_identity(temporary, verified_identity)
+                    os.link(temporary, destination, follow_symlinks=False)
+                    if verified_identity is not None:
+                        try:
+                            self._require_identity(destination, verified_identity)
+                        except OSError:
+                            destination.unlink(missing_ok=True)
+                            _fsync_dir(destination.parent)
+                            raise
                     _fsync_dir(destination.parent)
                 except FileExistsError:
                     try:
@@ -157,7 +182,16 @@ class LocalCAS:
                     except DigestMismatch:
                         # The named object is already unusable. Replace it atomically
                         # with bytes that were verified before reaching this method.
+                        if verified_identity is not None:
+                            self._require_identity(temporary, verified_identity)
                         os.replace(temporary, destination)
+                        if verified_identity is not None:
+                            try:
+                                self._require_identity(destination, verified_identity)
+                            except OSError:
+                                destination.unlink(missing_ok=True)
+                                _fsync_dir(destination.parent)
+                                raise
                         _fsync_dir(destination.parent)
                 finally:
                     temporary.unlink(missing_ok=True)
@@ -260,7 +294,12 @@ class LocalCAS:
                 raise DigestMismatch(
                     f"{source}: bytes hash to {actual_ref}, expected {expected_ref}"
                 )
-            self._commit_temp(source, expected_ref, size)
+            self._commit_temp(
+                source,
+                expected_ref,
+                size,
+                verified_identity=(after.st_dev, after.st_ino),
+            )
             return expected_ref
         except BaseException:
             source.unlink(missing_ok=True)

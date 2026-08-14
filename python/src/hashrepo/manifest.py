@@ -111,6 +111,8 @@ class FileEntry:
         chunks_raw = raw.get("chunks", ())
         if not isinstance(chunks_raw, Sequence) or isinstance(chunks_raw, (str, bytes)):
             raise ValueError("file chunks must be an array")
+        if "chunks" in raw and not chunks_raw:
+            raise ValueError("file chunks, when present, must not be empty")
         return cls(
             path=_require_string(raw["path"], "file path"),
             size_bytes=_require_integer(raw["size_bytes"], "file size"),

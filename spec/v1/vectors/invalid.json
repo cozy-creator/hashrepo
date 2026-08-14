@@ -22,5 +22,33 @@
   {
     "name": "ASCII-case collision",
     "manifest": {"format": 1, "files": [{"path": "A", "size_bytes": 0, "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, {"path": "a", "size_bytes": 0, "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}]}
+  },
+  {
+    "name": "missing files",
+    "manifest": {"format": 1}
+  },
+  {
+    "name": "null files",
+    "manifest": {"format": 1, "files": null}
+  },
+  {
+    "name": "missing file size",
+    "manifest": {"format": 1, "files": [{"path": "x", "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}]}
+  },
+  {
+    "name": "null file size",
+    "manifest": {"format": 1, "files": [{"path": "x", "size_bytes": null, "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}]}
+  },
+  {
+    "name": "empty chunks member",
+    "manifest": {"format": 1, "files": [{"path": "x", "size_bytes": 0, "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "chunks": []}]}
+  },
+  {
+    "name": "null chunks member",
+    "manifest": {"format": 1, "files": [{"path": "x", "size_bytes": 0, "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "chunks": null}]}
+  },
+  {
+    "name": "unpaired surrogate path",
+    "manifest": {"format": 1, "files": [{"path": "\ud800", "size_bytes": 0, "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}]}
   }
 ]

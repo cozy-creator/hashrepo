@@ -207,6 +207,36 @@ def test_adopt_file_consumes_mismatch_without_touching_resident_bytes(tmp_path: 
     assert cas.verify_object(expected, size=8).read_bytes() == b"resident"
 
 
+def test_adopt_file_refuses_a_pathname_swap_after_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    payload = b"verified bytes"
+    expected = cas.put_bytes(payload)
+    cas.object_path(expected).unlink()
+    descriptor, raw_path = tempfile.mkstemp(prefix="download-", dir=cas.tmp)
+    temporary = Path(raw_path)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(payload)
+
+    real_link = os.link
+
+    def swap_then_link(
+        source: Path, destination: Path, *, follow_symlinks: bool = True
+    ) -> None:
+        replacement = source.with_name(f"{source.name}.replacement")
+        replacement.write_bytes(b"attacker bytes")
+        os.replace(replacement, source)
+        real_link(source, destination, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(os, "link", swap_then_link)
+    with pytest.raises(OSError, match="changed after verification"):
+        cas.adopt_file(temporary, expected=expected, size=len(payload))
+
+    assert not cas.object_path(expected).exists()
+    assert not temporary.exists()
+
+
 def test_concurrent_adoptions_are_idempotent_and_consume_every_temp(tmp_path: Path) -> None:
     cas = LocalCAS(tmp_path / "cas")
     payload = b"one object from many downloads" * 1024

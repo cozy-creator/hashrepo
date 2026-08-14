@@ -63,6 +63,28 @@ func TestGrantRefusesNullOrAbsentHeaders(t *testing.T) {
 	}
 }
 
+func TestEverySharedInvalidGrantIsRefused(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("spec", "v1", "vectors", "invalid_upload_grants.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors []struct {
+		Name  string          `json:"name"`
+		Grant json.RawMessage `json:"grant"`
+	}
+	if err := json.Unmarshal(data, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	for _, vector := range vectors {
+		t.Run(vector.Name, func(t *testing.T) {
+			var grant Grant
+			if err := json.Unmarshal(vector.Grant, &grant); err == nil {
+				t.Fatal("invalid grant was accepted")
+			}
+		})
+	}
+}
+
 type memoryStore struct {
 	resident map[Ref]bool
 	staged   map[Ref]bool

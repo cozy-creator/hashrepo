@@ -12,9 +12,10 @@ hex and every other algorithm are refused.
 ## Files
 
 Files of at most 64 MiB are stored as one object under their whole-file digest
-and have no `chunks` member. Larger files are split from offset zero into fixed
-64 MiB objects. Every non-final chunk is exactly 64 MiB. The final chunk is the
-remaining non-zero length.
+and have no `chunks` member. A present `chunks` member is never null or empty.
+Larger files are split from offset zero into fixed 64 MiB objects. Every
+non-final chunk is exactly 64 MiB. The final chunk is the remaining non-zero
+length.
 
 The manifest carries every chunk length. Readers reconstruct from the explicit
 sequence and never infer offsets from a process-global chunk-size setting.
@@ -36,7 +37,10 @@ fields use the order shown by the schema and golden vector. Encoding is UTF-8,
 compact, does not HTML-escape `<`, `>`, or `&`, uses `\\u2028` and `\\u2029`,
 and contains no trailing newline. Repository paths are relative forward-slash
 paths; empty components, `.`, `..`, backslashes, C0/DEL control characters,
-absolute paths, duplicates, and ASCII-case-insensitive collisions are refused.
+absolute paths, duplicates, ASCII-case-insensitive collisions, and unpaired
+Unicode surrogate escapes are refused. The `format`, `files`, `path`,
+`size_bytes`, and `digest` members are required even when their value could be
+mistaken for a language's zero value; required arrays are never null.
 
 The digest of the canonical JSON bytes is the repository-manifest content
 reference.

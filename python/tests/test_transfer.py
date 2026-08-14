@@ -150,3 +150,10 @@ def test_python_consumes_and_reproduces_shared_go_grant_vector() -> None:
     encoded = json.dumps(transfer_grant.to_wire(), separators=(",", ":")).encode()
     assert encoded == raw
     assert transfer_grant.staging_key.startswith("staging/sha256/session-1/")
+
+
+def test_python_refuses_every_shared_invalid_grant() -> None:
+    path = Path("spec/v1/vectors/invalid_upload_grants.json")
+    for vector in json.loads(path.read_text()):
+        with pytest.raises((TypeError, ValueError), match=".+"):
+            TransferGrant.from_wire(vector["grant"])

@@ -102,6 +102,47 @@ func (f File) Validate() error {
 	return nil
 }
 
+func (f *File) UnmarshalJSON(data []byte) error {
+	if err := validateJSONStringSurrogates(data); err != nil {
+		return err
+	}
+	var wire struct {
+		Path      *string         `json:"path"`
+		SizeBytes *int64          `json:"size_bytes"`
+		Digest    *Ref            `json:"digest"`
+		Chunks    json.RawMessage `json:"chunks"`
+	}
+	if err := decodeOneJSON(data, &wire, "file"); err != nil {
+		return err
+	}
+	if wire.Path == nil || wire.SizeBytes == nil || wire.Digest == nil {
+		return errors.New("file requires path, size_bytes and digest")
+	}
+	var chunks []Chunk
+	if wire.Chunks != nil {
+		if bytes.Equal(bytes.TrimSpace(wire.Chunks), []byte("null")) {
+			return errors.New("file chunks must be an array, not null")
+		}
+		if err := decodeOneJSON(wire.Chunks, &chunks, "file chunks"); err != nil {
+			return err
+		}
+		if len(chunks) == 0 {
+			return errors.New("file chunks, when present, must not be empty")
+		}
+	}
+	decoded := File{
+		Path:      *wire.Path,
+		SizeBytes: *wire.SizeBytes,
+		Digest:    *wire.Digest,
+		Chunks:    chunks,
+	}
+	if err := decoded.Validate(); err != nil {
+		return err
+	}
+	*f = decoded
+	return nil
+}
+
 // Objects returns the immutable objects needed to reconstruct this file.
 func (f File) Objects() []Object {
 	if len(f.Chunks) == 0 {
@@ -119,7 +160,9 @@ func (m Manifest) Canonical() ([]byte, error) {
 	if m.Format != FormatV1 {
 		return nil, fmt.Errorf("unsupported manifest format %d; v1 accepts only 1", m.Format)
 	}
-	copyOf := Manifest{Format: m.Format, Files: append([]File(nil), m.Files...)}
+	files := make([]File, len(m.Files))
+	copy(files, m.Files)
+	copyOf := Manifest{Format: m.Format, Files: files}
 	sort.Slice(copyOf.Files, func(i, j int) bool { return copyOf.Files[i].Path < copyOf.Files[j].Path })
 	seen := map[string]bool{}
 	folded := map[string]bool{}
@@ -146,6 +189,109 @@ func (m Manifest) Canonical() ([]byte, error) {
 	return bytes.TrimSuffix(encoded.Bytes(), []byte{'\n'}), nil
 }
 
+func decodeOneJSON(data []byte, target any, label string) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("%s must contain exactly one JSON value", label)
+	}
+	return nil
+}
+
+func hexDigit(value byte) (uint16, bool) {
+	switch {
+	case value >= '0' && value <= '9':
+		return uint16(value - '0'), true
+	case value >= 'a' && value <= 'f':
+		return uint16(value-'a') + 10, true
+	case value >= 'A' && value <= 'F':
+		return uint16(value-'A') + 10, true
+	default:
+		return 0, false
+	}
+}
+
+func escapedUTF16Unit(data []byte, slash int) (uint16, bool) {
+	if slash+5 >= len(data) || data[slash] != '\\' || data[slash+1] != 'u' {
+		return 0, false
+	}
+	var value uint16
+	for _, character := range data[slash+2 : slash+6] {
+		digit, ok := hexDigit(character)
+		if !ok {
+			return 0, false
+		}
+		value = value*16 + digit
+	}
+	return value, true
+}
+
+// encoding/json replaces unpaired UTF-16 surrogate escapes with U+FFFD. Scan
+// JSON string tokens first so invalid paths cannot silently change identity.
+func validateJSONStringSurrogates(data []byte) error {
+	inString := false
+	for index := 0; index < len(data); index++ {
+		switch data[index] {
+		case '"':
+			inString = !inString
+		case '\\':
+			if !inString || index+1 >= len(data) {
+				continue
+			}
+			if data[index+1] != 'u' {
+				index++
+				continue
+			}
+			unit, ok := escapedUTF16Unit(data, index)
+			if !ok {
+				continue
+			}
+			switch {
+			case unit >= 0xd800 && unit <= 0xdbff:
+				low, paired := escapedUTF16Unit(data, index+6)
+				if !paired || low < 0xdc00 || low > 0xdfff {
+					return errors.New("manifest contains an unpaired Unicode surrogate escape")
+				}
+				index += 11
+			case unit >= 0xdc00 && unit <= 0xdfff:
+				return errors.New("manifest contains an unpaired Unicode surrogate escape")
+			default:
+				index += 5
+			}
+		}
+	}
+	return nil
+}
+
+func (m *Manifest) UnmarshalJSON(data []byte) error {
+	if !utf8.Valid(data) {
+		return errors.New("manifest must be valid UTF-8")
+	}
+	if err := validateJSONStringSurrogates(data); err != nil {
+		return err
+	}
+	var wire struct {
+		Format *int    `json:"format"`
+		Files  *[]File `json:"files"`
+	}
+	if err := decodeOneJSON(data, &wire, "manifest"); err != nil {
+		return err
+	}
+	if wire.Format == nil || wire.Files == nil {
+		return errors.New("manifest requires format and a non-null files array")
+	}
+	decoded := Manifest{Format: *wire.Format, Files: *wire.Files}
+	if _, err := decoded.Canonical(); err != nil {
+		return err
+	}
+	sort.Slice(decoded.Files, func(i, j int) bool { return decoded.Files[i].Path < decoded.Files[j].Path })
+	*m = decoded
+	return nil
+}
+
 // Digest returns the content reference of the canonical manifest bytes.
 func (m Manifest) Digest() (Ref, error) {
 	data, err := m.Canonical()
@@ -162,15 +308,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 		return Manifest{}, errors.New("manifest must be valid UTF-8")
 	}
 	var manifest Manifest
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&manifest); err != nil {
-		return Manifest{}, err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return Manifest{}, errors.New("manifest must contain exactly one JSON value")
-	}
-	if _, err := manifest.Canonical(); err != nil {
+	if err := decodeOneJSON(data, &manifest, "manifest"); err != nil {
 		return Manifest{}, err
 	}
 	return manifest, nil

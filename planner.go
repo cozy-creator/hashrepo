@@ -48,7 +48,7 @@ type Grant struct {
 
 type wireGrant struct {
 	Digest     Ref               `json:"digest"`
-	SizeBytes  int64             `json:"size_bytes"`
+	SizeBytes  *int64            `json:"size_bytes"`
 	StagingKey string            `json:"staging_key"`
 	URL        string            `json:"url"`
 	Headers    map[string]string `json:"headers"`
@@ -67,9 +67,10 @@ func (g Grant) MarshalJSON() ([]byte, error) {
 	if headers == nil {
 		headers = map[string]string{}
 	}
+	sizeBytes := g.SizeBytes
 	return json.Marshal(wireGrant{
 		Digest:     g.Digest,
-		SizeBytes:  g.SizeBytes,
+		SizeBytes:  &sizeBytes,
 		StagingKey: g.StagingKey,
 		URL:        g.URL,
 		Headers:    headers,
@@ -96,13 +97,13 @@ func (g *Grant) UnmarshalJSON(data []byte) error {
 	if err != nil || !strings.HasSuffix(wire.ExpiresAt, "Z") {
 		return errors.New("grant expiry must be an RFC 3339 UTC timestamp ending in Z")
 	}
-	if wire.Digest.hex == "" || wire.SizeBytes < 0 || strings.TrimSpace(wire.StagingKey) == "" ||
+	if wire.Digest.hex == "" || wire.SizeBytes == nil || *wire.SizeBytes < 0 || strings.TrimSpace(wire.StagingKey) == "" ||
 		strings.TrimSpace(wire.URL) == "" || expiresAt.IsZero() {
 		return errors.New("grant requires digest, non-negative size, staging key, URL and expiry")
 	}
 	*g = Grant{
 		StagedObject: StagedObject{
-			Object:     Object{Digest: wire.Digest, SizeBytes: wire.SizeBytes},
+			Object:     Object{Digest: wire.Digest, SizeBytes: *wire.SizeBytes},
 			StagingKey: wire.StagingKey,
 		},
 		URL:       wire.URL,
