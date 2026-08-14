@@ -78,6 +78,10 @@ policy is not content-defined chunking and has no rolling-hash resynchronization
 `fixed-v1` remains the default until te#185 phase 4 measures real stored-byte and
 object-count deltas over a 25-step frozen-base LoRA series.
 
+The public writer-policy API and `MAX_CHUNK_SIZE` bound first ship in package
+version `0.2.0`; the `0.1.x` package exposed only fixed-offset writing through
+the now-removed `CHUNK_SIZE` name.
+
 Do not enable the new policy in a worker until every consumer reconstructs from
 the manifest's `(digest, len)` sequence. In particular, integrations that still
 compare a `chunk_size_bytes` scalar with the old `CHUNK_SIZE` constant must hard
