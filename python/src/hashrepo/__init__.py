@@ -2,7 +2,6 @@
 
 from typing import TYPE_CHECKING, Any
 
-from .chunking import WriterPolicy
 from .journal import TransferJournal, TransferSession
 from .local import DigestMismatch, LocalCAS, RefConflict
 from .manifest import MAX_CHUNK_SIZE, Chunk, FileEntry, RepositoryManifest
@@ -49,7 +48,6 @@ __all__ = [
     "TransferJournal",
     "TransferReport",
     "TransferSession",
-    "WriterPolicy",
     "download",
     "upload",
 ]

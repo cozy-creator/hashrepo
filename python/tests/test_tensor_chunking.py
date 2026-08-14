@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import time
 from pathlib import Path
 from typing import TypedDict, cast
 
+import hashrepo
 import pytest
 from hashrepo import FileEntry, LocalCAS, RepositoryManifest
 from hashrepo import chunking as chunking_policy
@@ -124,7 +126,7 @@ def test_header_only_safetensors_uses_one_explicit_chunk(tmp_path: Path) -> None
     expected = _write_safetensors(source, [])
     cas = LocalCAS(tmp_path / "cas")
 
-    entry = cas.ingest_file(source, writer_policy="tensor-aligned-v2")
+    entry = cas.ingest_file(source)
 
     assert [chunk.length for chunk in entry.chunks] == [len(expected)]
     destination = cas.materialize(entry, tmp_path / "rebuilt.safetensors")
@@ -137,9 +139,32 @@ def test_unpadded_two_byte_empty_header_is_valid_safetensors(tmp_path: Path) -> 
     source.write_bytes(expected)
     cas = LocalCAS(tmp_path / "cas")
 
-    entry = cas.ingest_file(source, writer_policy="tensor-aligned-v2")
+    entry = cas.ingest_file(source)
 
     assert [chunk.length for chunk in entry.chunks] == [len(expected)]
+
+
+def test_valid_oversized_header_region_is_split_before_tensor_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    object_ceiling = 64
+    monkeypatch.setattr(chunking_policy, "MAX_CHUNK_SIZE", object_ceiling)
+    source = tmp_path / "large-header.safetensors"
+    header = b'{"weight":{"dtype":"U8","shape":[1],"data_offsets":[0,1]}}'
+    header_length = object_ceiling + 8
+    source.write_bytes(
+        header_length.to_bytes(8, "little")
+        + header
+        + b" " * (header_length - len(header))
+        + b"x"
+    )
+
+    cas = LocalCAS(tmp_path / "cas")
+    entry = cas.ingest_file(source)
+
+    assert [chunk.length for chunk in entry.chunks] == [object_ceiling, 16, 1]
+    restored = cas.materialize(entry, tmp_path / "restored.safetensors")
+    assert restored.stat().st_size == source.stat().st_size
 
 
 @pytest.mark.parametrize(("dtype", "bits"), _OFFICIAL_DTYPE_BITS.items())
@@ -153,25 +178,25 @@ def test_every_current_safetensors_dtype_uses_tensor_aligned_chunks(
     expected = _write_typed_safetensors(source, dtype, [elements], body)
     cas = LocalCAS(tmp_path / "cas")
 
-    entry = cas.ingest_file(source, writer_policy="tensor-aligned-v2")
+    entry = cas.ingest_file(source)
 
     header_end = len(expected) - len(body)
     assert [chunk.length for chunk in entry.chunks] == [header_end, len(body)]
     assert cas.materialize(entry, tmp_path / f"{dtype}.rebuilt").read_bytes() == expected
 
 
-def test_misaligned_sub_byte_tensor_falls_back_to_fixed_writer(tmp_path: Path) -> None:
+def test_misaligned_sub_byte_tensor_uses_bounded_fallback(tmp_path: Path) -> None:
     source = tmp_path / "misaligned.safetensors"
     _write_typed_safetensors(source, "F4", [1], b"x")
     cas = LocalCAS(tmp_path / "cas")
 
-    requested = cas.ingest_file(source, writer_policy="tensor-aligned-v2")
+    requested = cas.ingest_file(source)
 
-    assert requested == cas.ingest_file(source, writer_policy="fixed-v1")
+    assert requested.chunks == ()
 
 
 @pytest.mark.parametrize("sample", _REAL_HEADER_SAMPLES, ids=lambda row: row["source"])
-def test_real_fp8_header_samples_select_tensor_aligned_policy(
+def test_real_fp8_header_samples_use_tensor_aligned_chunks(
     tmp_path: Path, sample: _HeaderSample
 ) -> None:
     source = tmp_path / f"{sample['source']}.safetensors"
@@ -187,7 +212,6 @@ def test_real_fp8_header_samples_select_tensor_aligned_policy(
         lengths = chunking_policy.plan_chunks(
             handle,
             source.stat().st_size,
-            "tensor-aligned-v2",
         )
 
     assert lengths == (header_end, body_size)
@@ -203,9 +227,9 @@ def test_pathologically_nested_header_falls_back_instead_of_escaping_parser(
     source.write_bytes(len(header).to_bytes(8, "little") + header)
     cas = LocalCAS(tmp_path / "cas")
 
-    requested = cas.ingest_file(source, writer_policy="tensor-aligned-v2")
+    requested = cas.ingest_file(source)
 
-    assert requested == cas.ingest_file(source, writer_policy="fixed-v1")
+    assert requested.chunks == ()
 
 
 def test_huge_shape_product_is_bounded_by_declared_tensor_bytes(tmp_path: Path) -> None:
@@ -220,14 +244,13 @@ def test_huge_shape_product_is_bounded_by_declared_tensor_bytes(tmp_path: Path) 
         lengths = chunking_policy.plan_chunks(
             handle,
             source.stat().st_size,
-            "tensor-aligned-v2",
         )
 
     assert time.monotonic() - started < 1
     assert lengths == ()
     cas = LocalCAS(tmp_path / "cas")
-    requested = cas.ingest_file(source, writer_policy="tensor-aligned-v2")
-    assert requested == cas.ingest_file(source, writer_policy="fixed-v1")
+    requested = cas.ingest_file(source)
+    assert requested.chunks == ()
 
 
 def test_zero_dimension_avoids_large_shape_products(tmp_path: Path) -> None:
@@ -235,7 +258,7 @@ def test_zero_dimension_avoids_large_shape_products(tmp_path: Path) -> None:
     expected = _write_typed_safetensors(source, "U8", [(1 << 64) - 1, 0], b"")
     cas = LocalCAS(tmp_path / "cas")
 
-    entry = cas.ingest_file(source, writer_policy="tensor-aligned-v2")
+    entry = cas.ingest_file(source)
 
     assert [chunk.length for chunk in entry.chunks] == [len(expected)]
 
@@ -245,9 +268,9 @@ def test_shape_dimension_above_64_bit_usize_falls_back(tmp_path: Path) -> None:
     _write_typed_safetensors(source, "U8", [1 << 64, 0], b"")
     cas = LocalCAS(tmp_path / "cas")
 
-    requested = cas.ingest_file(source, writer_policy="tensor-aligned-v2")
+    requested = cas.ingest_file(source)
 
-    assert requested == cas.ingest_file(source, writer_policy="fixed-v1")
+    assert requested.chunks == ()
 
 
 def test_shape_product_overflow_before_zero_dimension_falls_back(tmp_path: Path) -> None:
@@ -255,9 +278,9 @@ def test_shape_product_overflow_before_zero_dimension_falls_back(tmp_path: Path)
     _write_typed_safetensors(source, "U8", [(1 << 64) - 1, 2, 0], b"")
     cas = LocalCAS(tmp_path / "cas")
 
-    requested = cas.ingest_file(source, writer_policy="tensor-aligned-v2")
+    requested = cas.ingest_file(source)
 
-    assert requested == cas.ingest_file(source, writer_policy="fixed-v1")
+    assert requested.chunks == ()
 
 
 @pytest.mark.parametrize(
@@ -303,9 +326,9 @@ def test_property_only_changed_tensors_header_and_packs_get_new_digests(
     )
 
     cas = LocalCAS(tmp_path / "cas")
-    first_entry = cas.ingest_file(first, writer_policy="tensor-aligned-v2")
-    duplicate_entry = cas.ingest_file(duplicate, writer_policy="tensor-aligned-v2")
-    changed_entry = cas.ingest_file(changed, writer_policy="tensor-aligned-v2")
+    first_entry = cas.ingest_file(first)
+    duplicate_entry = cas.ingest_file(duplicate)
+    changed_entry = cas.ingest_file(changed)
 
     header_end = 8 + int.from_bytes(first.read_bytes()[:8], "little")
     assert [chunk.length for chunk in first_entry.chunks] == [header_end, 64, 16, 22, 64, 5]
@@ -331,8 +354,8 @@ def test_small_tensor_change_invalidates_only_its_bounded_pack(
     _write_safetensors(changed, [tensors[0], ("b", b"B" * 20), *tensors[2:]])
 
     cas = LocalCAS(tmp_path / "cas")
-    before = cas.ingest_file(original, writer_policy="tensor-aligned-v2")
-    after = cas.ingest_file(changed, writer_policy="tensor-aligned-v2")
+    before = cas.ingest_file(original)
+    after = cas.ingest_file(changed)
 
     assert [chunk.length for chunk in before.chunks[1:]] == [60, 20]
     changed_indexes = {
@@ -358,8 +381,8 @@ def test_small_tensor_set_edit_can_repack_the_rest_of_its_run(
     _write_safetensors(child, tensors[1:])
     cas = LocalCAS(tmp_path / "cas")
 
-    before = cas.ingest_file(parent, writer_policy="tensor-aligned-v2")
-    after = cas.ingest_file(child, writer_policy="tensor-aligned-v2")
+    before = cas.ingest_file(parent)
+    after = cas.ingest_file(child)
 
     assert set(_chunk_digests(before)[1:]).isdisjoint(_chunk_digests(after)[1:])
 
@@ -384,13 +407,13 @@ def test_scaled_50_plus_1_publish_adds_only_changed_tensor_and_manifest(
 
     cas = LocalCAS(tmp_path / "cas")
     parent_manifest = RepositoryManifest(
-        (cas.ingest_file(parent, writer_policy="tensor-aligned-v2"),)
+        (cas.ingest_file(parent),)
     )
     cas.store_manifest(parent_manifest)
     parent_bytes = _stored_bytes(cas)
 
     child_manifest = RepositoryManifest(
-        (cas.ingest_file(child, writer_policy="tensor-aligned-v2"),)
+        (cas.ingest_file(child),)
     )
     cas.store_manifest(child_manifest)
     delta = _stored_bytes(cas) - parent_bytes
@@ -398,30 +421,33 @@ def test_scaled_50_plus_1_publish_adds_only_changed_tensor_and_manifest(
     assert delta == 1024 + len(child_manifest.canonical_bytes())
 
 
-def test_fixed_and_tensor_aligned_objects_coexist_and_materialize_byte_exact(
+def test_automatic_fixed_and_tensor_layouts_materialize_and_collect_byte_exact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(chunking_policy, "_FIXED_CHUNK_BYTES", 64)
     monkeypatch.setattr(chunking_policy, "_TENSOR_FLOOR_BYTES", 64)
     monkeypatch.setattr(chunking_policy, "_TENSOR_STRIDE_BYTES", 64)
-    source = tmp_path / "model.safetensors"
-    expected = _write_safetensors(
-        source,
+    tensor_source = tmp_path / "model.safetensors"
+    tensor_bytes = _write_safetensors(
+        tensor_source,
         [("a", b"a" * 80), ("b", b"b" * 10), ("c", b"c" * 90)],
     )
+    opaque_source = tmp_path / "opaque.bin"
+    opaque_bytes = b"opaque" * 30
+    opaque_source.write_bytes(opaque_bytes)
     cas = LocalCAS(tmp_path / "cas")
-    fixed = cas.ingest_file(source, manifest_path="fixed", writer_policy="fixed-v1")
+    fixed = cas.ingest_file(opaque_source, manifest_path="opaque.bin")
     aligned = cas.ingest_file(
-        source,
-        manifest_path="tensor-aligned",
-        writer_policy="tensor-aligned-v2",
+        tensor_source,
+        manifest_path="model.safetensors",
     )
-    assert [chunk.length for chunk in fixed.chunks] != [chunk.length for chunk in aligned.chunks]
+    assert [chunk.length for chunk in fixed.chunks] == [64, 64, 52]
+    assert [chunk.length for chunk in aligned.chunks] != [64, 64, 52]
 
     manifest = RepositoryManifest((fixed, aligned))
     cas.materialize_repository(manifest, tmp_path / "rebuilt")
-    assert (tmp_path / "rebuilt" / "fixed").read_bytes() == expected
-    assert (tmp_path / "rebuilt" / "tensor-aligned").read_bytes() == expected
+    assert (tmp_path / "rebuilt" / "opaque.bin").read_bytes() == opaque_bytes
+    assert (tmp_path / "rebuilt" / "model.safetensors").read_bytes() == tensor_bytes
 
     orphan = cas.put_bytes(b"orphan")
     old = time.time() - 3600
@@ -436,7 +462,7 @@ def test_fixed_and_tensor_aligned_objects_coexist_and_materialize_byte_exact(
             cas.verify_object(ref, size=size)
 
 
-def test_malformed_safetensors_falls_back_to_fixed_writer(
+def test_malformed_safetensors_uses_bounded_fixed_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(chunking_policy, "_FIXED_CHUNK_BYTES", 64)
@@ -444,24 +470,29 @@ def test_malformed_safetensors_falls_back_to_fixed_writer(
     source.write_bytes((16).to_bytes(8, "little") + b"not-json-at-all!!" + b"x" * 200)
     cas = LocalCAS(tmp_path / "cas")
 
-    fixed = cas.ingest_file(source, manifest_path="file", writer_policy="fixed-v1")
-    requested = cas.ingest_file(
-        source,
-        manifest_path="file",
-        writer_policy="tensor-aligned-v2",
-    )
+    requested = cas.ingest_file(source, manifest_path="file")
 
-    assert requested == fixed
+    assert [chunk.length for chunk in requested.chunks] == [64, 64, 64, 33]
 
 
-def test_tensor_aligned_policy_is_explicit_and_default_remains_fixed(
+def test_writer_is_automatic_and_retired_selector_is_not_accepted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(chunking_policy, "_FIXED_CHUNK_BYTES", 64)
+    monkeypatch.setattr(chunking_policy, "_TENSOR_FLOOR_BYTES", 64)
+    monkeypatch.setattr(chunking_policy, "_TENSOR_STRIDE_BYTES", 64)
     source = tmp_path / "model.safetensors"
-    _write_safetensors(source, [("weights", b"w" * 100)])
+    expected = _write_safetensors(source, [("weights", b"w" * 100)])
     cas = LocalCAS(tmp_path / "cas")
 
-    assert cas.ingest_file(source) == cas.ingest_file(source, writer_policy="fixed-v1")
-    with pytest.raises(ValueError, match="writer policy"):
-        cas.ingest_file(source, writer_policy="content-defined")  # type: ignore[arg-type]
+    entry = cas.ingest_file(source)
+    header_end = len(expected) - 100
+    assert [chunk.length for chunk in entry.chunks] == [header_end, 64, 36]
+    assert "WriterPolicy" not in hashrepo.__all__
+    assert not hasattr(hashrepo, "WriterPolicy")
+    assert "writer_policy" not in inspect.signature(LocalCAS.ingest_file).parameters
+    assert "writer_policy" not in inspect.signature(LocalCAS.ingest_repository).parameters
+    with pytest.raises(TypeError, match="writer_policy"):
+        cas.ingest_file(source, writer_policy="retired")  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="writer_policy"):
+        cas.ingest_repository(tmp_path, writer_policy="retired")  # type: ignore[call-arg]

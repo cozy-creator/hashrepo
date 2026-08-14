@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-from .chunking import WriterPolicy, plan_chunks
+from .chunking import plan_chunks
 from .manifest import Chunk, FileEntry, RepositoryManifest
 from .refs import CASRef
 
@@ -354,7 +354,6 @@ class LocalCAS:
         source: str | Path,
         *,
         manifest_path: str | None = None,
-        writer_policy: WriterPolicy = "fixed-v1",
     ) -> FileEntry:
         path = Path(source)
         initial = path.stat()
@@ -363,7 +362,7 @@ class LocalCAS:
         copied = 0
         with path.open("rb") as handle:
             before = os.fstat(handle.fileno())
-            chunk_lengths = plan_chunks(handle, initial.st_size, writer_policy)
+            chunk_lengths = plan_chunks(handle, initial.st_size)
             if not chunk_lengths:
                 return FileEntry(
                     manifest_path or path.name,
@@ -399,8 +398,6 @@ class LocalCAS:
     def ingest_repository(
         self,
         source: str | Path,
-        *,
-        writer_policy: WriterPolicy = "fixed-v1",
     ) -> RepositoryManifest:
         """Ingest every regular file below a directory into one manifest.
 
@@ -425,7 +422,6 @@ class LocalCAS:
                 self.ingest_file(
                     path,
                     manifest_path=path.relative_to(root).as_posix(),
-                    writer_policy=writer_policy,
                 )
             )
         return RepositoryManifest(tuple(entries))
