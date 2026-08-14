@@ -65,19 +65,23 @@ jobs:
         run: |
           set -euo pipefail
           uv venv --python 3.12 /tmp/hashrepo-wheel
-          uv pip install --python /tmp/hashrepo-wheel/bin/python dist/hashrepo-*.whl
+          uv pip install --python /tmp/hashrepo-wheel/bin/python dist/hashrepo-*.whl mypy
           cd /tmp
           /tmp/hashrepo-wheel/bin/python - <<'PY'
+          from importlib.resources import files
           from pathlib import Path
           from tempfile import TemporaryDirectory
 
           from hashrepo import LocalCAS
+
+          assert files("hashrepo").joinpath("py.typed").is_file()
 
           with TemporaryDirectory() as root:
               cas = LocalCAS(Path(root))
               ref = cas.put_bytes(b"release-smoke")
               assert cas.verify_object(ref).read_bytes() == b"release-smoke"
           PY
+          /tmp/hashrepo-wheel/bin/mypy --strict -c 'from hashrepo import LocalCAS'
 
       - name: Preserve exact distributions for publishing
         uses: actions/upload-artifact@v4
