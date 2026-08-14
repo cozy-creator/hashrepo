@@ -64,14 +64,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv venv --python 3.12 /tmp/chunked-cas-wheel
-          uv pip install --python /tmp/chunked-cas-wheel/bin/python dist/chunked_cas-*.whl
+          uv venv --python 3.12 /tmp/hashrepo-wheel
+          uv pip install --python /tmp/hashrepo-wheel/bin/python dist/hashrepo-*.whl
           cd /tmp
-          /tmp/chunked-cas-wheel/bin/python - <<'PY'
+          /tmp/hashrepo-wheel/bin/python - <<'PY'
           from pathlib import Path
           from tempfile import TemporaryDirectory
 
-          from chunked_cas import LocalCAS
+          from hashrepo import LocalCAS
 
           with TemporaryDirectory() as root:
               cas = LocalCAS(Path(root))
@@ -117,7 +117,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          url="https://pypi.org/pypi/chunked-cas/${version}/json"
+          url="https://pypi.org/pypi/hashrepo/${version}/json"
           for attempt in {1..12}; do
             if curl --fail --silent --show-error "${url}" > release.json; then
               python3 - <<'PY'
@@ -133,5 +133,5 @@ jobs:
             fi
             sleep 5
           done
-          echo "PyPI did not expose chunked-cas ${version} within 60 seconds" >&2
+          echo "PyPI did not expose hashrepo ${version} within 60 seconds" >&2
           exit 1

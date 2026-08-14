@@ -1,4 +1,4 @@
-package chunkedcas
+package hashrepo
 
 import (
 	"context"

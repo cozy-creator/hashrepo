@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from chunked_cas import CASRef, RepositoryManifest
+from hashrepo import CASRef, RepositoryManifest
 
 ROOT = Path(__file__).parents[2]
 VECTORS = ROOT / "spec" / "v1" / "vectors"

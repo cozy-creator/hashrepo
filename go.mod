@@ -1,3 +1,3 @@
-module github.com/cozy-creator/chunked-cas
+module github.com/cozy-creator/hashrepo
 
 go 1.24

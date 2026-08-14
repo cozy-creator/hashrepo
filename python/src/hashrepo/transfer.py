@@ -308,7 +308,7 @@ def _run_parallel(
             except Exception as exc:
                 results[index] = ("failed", f"{type(exc).__name__}: {exc}")
 
-    with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix="chunked-cas") as pool:
+    with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix="hashrepo") as pool:
         futures = [pool.submit(run, index, grant) for index, grant in enumerate(ordered)]
         for future in as_completed(futures):
             future.result()

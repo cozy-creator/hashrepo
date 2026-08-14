@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from chunked_cas import (
+from hashrepo import (
     CASRef,
     LocalCAS,
     TransferGrant,

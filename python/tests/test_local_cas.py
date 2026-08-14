@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from chunked_cas import CHUNK_SIZE, FileEntry, LocalCAS, RefConflict, RepositoryManifest
+from hashrepo import CHUNK_SIZE, FileEntry, LocalCAS, RefConflict, RepositoryManifest
 
 
 def test_local_cas_survives_restart_and_materializes_atomically(tmp_path: Path) -> None:
@@ -33,7 +33,7 @@ def test_local_cas_survives_restart_and_materializes_atomically(tmp_path: Path) 
 def test_fresh_process_reuses_local_cas_without_loading_network_stack(tmp_path: Path) -> None:
     root = tmp_path / "cas"
     create = """
-from chunked_cas import LocalCAS
+from hashrepo import LocalCAS
 from pathlib import Path
 cas = LocalCAS(Path(__import__('sys').argv[1]))
 ref = cas.put_bytes(b'fresh-process')
@@ -41,7 +41,7 @@ cas.compare_and_swap_ref('graph', ref, expected=None)
 """
     reuse = """
 import sys
-from chunked_cas import LocalCAS
+from hashrepo import LocalCAS
 assert 'urllib.request' not in sys.modules
 cas = LocalCAS(__import__('pathlib').Path(sys.argv[1]))
 ref = cas.read_ref('graph')
@@ -183,7 +183,7 @@ def test_concurrent_adoptions_are_idempotent_and_consume_every_temp(tmp_path: Pa
 
 def test_file_above_chunk_boundary_round_trips(tmp_path: Path) -> None:
     source = tmp_path / "large.bin"
-    block = b"chunked-cas" * 95325
+    block = b"hashrepo" * 95325
     with source.open("wb") as handle:
         remaining = CHUNK_SIZE + 3
         while remaining:

@@ -1,4 +1,4 @@
-# chunked-cas manifest v1
+# hashrepo manifest v1
 
 V1 has one writer and one accepted representation.
 

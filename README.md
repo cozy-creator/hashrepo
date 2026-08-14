@@ -1,6 +1,6 @@
-# chunked-cas
+# hashrepo
 
-`chunked-cas` is a small content-addressed storage library for immutable files
+`hashrepo` is a small content-addressed storage library for immutable files
 and repositories. It provides:
 
 - a canonical SHA-256 manifest format with fixed 64 MiB chunks;
@@ -37,7 +37,7 @@ The supported v1 shape is intentionally narrow:
 
 ```text
 spec/v1/                 format documentation, JSON Schema, golden vectors
-python/src/chunked_cas/  Python local CAS and grant-transfer data plane
+python/src/hashrepo/     Python local CAS and grant-transfer data plane
 *.go                     Go manifest, planning, and promotion engine
 ```
 

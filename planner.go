@@ -1,4 +1,4 @@
-package chunkedcas
+package hashrepo
 
 import (
 	"context"
@@ -169,7 +169,7 @@ func StagedKey(sessionID string, ref Ref) (string, error) {
 // grants for objects that are neither claimable-resident nor already staged.
 func (p Planner) Plan(ctx context.Context, sessionID string, manifest Manifest) (Plan, error) {
 	if p.Store == nil {
-		return Plan{}, errors.New("chunkedcas: store is required")
+		return Plan{}, errors.New("hashrepo: store is required")
 	}
 	canonical, err := manifest.Canonical()
 	if err != nil {
