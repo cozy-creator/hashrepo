@@ -349,10 +349,10 @@ fn validate_tree(entries: &[(String, Entry)]) -> Result<(), Tfm1Error> {
         .map(|(path, _)| path.as_str())
         .collect();
     for (path, _) in entries {
-        if let Some((parent, _)) = path.rsplit_once('/') {
-            if !directories.contains(parent) {
-                return Err(Tfm1Error::MissingParentDirectory);
-            }
+        if let Some((parent, _)) = path.rsplit_once('/')
+            && !directories.contains(parent)
+        {
+            return Err(Tfm1Error::MissingParentDirectory);
         }
     }
     Ok(())

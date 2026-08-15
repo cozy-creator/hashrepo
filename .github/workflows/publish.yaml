@@ -43,7 +43,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.91.0
         with:
           components: clippy,rustfmt
 

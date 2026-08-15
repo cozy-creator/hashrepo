@@ -102,10 +102,21 @@ struct MountEntry {
     guard: Option<Guard>,
 }
 
+/// Where pushes go: the hub base URL, the repo it addresses, and where the
+/// bearer token lives (re-read per call so an external refresher can rotate
+/// it without a daemon restart).
+#[derive(Clone, Debug)]
+pub struct RemoteConfig {
+    pub url: String,
+    pub org: String,
+    pub repo: String,
+    pub token_file: Option<PathBuf>,
+}
+
 struct DaemonState {
     store: PathBuf,
     mounts_root: PathBuf,
-    remote: Option<String>,
+    remote: Option<RemoteConfig>,
     next_lease: u64,
     mounts: HashMap<u64, MountEntry>,
 }
@@ -138,6 +149,10 @@ struct Request {
 #[derive(Deserialize)]
 struct SnapshotParams {
     snapshot: String,
+    /// Push only: the head this push expects to replace (64 hex), absent for
+    /// the first snapshot of a repo. The hub's compare-and-swap is exact.
+    #[serde(default)]
+    expected_head: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -179,7 +194,7 @@ pub fn serve(
     store: impl AsRef<Path>,
     socket: impl AsRef<Path>,
     mounts_root: impl AsRef<Path>,
-    remote: Option<&str>,
+    remote: Option<RemoteConfig>,
     stop: &Arc<AtomicBool>,
 ) -> io::Result<()> {
     let socket = socket.as_ref();
@@ -198,7 +213,7 @@ pub fn serve(
     let state = Arc::new(Mutex::new(DaemonState {
         store: store.as_ref().to_path_buf(),
         mounts_root,
-        remote: remote.map(str::to_owned),
+        remote,
         next_lease: 0,
         mounts: HashMap::new(),
     }));
@@ -506,24 +521,37 @@ fn dispatch(
                     "snapshot must be 64 lowercase hex characters",
                 ));
             };
+            let expected_head = match &params.expected_head {
+                None => None,
+                Some(raw) => Some(SnapshotId::parse_hex(raw).ok_or_else(|| {
+                    RpcError::new(
+                        "invalid-expected-head",
+                        "expected_head must be 64 lowercase hex characters",
+                    )
+                })?),
+            };
             let (meta, remote) = {
                 let state = state.lock().expect("daemon state mutex is healthy");
                 let Some(remote) = state.remote.clone() else {
                     return Err(RpcError::new(
                         "unconfigured",
-                        "no --remote was configured; push_snapshot needs a sync target",
+                        "no --remote/--remote-org/--remote-repo were configured; \
+                         push_snapshot needs a sync target",
                     ));
                 };
                 (open_store(&state)?, remote)
             };
-            // The engine is live; the HTTP adapter lands with the th#1960 hub
-            // wire, so today this surfaces its honest typed refusal.
-            let transport = tensorfs_core::sync::http::HttpTransport::new(remote);
+            let mut transport =
+                tensorfs_core::sync::http::HttpTransport::new(remote.url, remote.org, remote.repo);
+            if let Some(path) = remote.token_file {
+                transport =
+                    transport.with_token(tensorfs_core::sync::http::TokenSource::File(path));
+            }
             match tensorfs_core::sync::push_snapshot(
                 &meta,
                 &transport,
                 &id,
-                None,
+                expected_head.as_ref(),
                 tensorfs_core::sync::PushOptions::default(),
             ) {
                 Ok(report) => Ok(json!({

@@ -106,13 +106,12 @@ fn snapshot_file_records(
 ) -> (PlannerId, Vec<FileRecord>) {
     let snapshot = store.load_snapshot(id).expect("sealed snapshot loads");
     for (entry_path, entry) in snapshot.entries() {
-        if entry_path == path {
-            if let Entry::File {
+        if entry_path == path
+            && let Entry::File {
                 planner, records, ..
             } = entry
-            {
-                return (*planner, records.clone());
-            }
+        {
+            return (*planner, records.clone());
         }
     }
     panic!("{path} is not a file entry in the snapshot");

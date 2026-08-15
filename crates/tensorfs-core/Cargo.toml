@@ -16,8 +16,10 @@ thiserror.workspace = true
 unicode-normalization.workspace = true
 
 [target.'cfg(any(unix, windows))'.dependencies]
+base64 = "0.22"
 fs4 = { version = "0.8", default-features = false, features = ["sync"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
+ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

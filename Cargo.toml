@@ -6,7 +6,7 @@ resolver = "2"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/cozy-creator/tensorfs"
-rust-version = "1.85"
+rust-version = "1.91"
 
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
