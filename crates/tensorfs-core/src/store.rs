@@ -271,6 +271,59 @@ impl ObjectStore {
         Ok(report)
     }
 
+    /// Visits every resident object digest and length. GC's mark phase needs
+    /// the complete resident set; visit order is unspecified.
+    pub(crate) fn each_object(
+        &self,
+        mut visit: impl FnMut(ObjectDigest, u64),
+    ) -> Result<(), StoreError> {
+        let namespace = self.sha256_dir();
+        for first in fs::read_dir(&namespace)? {
+            let Ok(first) = first else { continue };
+            if !first.path().is_dir() {
+                continue;
+            }
+            for second in fs::read_dir(first.path())? {
+                let Ok(second) = second else { continue };
+                if !second.path().is_dir() {
+                    continue;
+                }
+                for object in fs::read_dir(second.path())? {
+                    let Ok(object) = object else { continue };
+                    let name = object.file_name();
+                    let Some(name) = name.to_str() else { continue };
+                    let Some(digest) = parse_digest_hex(name) else {
+                        continue;
+                    };
+                    let Ok(metadata) = object.metadata() else {
+                        continue;
+                    };
+                    if metadata.is_file() {
+                        visit(digest, metadata.len());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Unlinks one object the caller has proven unreferenced. The quarantine
+    /// protocol owns that proof; this helper only re-checks the path still
+    /// names a regular file so nothing else is ever removed.
+    pub(crate) fn remove_object(&self, digest: &ObjectDigest) -> Result<bool, StoreError> {
+        let path = self.object_path(digest);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_file() => {
+                fs::remove_file(&path)?;
+                fsync_dir(path.parent().expect("object paths always have a parent"))?;
+                Ok(true)
+            }
+            Ok(_) => Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// One candidate's reclaim decision. Every guard failure retains the file.
     pub(crate) fn reclaim_candidate(
         &self,
@@ -456,6 +509,21 @@ pub(crate) fn temp_identity(metadata: &fs::Metadata) -> TempIdentity {
         #[cfg(windows)]
         creation_time: metadata.creation_time(),
     }
+}
+
+fn parse_digest_hex(name: &str) -> Option<ObjectDigest> {
+    if name.len() != 64 {
+        return None;
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, pair) in name.as_bytes().chunks_exact(2).enumerate() {
+        let digits = std::str::from_utf8(pair).ok()?;
+        if digits.bytes().any(|byte| byte.is_ascii_uppercase()) {
+            return None;
+        }
+        bytes[index] = u8::from_str_radix(digits, 16).ok()?;
+    }
+    Some(ObjectDigest::from_bytes(bytes))
 }
 
 fn digest_hex(digest: &ObjectDigest) -> String {

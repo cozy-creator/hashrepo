@@ -244,7 +244,7 @@ const fn planner_from_tag(tag: u8) -> Option<PlannerId> {
     }
 }
 
-fn validate_path(path: &str) -> Result<(), Tfm1Error> {
+pub(crate) fn validate_path(path: &str) -> Result<(), Tfm1Error> {
     if path.is_empty() || path.len() > MAX_PATH_BYTES {
         return Err(Tfm1Error::PathLength);
     }
@@ -286,7 +286,7 @@ fn validate_path(path: &str) -> Result<(), Tfm1Error> {
     Ok(())
 }
 
-fn validate_symlink_target(target: &str) -> Result<(), Tfm1Error> {
+pub(crate) fn validate_symlink_target(target: &str) -> Result<(), Tfm1Error> {
     if target.is_empty()
         || target.len() > MAX_SYMLINK_TARGET_BYTES
         || target.chars().any(char::is_control)
@@ -296,7 +296,7 @@ fn validate_symlink_target(target: &str) -> Result<(), Tfm1Error> {
     Ok(())
 }
 
-fn validate_records(records: &[FileRecord], logical_size: u64) -> Result<(), Tfm1Error> {
+pub(crate) fn validate_records(records: &[FileRecord], logical_size: u64) -> Result<(), Tfm1Error> {
     if records.len() > MAX_FILE_RECORDS {
         return Err(Tfm1Error::RecordLimit);
     }
@@ -330,7 +330,7 @@ fn validate_records(records: &[FileRecord], logical_size: u64) -> Result<(), Tfm
     Ok(())
 }
 
-fn case_fold(path: &str) -> String {
+pub(crate) fn case_fold(path: &str) -> String {
     path.chars().flat_map(char::to_lowercase).collect()
 }
 

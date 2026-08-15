@@ -17,6 +17,7 @@ unicode-normalization.workspace = true
 
 [target.'cfg(any(unix, windows))'.dependencies]
 fs4 = { version = "0.8", default-features = false, features = ["sync"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
