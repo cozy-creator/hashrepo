@@ -56,7 +56,11 @@ pub struct Hub {
 pub fn hub() -> Option<Hub> {
     let url = env::var("TENSORFS_HUB_URL").unwrap_or_else(|_| "http://127.0.0.1:31550".to_owned());
     let mut absent = Vec::new();
-    for name in ["TENSORFS_HUB_ORG", "TENSORFS_HUB_REPO", "TENSORFS_HUB_TOKEN"] {
+    for name in [
+        "TENSORFS_HUB_ORG",
+        "TENSORFS_HUB_REPO",
+        "TENSORFS_HUB_TOKEN",
+    ] {
         if env::var(name).is_err() {
             absent.push(name);
         }
@@ -95,7 +99,16 @@ pub fn knob(name: &str, default: usize) -> usize {
 
 /// A deterministic safetensors file whose tensors straddle the 64 MiB grid, so
 /// the planner produces several independent objects per file.
+///
+/// **The nonce rides the PAYLOAD, not only the tensor names.** Names land in
+/// the header object alone; every data object is a pure slice of tensor bytes
+/// and is therefore name-independent. A fixture whose payload is a constant
+/// fill produces byte-identical data objects on every run, so a hub that saw a
+/// previous run reports them resident and "fresh content must upload" quietly
+/// stops meaning anything. Seeding the payload from the nonce is what actually
+/// makes a run's objects new.
 pub fn safetensors(nonce: &str, tensors: &[(&str, usize, u8)]) -> Vec<u8> {
+    let seed = *SnapshotId::of(nonce.as_bytes()).as_bytes();
     let mut header = String::from("{");
     let mut offset = 0_usize;
     for (index, (name, length, _)) in tensors.iter().enumerate() {
@@ -114,7 +127,9 @@ pub fn safetensors(nonce: &str, tensors: &[(&str, usize, u8)]) -> Vec<u8> {
     file.extend_from_slice(&(header.len() as u64).to_le_bytes());
     file.extend_from_slice(header.as_bytes());
     for (_, length, fill) in tensors {
-        file.extend(std::iter::repeat_n(*fill, *length));
+        // Deterministic, nonce-seeded, and cheap: every 32-byte lane differs
+        // per run, so every planned object differs per run.
+        file.extend((0..*length).map(|index| fill ^ seed[index % seed.len()]));
     }
     file
 }
@@ -340,7 +355,7 @@ impl<T: SyncTransport> SyncTransport for Counting<'_, T> {
 
     fn download_grants(
         &self,
-        digests: &[tensorfs_core::store::ObjectDigest],
+        digests: &[tensorfs_core::object::ObjectDigest],
     ) -> Result<Vec<DownloadGrant>, TransportError> {
         self.bump(|counts| counts.download_grants += 1);
         self.inner.download_grants(digests)
@@ -427,7 +442,7 @@ impl<T: SyncTransport> SyncTransport for FailUploadAfter<'_, T> {
 
     fn download_grants(
         &self,
-        digests: &[tensorfs_core::store::ObjectDigest],
+        digests: &[tensorfs_core::object::ObjectDigest],
     ) -> Result<Vec<DownloadGrant>, TransportError> {
         self.inner.download_grants(digests)
     }
