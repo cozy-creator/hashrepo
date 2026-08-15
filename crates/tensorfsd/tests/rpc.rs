@@ -69,7 +69,12 @@ impl Daemon {
     }
 
     fn connect(&self) -> UnixStream {
-        UnixStream::connect(&self.socket).expect("the control socket accepts")
+        let stream = UnixStream::connect(&self.socket).expect("the control socket accepts");
+        // A daemon that stops answering must fail the test, never hang it.
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("the read timeout installs");
+        stream
     }
 
     fn shutdown(mut self) {
