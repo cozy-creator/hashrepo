@@ -12,6 +12,34 @@
 //! objects keep their digests without being read or rewritten. A daemon
 //! killed before the flush loses exactly the dirty bytes: recovery exposes
 //! the last committed generation, never a hybrid.
+//!
+//! # Coherence and mmap
+//!
+//! Every open rides the kernel page cache (no `FOPEN_DIRECT_IO`), which is
+//! what makes `mmap` work at all: page faults and writeback travel the same
+//! FUSE `read`/`write` ops as ordinary I/O, so mapped-page writeback lands in
+//! the dirty overlay like any write. The contract: all access through this
+//! mount shares one page cache, so reads and mappings observe writes from
+//! other descriptors immediately (single-host POSIX coherence); committed
+//! content only ever changes through this mount's own operations (one daemon
+//! owns the workspace, and composing rewrites objects without changing
+//! logical bytes), so cached pages never go stale. Durability is unchanged:
+//! FLUSH never composes, RELEASE composes best-effort, `fsync` is the
+//! guarantee — and `msync(MS_SYNC)` on a shared mapping IS an `fsync` (the
+//! kernel writes the dirty pages back and then issues FUSE fsync on the
+//! mapped file). The serving process must never touch its own mountpoint;
+//! that same-process writeback deadlock is why serving always lives in a
+//! dedicated daemon process.
+//!
+//! # Advisory locks
+//!
+//! POSIX record locks are served from a per-mount [`locks::LockTable`]:
+//! session state that dies with the mount and never enters a snapshot.
+//! `setlk` grants or refuses immediately — a blocking `F_SETLKW` under
+//! contention is refused with `EAGAIN` rather than suspending the FUSE
+//! dispatch loop; blocking waits are deferred until a real consumer needs
+//! them. Windows share modes cannot be expressed on Linux FUSE at all; they
+//! arrive with the WinFsp adapter.
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
@@ -24,8 +52,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use fuser::{
-    BackgroundSession, FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData,
-    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, Request, TimeOrNow,
+    BackgroundSession, FileAttr, FileType, Filesystem, KernelConfig, MountOption, ReplyAttr,
+    ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyLock, ReplyOpen, Request, TimeOrNow,
 };
 
 use tensorfs_core::planner::{MAX_OBJECT_SIZE, PlannerId};
@@ -33,6 +61,7 @@ use tensorfs_core::tfm1::{Entry, FileRecord, Snapshot};
 use tensorfs_core::workspace::{LeaseId, LeaseKind, Mutation, WorkspaceError, WorkspaceStore};
 
 use crate::MountError;
+use crate::locks::LockTable;
 
 /// Namespace facts change under this mount, so the kernel may only cache them
 /// briefly; one daemon owns the workspace, so one second is safe and cheap.
@@ -161,6 +190,8 @@ struct WorkspaceFs {
     /// Per open handle: owning inode, whether the handle may write, and one
     /// lazily opened `File` per committed object read.
     handles: HashMap<u64, Handle>,
+    /// Advisory POSIX record locks; mount-lifetime state, never persisted.
+    locks: LockTable,
 }
 
 fn errno(error: &WorkspaceError) -> i32 {
@@ -615,6 +646,7 @@ impl WorkspaceFs {
         };
         if drop_node {
             self.nodes.remove(&ino);
+            self.locks.forget_ino(ino);
         }
         Ok(())
     }
@@ -629,6 +661,14 @@ impl WorkspaceFs {
 }
 
 impl Filesystem for WorkspaceFs {
+    fn init(&mut self, _req: &Request<'_>, config: &mut KernelConfig) -> Result<(), libc::c_int> {
+        // Without this capability the kernel serves POSIX locks locally and
+        // never consults the table; with it, lock state is mount-owned and
+        // uniform across the future macFUSE/WinFsp backends.
+        let _ = config.add_capabilities(fuser::consts::FUSE_POSIX_LOCKS);
+        Ok(())
+    }
+
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         match self
             .lookup_child(parent, name)
@@ -766,7 +806,7 @@ impl Filesystem for WorkspaceFs {
         }
         let fh = self.alloc_fh(true);
         match self.attr(ino) {
-            Some(attr) => reply.created(&TTL, &attr, 0, fh, fuser::consts::FOPEN_DIRECT_IO),
+            Some(attr) => reply.created(&TTL, &attr, 0, fh, 0),
             None => reply.error(libc::EIO),
         }
     }
@@ -974,6 +1014,7 @@ impl Filesystem for WorkspaceFs {
             };
             if drop_existing {
                 self.nodes.remove(&existing);
+                self.locks.forget_ino(existing);
             }
         }
         if let Some(WNode::Directory { children, .. }) = self.nodes.get_mut(&parent) {
@@ -1100,9 +1141,10 @@ impl Filesystem for WorkspaceFs {
         file.open_handles += 1;
         let writable = flags & libc::O_ACCMODE != libc::O_RDONLY;
         let fh = self.alloc_fh(writable);
-        // Direct I/O: every read traverses the committed+dirty merge instead
-        // of a kernel page cache that would go stale under COW commits.
-        reply.opened(fh, fuser::consts::FOPEN_DIRECT_IO);
+        // Page-cache path: mmap needs it, and it cannot go stale — committed
+        // content only changes through this mount's own operations, and the
+        // kernel keeps its own cache coherent for those (see module docs).
+        reply.opened(fh, 0);
     }
 
     fn read(
@@ -1173,16 +1215,19 @@ impl Filesystem for WorkspaceFs {
     fn flush(
         &mut self,
         _req: &Request<'_>,
-        _ino: u64,
+        ino: u64,
         _fh: u64,
-        _lock_owner: u64,
+        lock_owner: u64,
         reply: ReplyEmpty,
     ) {
         // FLUSH fires on every fd close, including the CLOEXEC teardown of a
         // mere fork/exec in the writing process and every read-only close a
         // file indexer makes. None of those are durability points: the last
         // real close composes in `release`, and the guaranteed contract is
-        // `fsync`, exactly as on any local filesystem.
+        // `fsync`, exactly as on any local filesystem. What FLUSH does carry
+        // is the closing descriptor's lock owner: POSIX releases that owner's
+        // record locks on any close of the file.
+        self.locks.release_owner(ino, lock_owner);
         reply.ok();
     }
 
@@ -1218,10 +1263,13 @@ impl Filesystem for WorkspaceFs {
         ino: u64,
         fh: u64,
         _flags: i32,
-        _lock_owner: Option<u64>,
+        lock_owner: Option<u64>,
         _flush: bool,
         reply: ReplyEmpty,
     ) {
+        if let Some(owner) = lock_owner {
+            self.locks.release_owner(ino, owner);
+        }
         let writable = self
             .handles
             .remove(&fh)
@@ -1246,8 +1294,74 @@ impl Filesystem for WorkspaceFs {
         }
         if drop_node {
             self.nodes.remove(&ino);
+            self.locks.forget_ino(ino);
         }
         reply.ok();
+    }
+
+    fn getlk(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        _fh: u64,
+        lock_owner: u64,
+        start: u64,
+        end: u64,
+        typ: i32,
+        _pid: u32,
+        reply: ReplyLock,
+    ) {
+        let exclusive = typ == libc::F_WRLCK;
+        match self
+            .locks
+            .first_conflict(ino, lock_owner, exclusive, start, end)
+        {
+            Some(holder) => {
+                let typ = if holder.exclusive {
+                    libc::F_WRLCK
+                } else {
+                    libc::F_RDLCK
+                };
+                reply.locked(holder.start, holder.end, typ, holder.pid);
+            }
+            None => reply.locked(0, 0, libc::F_UNLCK, 0),
+        }
+    }
+
+    fn setlk(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        _fh: u64,
+        lock_owner: u64,
+        start: u64,
+        end: u64,
+        typ: i32,
+        pid: u32,
+        _sleep: bool,
+        reply: ReplyEmpty,
+    ) {
+        if !matches!(self.nodes.get(&ino), Some(WNode::File(_))) {
+            reply.error(libc::EBADF);
+            return;
+        }
+        match typ {
+            t if t == libc::F_UNLCK => {
+                self.locks.unset(ino, lock_owner, start, end);
+                reply.ok();
+            }
+            t if t == libc::F_RDLCK || t == libc::F_WRLCK => {
+                let exclusive = t == libc::F_WRLCK;
+                // A contended blocking request (`sleep`) is refused with
+                // EAGAIN instead of suspending the dispatch loop; blocking
+                // waits are deferred (see module docs).
+                match self.locks.set(ino, lock_owner, pid, exclusive, start, end) {
+                    Ok(()) => reply.ok(),
+                    Err(_conflict) => reply.error(libc::EAGAIN),
+                }
+            }
+            _ => reply.error(libc::EINVAL),
+        }
     }
 }
 
@@ -1305,6 +1419,7 @@ pub fn mount_workspace(
         next_ino,
         next_fh: 0,
         handles: HashMap::new(),
+        locks: LockTable::default(),
     };
     let session = fuser::spawn_mount2(
         fs,
