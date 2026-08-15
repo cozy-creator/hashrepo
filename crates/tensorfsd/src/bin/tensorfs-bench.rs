@@ -6,6 +6,14 @@
 //! under `--out`: a provenance `meta` row, one `arm` row per repetition, and
 //! one `summary` row per arm. Rows are evidence for the quiet-host release
 //! gate; nothing here asserts wall-clock floors, and CI never runs this bin.
+//!
+//! Every mount is served by a SPAWNED `tensorfsd` child process — the
+//! production shape — never by an in-process fuser session. A first draft
+//! served mounts in-process and deadlocked exactly as FUSE warns: dirty-page
+//! writeback from the writing process blocked against the filesystem that the
+//! same process had to serve. A progress watchdog additionally bounds every
+//! mounted arm: no byte progress for two minutes kills that arm's mount child
+//! and records `failed: timeout`, so one wedge costs one row, not the run.
 
 use std::process::ExitCode;
 
@@ -26,14 +34,19 @@ mod linux {
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::os::unix::fs::MetadataExt;
     use std::path::{Path, PathBuf};
-    use std::process::ExitCode;
-    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+    use std::process::{Child, Command, ExitCode, Stdio};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
     use sha2::{Digest, Sha256};
     use tensorfs_core::tfm1::{Entry, FileRecord, SnapshotId};
     use tensorfs_core::workspace::WorkspaceStore;
     use tensorfsd::bench::{ArmRow, BENCH_SCHEMA, MetaRow, summarize};
-    use tensorfsd::{mount_snapshot, mount_workspace};
 
     const USAGE: &str =
         "usage: tensorfs-bench run --scale <bytes> --out <dir> [--reps <n>] [--keep]";
@@ -42,6 +55,9 @@ mod linux {
     const USER_HZ: f64 = 100.0;
     const COPY_BUFFER: usize = 4 << 20;
     const LOAD_CAVEAT_THRESHOLD: f64 = 4.0;
+    /// A mounted arm with no byte progress for this long is wedged, not slow.
+    const WATCHDOG_STALL: Duration = Duration::from_secs(120);
+    const MOUNT_READY: Duration = Duration::from_secs(15);
 
     pub fn run() -> ExitCode {
         let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -94,6 +110,227 @@ mod linux {
     }
 
     // ------------------------------------------------------------------
+    // Child-process mounts: the production shape
+    // ------------------------------------------------------------------
+
+    fn daemon_binary() -> Result<PathBuf, String> {
+        let bench = std::env::current_exe().map_err(|error| error.to_string())?;
+        let daemon = bench
+            .parent()
+            .ok_or("bench binary has no parent directory")?
+            .join("tensorfsd");
+        if !daemon.is_file() {
+            return Err(format!(
+                "tensorfsd binary not found beside tensorfs-bench at {}",
+                daemon.display()
+            ));
+        }
+        Ok(daemon)
+    }
+
+    fn is_mounted(mountpoint: &Path) -> bool {
+        let target = mountpoint.to_string_lossy();
+        fs::read_to_string("/proc/self/mounts")
+            .unwrap_or_default()
+            .lines()
+            .any(|line| line.split_whitespace().nth(1) == Some(target.as_ref()))
+    }
+
+    fn lazy_unmount(mountpoint: &Path) {
+        let _ = Command::new("fusermount3")
+            .arg("-uz")
+            .arg(mountpoint)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    /// One mount served by a spawned `tensorfsd` child. Teardown is bounded on
+    /// every path: SIGTERM, a ten-second grace, SIGKILL, then a lazy unmount.
+    struct ChildMount {
+        child: Child,
+        mountpoint: PathBuf,
+        done: bool,
+    }
+
+    impl ChildMount {
+        fn spawn(daemon: &Path, arguments: &[&str], mountpoint: &Path) -> Result<Self, String> {
+            fs::create_dir_all(mountpoint).map_err(|error| error.to_string())?;
+            let child = Command::new(daemon)
+                .args(arguments)
+                .arg(mountpoint)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|error| error.to_string())?;
+            let mut mount = Self {
+                child,
+                mountpoint: mountpoint.to_path_buf(),
+                done: false,
+            };
+            let deadline = Instant::now() + MOUNT_READY;
+            while Instant::now() < deadline {
+                if is_mounted(&mount.mountpoint) {
+                    return Ok(mount);
+                }
+                if let Ok(Some(status)) = mount.child.try_wait() {
+                    mount.done = true;
+                    return Err(format!("tensorfsd exited before mounting: {status}"));
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            mount.abort();
+            Err(format!(
+                "mount at {} never became ready",
+                mount.mountpoint.display()
+            ))
+        }
+
+        fn workspace(
+            daemon: &Path,
+            store: &Path,
+            name: &str,
+            mountpoint: &Path,
+        ) -> Result<Self, String> {
+            let store = store.to_string_lossy();
+            Self::spawn(
+                daemon,
+                &[
+                    "mount-workspace",
+                    "--store",
+                    store.as_ref(),
+                    "--workspace",
+                    name,
+                ],
+                mountpoint,
+            )
+        }
+
+        fn snapshot(
+            daemon: &Path,
+            store: &Path,
+            id: &SnapshotId,
+            mountpoint: &Path,
+        ) -> Result<Self, String> {
+            let store = store.to_string_lossy();
+            let hex = id.to_string();
+            Self::spawn(
+                daemon,
+                &[
+                    "mount-snapshot",
+                    "--store",
+                    store.as_ref(),
+                    "--snapshot",
+                    &hex,
+                ],
+                mountpoint,
+            )
+        }
+
+        fn mountpoint(&self) -> &Path {
+            &self.mountpoint
+        }
+
+        /// The watchdog's hammer: SIGKILL the serving child and lazily detach
+        /// the mount, which aborts the FUSE connection and unwedges any
+        /// blocked writer with EIO.
+        fn abort(&mut self) {
+            if self.done {
+                return;
+            }
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            if is_mounted(&self.mountpoint) {
+                lazy_unmount(&self.mountpoint);
+            }
+            self.done = true;
+        }
+
+        /// Clean teardown: SIGTERM, bounded grace, then escalate.
+        fn unmount(mut self) -> Result<(), String> {
+            if self.done {
+                return Ok(());
+            }
+            let _ = kill(Pid::from_raw(self.child.id() as i32), Signal::SIGTERM);
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                match self.child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if Instant::now() < deadline => {
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                    _ => {
+                        let _ = self.child.kill();
+                        let _ = self.child.wait();
+                        break;
+                    }
+                }
+            }
+            if is_mounted(&self.mountpoint) {
+                lazy_unmount(&self.mountpoint);
+                thread::sleep(Duration::from_millis(200));
+            }
+            self.done = true;
+            if is_mounted(&self.mountpoint) {
+                return Err(format!("{} is still mounted", self.mountpoint.display()));
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for ChildMount {
+        fn drop(&mut self) {
+            self.abort();
+        }
+    }
+
+    /// Runs one mounted workload on a worker thread under a stall watchdog.
+    /// No progress for [`WATCHDOG_STALL`] kills the mount child, which fails
+    /// the worker with EIO instead of wedging the whole run.
+    fn with_watchdog<T: Send + 'static>(
+        mount: &mut ChildMount,
+        progress: Arc<AtomicU64>,
+        work: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        let (sender, receiver) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let _ = sender.send(work());
+        });
+        let mut last_seen = progress.load(Ordering::Relaxed);
+        let mut last_change = Instant::now();
+        let result = loop {
+            match receiver.recv_timeout(Duration::from_millis(500)) {
+                Ok(result) => break result,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let now = progress.load(Ordering::Relaxed);
+                    if now != last_seen {
+                        last_seen = now;
+                        last_change = Instant::now();
+                    } else if last_change.elapsed() > WATCHDOG_STALL {
+                        mount.abort();
+                        break receiver
+                            .recv_timeout(Duration::from_secs(30))
+                            .unwrap_or_else(|_| {
+                                Err("worker did not return after the mount abort".to_owned())
+                            })
+                            .and_then(|_| {
+                                Err::<T, String>(
+                                    "failed: timeout — no progress for 120s, mount child killed"
+                                        .to_owned(),
+                                )
+                            });
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    break Err("worker disconnected without a result".to_owned());
+                }
+            }
+        };
+        let _ = worker.join();
+        result
+    }
+
+    // ------------------------------------------------------------------
     // /proc measurement plumbing
     // ------------------------------------------------------------------
 
@@ -110,8 +347,6 @@ mod linux {
 
     fn cpu_seconds() -> (f64, f64) {
         let text = fs::read_to_string("/proc/self/stat").unwrap_or_default();
-        // Field 2 (comm) may hold spaces; everything after the closing paren
-        // is fixed-order. utime/stime are fields 14/15 overall.
         let after = text.rsplit_once(')').map(|(_, rest)| rest).unwrap_or("");
         let fields: Vec<&str> = after.split_whitespace().collect();
         let tick = |index: usize| {
@@ -190,8 +425,8 @@ mod linux {
 
     struct CorpusFile {
         path: PathBuf,
-        /// Absolute byte offset of the first big tensor's interior, safely
-        /// past its start — the edit target for reuse arms.
+        /// Absolute byte offset inside the first big tensor's interior — the
+        /// edit target for reuse arms.
         edit_offset: u64,
         bytes: u64,
     }
@@ -393,7 +628,7 @@ mod linux {
         (objects, bytes)
     }
 
-    /// Every (digest, length) data record in one workspace head or snapshot.
+    /// Every (digest, length) data record in one sealed snapshot.
     fn snapshot_records(store: &Path, id: &SnapshotId) -> Result<Vec<(String, u64)>, String> {
         let meta = WorkspaceStore::open(store).map_err(|error| error.to_string())?;
         let snapshot = meta.load_snapshot(id).map_err(|error| error.to_string())?;
@@ -434,10 +669,14 @@ mod linux {
     }
 
     // ------------------------------------------------------------------
-    // Mount-side file operations
+    // Mounted workloads (run on watchdogged worker threads)
     // ------------------------------------------------------------------
 
-    fn copy_into_mount(source: &Path, mountpoint: &Path) -> Result<u64, String> {
+    fn copy_into_mount(
+        source: &Path,
+        mountpoint: &Path,
+        progress: &AtomicU64,
+    ) -> Result<u64, String> {
         let mut fsyncs = 0_u64;
         let mut buffer = vec![0_u8; COPY_BUFFER];
         for entry in fs::read_dir(source)
@@ -461,14 +700,21 @@ mod linux {
                 writer
                     .write_all(&buffer[..read])
                     .map_err(|error| error.to_string())?;
+                progress.fetch_add(read as u64, Ordering::Relaxed);
             }
             writer.sync_all().map_err(|error| error.to_string())?;
+            progress.fetch_add(1, Ordering::Relaxed);
             fsyncs += 1;
         }
         Ok(fsyncs)
     }
 
-    fn edit_bytes_at(path: &Path, offset: u64, payload: &[u8]) -> Result<(), String> {
+    fn edit_bytes_at(
+        path: &Path,
+        offset: u64,
+        payload: &[u8],
+        progress: &AtomicU64,
+    ) -> Result<(), String> {
         let mut file = OpenOptions::new()
             .write(true)
             .open(path)
@@ -476,11 +722,13 @@ mod linux {
         file.seek(SeekFrom::Start(offset))
             .map_err(|error| error.to_string())?;
         file.write_all(payload).map_err(|error| error.to_string())?;
+        progress.fetch_add(payload.len() as u64, Ordering::Relaxed);
         file.sync_all().map_err(|error| error.to_string())?;
+        progress.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
-    fn read_fully(path: &Path) -> Result<u64, String> {
+    fn read_fully(path: &Path, progress: &AtomicU64) -> Result<u64, String> {
         let mut file = File::open(path).map_err(|error| error.to_string())?;
         let mut buffer = vec![0_u8; COPY_BUFFER];
         let mut total = 0_u64;
@@ -490,11 +738,12 @@ mod linux {
                 return Ok(total);
             }
             total += read as u64;
+            progress.fetch_add(read as u64, Ordering::Relaxed);
         }
     }
 
     // ------------------------------------------------------------------
-    // The run
+    // Emission
     // ------------------------------------------------------------------
 
     struct Emitter {
@@ -509,17 +758,22 @@ mod linux {
             writeln!(self.sink, "{line}").map_err(|error| error.to_string())
         }
 
-        #[allow(clippy::too_many_arguments)]
         fn emit_arm(&mut self, row: ArmRow) -> Result<(), String> {
             let line = serde_json::to_string(&row).map_err(|error| error.to_string())?;
             writeln!(self.sink, "{line}").map_err(|error| error.to_string())?;
+            self.sink.flush().map_err(|error| error.to_string())?;
             eprintln!(
-                "  {} rep {}: wall {:.2}s read {} MiB write {} MiB",
+                "  {} rep {}: wall {:.2}s read {} MiB write {} MiB{}",
                 row.arm,
                 row.rep,
                 row.wall_s,
                 row.io_read_bytes >> 20,
                 row.io_write_bytes >> 20,
+                row.note
+                    .as_deref()
+                    .filter(|note| note.starts_with("failed"))
+                    .map(|note| format!(" [{note}]"))
+                    .unwrap_or_default(),
             );
             self.rows.push(row);
             Ok(())
@@ -584,8 +838,6 @@ mod linux {
     }
 
     fn fs_type_of(path: &Path) -> String {
-        // /proc/mounts rows are (source, mountpoint, fstype, ...); the longest
-        // mountpoint prefix of `path` wins.
         let text = fs::read_to_string("/proc/mounts").unwrap_or_default();
         let target = path.to_string_lossy();
         let mut best = ("", "unknown");
@@ -603,8 +855,13 @@ mod linux {
         best.1.to_owned()
     }
 
+    // ------------------------------------------------------------------
+    // The run
+    // ------------------------------------------------------------------
+
     #[allow(clippy::too_many_lines)]
     fn execute(config: &Config) -> Result<(), String> {
+        let daemon = daemon_binary()?;
         fs::create_dir_all(&config.out).map_err(|error| error.to_string())?;
         let started_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -644,10 +901,11 @@ mod linux {
         emitter.emit_arm(row)?;
 
         // -------- honesty baselines --------
+        let silent = AtomicU64::new(0);
         for rep in 0..config.reps {
             let (bytes, measured) = measure(|| {
-                let mut total = read_fully(&corpus.safetensors.path)?;
-                total += read_fully(&corpus.gguf.path)?;
+                let mut total = read_fully(&corpus.safetensors.path, &silent)?;
+                total += read_fully(&corpus.gguf.path, &silent)?;
                 Ok(total)
             })?;
             let mut row = base_row(&run_id, "native_read", rep, &measured);
@@ -687,28 +945,43 @@ mod linux {
                 scratch.join(format!("import-store-{rep}"))
             };
             let mountpoint = scratch.join(format!("mnt-import-{rep}"));
-            fs::create_dir_all(&mountpoint).map_err(|error| error.to_string())?;
-            let ((fsyncs, census), measured) = measure(|| {
+            let (outcome, measured) = measure(|| {
                 let meta = WorkspaceStore::open(&store).map_err(|error| error.to_string())?;
                 meta.create_workspace("w")
                     .map_err(|error| error.to_string())?;
                 drop(meta);
-                let mount =
-                    mount_workspace(&store, "w", &mountpoint).map_err(|error| error.to_string())?;
-                let fsyncs = copy_into_mount(&corpus.source, mount.mountpoint())?;
-                mount.unmount();
-                Ok((fsyncs, store_census(&store)))
+                let mut mount = ChildMount::workspace(&daemon, &store, "w", &mountpoint)?;
+                let progress = Arc::new(AtomicU64::new(0));
+                let ticker = Arc::clone(&progress);
+                let work_source = corpus.source.clone();
+                let work_mount = mountpoint.clone();
+                let copied = with_watchdog(&mut mount, progress, move || {
+                    copy_into_mount(&work_source, &work_mount, &ticker)
+                });
+                match copied {
+                    Ok(fsyncs) => {
+                        mount.unmount()?;
+                        Ok(Ok(fsyncs))
+                    }
+                    Err(failure) => Ok(Err(failure)),
+                }
             })?;
+            let census = store_census(&store);
             let mut row = base_row(&run_id, "import", rep, &measured);
-            row.driver_fsyncs = Some(fsyncs);
-            row.objects_new = Some(census.0);
-            row.objects_reused = Some(0);
-            row.bytes_new = Some(census.1);
-            row.bytes_reused = Some(0);
-            row.bytes_total = Some(census.1);
-            row.store_objects_after = Some(census.0);
-            row.store_physical_bytes = Some(census.1);
-            row.logical_bytes = Some(corpus.total_bytes);
+            match outcome {
+                Ok(fsyncs) => {
+                    row.driver_fsyncs = Some(fsyncs);
+                    row.objects_new = Some(census.0);
+                    row.objects_reused = Some(0);
+                    row.bytes_new = Some(census.1);
+                    row.bytes_reused = Some(0);
+                    row.bytes_total = Some(census.1);
+                    row.store_objects_after = Some(census.0);
+                    row.store_physical_bytes = Some(census.1);
+                    row.logical_bytes = Some(corpus.total_bytes);
+                }
+                Err(failure) => row.note = Some(failure),
+            }
             emitter.emit_arm(row)?;
             if rep > 0 {
                 fs::remove_dir_all(&store).map_err(|error| error.to_string())?;
@@ -745,10 +1018,8 @@ mod linux {
         }
 
         let sealed_records = snapshot_records(&main_store, &snapshot_a)?;
-        let sealed_bytes: u64 = sealed_records.iter().map(|(_, length)| length).sum();
 
-        // -------- clone (later arms address clone-0..4 by name, so five
-        // always exist; only the first `reps` creations are measured) --------
+        // -------- clone (later arms address clone-0..4 by name) --------
         for rep in 0..config.reps.max(5) {
             let name = format!("clone-{rep}");
             let (_, measured) = measure(|| {
@@ -766,95 +1037,144 @@ mod linux {
             emitter.emit_arm(row)?;
         }
 
+        // Helper: one watchdogged workload against one workspace mount.
+        let mounted_arm =
+            |workspace: &str,
+             mountpoint: &Path,
+             work: Box<dyn FnOnce(PathBuf, Arc<AtomicU64>) -> Result<u64, String> + Send>|
+             -> Result<Result<u64, String>, String> {
+                let mut mount = ChildMount::workspace(&daemon, &main_store, workspace, mountpoint)?;
+                let progress = Arc::new(AtomicU64::new(0));
+                let ticker = Arc::clone(&progress);
+                let root = mount.mountpoint().to_path_buf();
+                let outcome = with_watchdog(&mut mount, progress, move || work(root, ticker));
+                match outcome {
+                    Ok(value) => {
+                        mount.unmount()?;
+                        Ok(Ok(value))
+                    }
+                    Err(failure) => Ok(Err(failure)),
+                }
+            };
+
         // -------- through-the-mount micro ops --------
         for rep in 0..config.reps {
             let mountpoint = scratch.join(format!("mnt-ops-{rep}"));
-            fs::create_dir_all(&mountpoint).map_err(|error| error.to_string())?;
-            let (fsyncs, measured) = measure(|| {
-                let mount = mount_workspace(&main_store, "clone-0", &mountpoint)
-                    .map_err(|error| error.to_string())?;
-                let path = mount.mountpoint().join(format!("scratch-{rep}.bin"));
-                let mut file = File::create(&path).map_err(|error| error.to_string())?;
-                let mut buffer = vec![0_u8; 1 << 20];
-                fill_deterministic(0xabcd + rep as u64, &mut buffer);
-                file.write_all(&buffer).map_err(|error| error.to_string())?;
-                file.seek(SeekFrom::Start(64 << 10))
-                    .map_err(|error| error.to_string())?;
-                file.write_all(&buffer[..8192])
-                    .map_err(|error| error.to_string())?;
-                file.sync_all().map_err(|error| error.to_string())?;
-                file.set_len(512 << 10).map_err(|error| error.to_string())?;
-                file.set_len(2 << 20).map_err(|error| error.to_string())?;
-                file.sync_all().map_err(|error| error.to_string())?;
-                drop(file);
-                fs::remove_file(&path).map_err(|error| error.to_string())?;
-                mount.unmount();
-                Ok(2_u64)
+            let (outcome, measured) = measure(|| {
+                mounted_arm(
+                    "clone-0",
+                    &mountpoint,
+                    Box::new(move |root, ticker| {
+                        let path = root.join(format!("scratch-{rep}.bin"));
+                        let mut file = File::create(&path).map_err(|error| error.to_string())?;
+                        let mut buffer = vec![0_u8; 1 << 20];
+                        fill_deterministic(0xabcd + rep as u64, &mut buffer);
+                        file.write_all(&buffer).map_err(|error| error.to_string())?;
+                        ticker.fetch_add(1, Ordering::Relaxed);
+                        file.seek(SeekFrom::Start(64 << 10))
+                            .map_err(|error| error.to_string())?;
+                        file.write_all(&buffer[..8192])
+                            .map_err(|error| error.to_string())?;
+                        file.sync_all().map_err(|error| error.to_string())?;
+                        ticker.fetch_add(1, Ordering::Relaxed);
+                        file.set_len(512 << 10).map_err(|error| error.to_string())?;
+                        file.set_len(2 << 20).map_err(|error| error.to_string())?;
+                        file.sync_all().map_err(|error| error.to_string())?;
+                        ticker.fetch_add(1, Ordering::Relaxed);
+                        drop(file);
+                        fs::remove_file(&path).map_err(|error| error.to_string())?;
+                        Ok(2)
+                    }),
+                )
             })?;
             let mut row = base_row(&run_id, "write_ops", rep, &measured);
-            row.driver_fsyncs = Some(fsyncs);
+            match outcome {
+                Ok(fsyncs) => row.driver_fsyncs = Some(fsyncs),
+                Err(failure) => row.note = Some(failure),
+            }
             emitter.emit_arm(row)?;
         }
 
         // -------- the 8 KiB overwrite --------
         for rep in 0..config.reps {
             let mountpoint = scratch.join(format!("mnt-o8k-{rep}"));
-            fs::create_dir_all(&mountpoint).map_err(|error| error.to_string())?;
             let census_before = store_census(&main_store);
-            let (_, measured) = measure(|| {
-                let mount = mount_workspace(&main_store, "clone-1", &mountpoint)
-                    .map_err(|error| error.to_string())?;
-                let target = mount.mountpoint().join("model-a.safetensors");
-                let mut payload = [0_u8; 8192];
-                fill_deterministic(0x0eed + rep as u64, &mut payload);
-                edit_bytes_at(&target, corpus.safetensors.edit_offset, &payload)?;
-                mount.unmount();
-                Ok(())
+            let edit_offset = corpus.safetensors.edit_offset;
+            let (outcome, measured) = measure(|| {
+                mounted_arm(
+                    "clone-1",
+                    &mountpoint,
+                    Box::new(move |root, ticker| {
+                        let mut payload = [0_u8; 8192];
+                        fill_deterministic(0x0eed + rep as u64, &mut payload);
+                        edit_bytes_at(
+                            &root.join("model-a.safetensors"),
+                            edit_offset,
+                            &payload,
+                            &ticker,
+                        )?;
+                        Ok(1)
+                    }),
+                )
             })?;
             let census_after = store_census(&main_store);
             let mut row = base_row(&run_id, "overwrite_8k", rep, &measured);
-            row.driver_fsyncs = Some(1);
-            row.objects_new = Some(census_after.0 - census_before.0);
-            row.bytes_new = Some(census_after.1 - census_before.1);
-            row.note = Some("expected: one grid object rewritten per distinct payload".to_owned());
+            match outcome {
+                Ok(fsyncs) => {
+                    row.driver_fsyncs = Some(fsyncs);
+                    row.objects_new = Some(census_after.0 - census_before.0);
+                    row.bytes_new = Some(census_after.1 - census_before.1);
+                    row.note =
+                        Some("expected: one grid object rewritten per distinct payload".to_owned());
+                }
+                Err(failure) => row.note = Some(failure),
+            }
             emitter.emit_arm(row)?;
         }
 
         // -------- sequential rewrite of the GGUF file --------
         {
             let mountpoint = scratch.join("mnt-rewrite");
-            fs::create_dir_all(&mountpoint).map_err(|error| error.to_string())?;
             let census_before = store_census(&main_store);
-            let (fsyncs, measured) = measure(|| {
-                let mount = mount_workspace(&main_store, "clone-2", &mountpoint)
-                    .map_err(|error| error.to_string())?;
-                let target = mount.mountpoint().join("model-b.gguf");
-                let mut writer = OpenOptions::new()
-                    .write(true)
-                    .open(&target)
-                    .map_err(|error| error.to_string())?;
-                let mut remaining = corpus.gguf.bytes;
-                let mut buffer = vec![0_u8; COPY_BUFFER];
-                let mut block = 0_u64;
-                while remaining > 0 {
-                    let take = buffer.len().min(remaining as usize);
-                    fill_deterministic(0x7e77 ^ block, &mut buffer[..take]);
-                    writer
-                        .write_all(&buffer[..take])
-                        .map_err(|error| error.to_string())?;
-                    remaining -= take as u64;
-                    block += 1;
-                }
-                writer.sync_all().map_err(|error| error.to_string())?;
-                mount.unmount();
-                Ok(1_u64)
+            let gguf_bytes = corpus.gguf.bytes;
+            let (outcome, measured) = measure(|| {
+                mounted_arm(
+                    "clone-2",
+                    &mountpoint,
+                    Box::new(move |root, ticker| {
+                        let mut writer = OpenOptions::new()
+                            .write(true)
+                            .open(root.join("model-b.gguf"))
+                            .map_err(|error| error.to_string())?;
+                        let mut remaining = gguf_bytes;
+                        let mut buffer = vec![0_u8; COPY_BUFFER];
+                        let mut block = 0_u64;
+                        while remaining > 0 {
+                            let take = buffer.len().min(remaining as usize);
+                            fill_deterministic(0x7e77 ^ block, &mut buffer[..take]);
+                            writer
+                                .write_all(&buffer[..take])
+                                .map_err(|error| error.to_string())?;
+                            ticker.fetch_add(take as u64, Ordering::Relaxed);
+                            remaining -= take as u64;
+                            block += 1;
+                        }
+                        writer.sync_all().map_err(|error| error.to_string())?;
+                        Ok(1)
+                    }),
+                )
             })?;
             let census_after = store_census(&main_store);
             let mut row = base_row(&run_id, "seq_rewrite", 0, &measured);
-            row.driver_fsyncs = Some(fsyncs);
-            row.objects_new = Some(census_after.0 - census_before.0);
-            row.bytes_new = Some(census_after.1 - census_before.1);
-            row.bytes_total = Some(corpus.gguf.bytes);
+            match outcome {
+                Ok(fsyncs) => {
+                    row.driver_fsyncs = Some(fsyncs);
+                    row.objects_new = Some(census_after.0 - census_before.0);
+                    row.bytes_new = Some(census_after.1 - census_before.1);
+                    row.bytes_total = Some(corpus.gguf.bytes);
+                }
+                Err(failure) => row.note = Some(failure),
+            }
             emitter.emit_arm(row)?;
         }
 
@@ -876,40 +1196,59 @@ mod linux {
             ),
         ] {
             let mountpoint = scratch.join(format!("mnt-{workspace}"));
-            fs::create_dir_all(&mountpoint).map_err(|error| error.to_string())?;
-            let (sealed, measured) = measure(|| {
-                let mount = mount_workspace(&main_store, workspace, &mountpoint)
-                    .map_err(|error| error.to_string())?;
-                let mut payload = [0_u8; 8192];
-                fill_deterministic(0xd1ff ^ file_bytes, &mut payload);
-                edit_bytes_at(&mount.mountpoint().join(file_name), edit_offset, &payload)?;
-                mount.unmount();
-                let meta = WorkspaceStore::open(&main_store).map_err(|error| error.to_string())?;
-                meta.seal_snapshot(workspace, Some(snapshot_a))
-                    .map_err(|error| error.to_string())
+            let file_owned = file_name.to_owned();
+            let (outcome, measured) = measure(|| {
+                let edited = mounted_arm(
+                    workspace,
+                    &mountpoint,
+                    Box::new(move |root, ticker| {
+                        let mut payload = [0_u8; 8192];
+                        fill_deterministic(0xd1ff ^ file_bytes, &mut payload);
+                        edit_bytes_at(&root.join(&file_owned), edit_offset, &payload, &ticker)?;
+                        Ok(1)
+                    }),
+                )?;
+                match edited {
+                    Ok(_) => {
+                        let meta =
+                            WorkspaceStore::open(&main_store).map_err(|error| error.to_string())?;
+                        let sealed = meta
+                            .seal_snapshot(workspace, Some(snapshot_a))
+                            .map_err(|error| error.to_string())?;
+                        Ok(Ok(sealed))
+                    }
+                    Err(failure) => Ok(Err(failure)),
+                }
             })?;
-            let records = snapshot_records(&main_store, &sealed)?;
-            let (objects_new, objects_reused, bytes_new, bytes_reused) =
-                diff_records(&sealed_records, &records);
             let mut row = base_row(&run_id, arm, 0, &measured);
-            row.driver_fsyncs = Some(1);
-            row.objects_new = Some(objects_new);
-            row.objects_reused = Some(objects_reused);
-            row.bytes_new = Some(bytes_new);
-            row.bytes_reused = Some(bytes_reused);
-            row.bytes_total = Some(bytes_new + bytes_reused);
-            row.note = Some(format!(
-                "8192 changed bytes in one tensor of {file_name}; \
-                 reuse ratio {:.6}",
-                bytes_reused as f64 / (bytes_new + bytes_reused) as f64
-            ));
+            match outcome {
+                Ok(sealed) => {
+                    let records = snapshot_records(&main_store, &sealed)?;
+                    let (objects_new, objects_reused, bytes_new, bytes_reused) =
+                        diff_records(&sealed_records, &records);
+                    row.driver_fsyncs = Some(1);
+                    row.objects_new = Some(objects_new);
+                    row.objects_reused = Some(objects_reused);
+                    row.bytes_new = Some(bytes_new);
+                    row.bytes_reused = Some(bytes_reused);
+                    row.bytes_total = Some(bytes_new + bytes_reused);
+                    row.note = Some(format!(
+                        "8192 changed bytes in one tensor of {file_name}; reuse ratio {:.6}",
+                        bytes_reused as f64 / (bytes_new + bytes_reused) as f64
+                    ));
+                }
+                Err(failure) => row.note = Some(failure),
+            }
             emitter.emit_arm(row)?;
         }
 
         // -------- ten workspaces, ten distinct edits --------
         {
             let census_before = store_census(&main_store);
-            let (_, measured) = measure(|| {
+            let span = (corpus.safetensors.bytes - corpus.safetensors.edit_offset - 8192) / 10;
+            let edit_base = corpus.safetensors.edit_offset;
+            let (failures, measured) = measure(|| {
+                let mut failures = 0_u64;
                 for index in 0..10_u64 {
                     let name = format!("fleet-{index}");
                     let meta =
@@ -918,23 +1257,26 @@ mod linux {
                         .map_err(|error| error.to_string())?;
                     drop(meta);
                     let mountpoint = scratch.join(format!("mnt-{name}"));
-                    fs::create_dir_all(&mountpoint).map_err(|error| error.to_string())?;
-                    let mount = mount_workspace(&main_store, &name, &mountpoint)
-                        .map_err(|error| error.to_string())?;
-                    let mut payload = [0_u8; 8192];
-                    fill_deterministic(0xf1ee7 + index, &mut payload);
-                    // Ten distinct offsets, all inside the safetensors body
-                    // so no edit ever extends the file.
-                    let span =
-                        (corpus.safetensors.bytes - corpus.safetensors.edit_offset - 8192) / 10;
-                    edit_bytes_at(
-                        &mount.mountpoint().join("model-a.safetensors"),
-                        corpus.safetensors.edit_offset + index * span,
-                        &payload,
+                    let outcome = mounted_arm(
+                        &name,
+                        &mountpoint,
+                        Box::new(move |root, ticker| {
+                            let mut payload = [0_u8; 8192];
+                            fill_deterministic(0xf1ee7 + index, &mut payload);
+                            edit_bytes_at(
+                                &root.join("model-a.safetensors"),
+                                edit_base + index * span,
+                                &payload,
+                                &ticker,
+                            )?;
+                            Ok(1)
+                        }),
                     )?;
-                    mount.unmount();
+                    if outcome.is_err() {
+                        failures += 1;
+                    }
                 }
-                Ok(())
+                Ok(failures)
             })?;
             let census_after = store_census(&main_store);
             let mut row = base_row(&run_id, "ten_workspaces", 0, &measured);
@@ -942,31 +1284,43 @@ mod linux {
             row.bytes_new = Some(census_after.1 - census_before.1);
             row.logical_bytes = Some(10 * corpus.total_bytes);
             row.store_physical_bytes = Some(census_after.1);
-            row.note = Some(
+            row.note = Some(if failures == 0 {
                 "ten cloned workspaces with ten distinct 8 KiB edits: logical is \
                  10x the corpus, physical grows by the touched objects only"
-                    .to_owned(),
-            );
+                    .to_owned()
+            } else {
+                format!("failed: {failures} of 10 fleet edits timed out")
+            });
             emitter.emit_arm(row)?;
         }
 
         // -------- remount / cold read --------
         for rep in 0..config.reps {
             let mountpoint = scratch.join(format!("mnt-cold-{rep}"));
-            fs::create_dir_all(&mountpoint).map_err(|error| error.to_string())?;
-            let (bytes, measured) = measure(|| {
-                let mount = mount_snapshot(&main_store, &snapshot_a, &mountpoint)
-                    .map_err(|error| error.to_string())?;
-                let bytes = read_fully(&mount.mountpoint().join("model-a.safetensors"))?;
-                mount.unmount();
-                Ok(bytes)
+            let (outcome, measured) = measure(|| {
+                let mut mount =
+                    ChildMount::snapshot(&daemon, &main_store, &snapshot_a, &mountpoint)?;
+                let progress = Arc::new(AtomicU64::new(0));
+                let ticker = Arc::clone(&progress);
+                let target = mount.mountpoint().join("model-a.safetensors");
+                let read =
+                    with_watchdog(&mut mount, progress, move || read_fully(&target, &ticker));
+                match read {
+                    Ok(bytes) => {
+                        mount.unmount()?;
+                        Ok(Ok(bytes))
+                    }
+                    Err(failure) => Ok(Err(failure)),
+                }
             })?;
             let mut row = base_row(&run_id, "remount_cold_read", rep, &measured);
-            row.bytes_total = Some(bytes);
+            match outcome {
+                Ok(bytes) => row.bytes_total = Some(bytes),
+                Err(failure) => row.note = Some(failure),
+            }
             emitter.emit_arm(row)?;
         }
 
-        let _ = sealed_bytes;
         emitter.emit_summaries()?;
         eprintln!("rows: {}", emitter.rows.len());
         eprintln!("wrote {}", jsonl.display());
