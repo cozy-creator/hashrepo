@@ -6,18 +6,20 @@
 //! 8 KiB-overwrite arm in `workspace_mount.rs` uses, so the numbers are
 //! comparable across the change that introduced in-memory slot assembly.
 //!
-//! Two arms, because they are supposed to differ:
+//! Four arms:
 //!
 //! * A sequential writer fills each 64 MiB grid slot in order, so every slot
 //!   completes in RAM and is admitted exactly once. It must approach 1×.
 //! * A sparse writer touches the far end of many slots and completes none of
 //!   them, so the overlay degrades to the spill file. Its amplification is
 //!   high and that is correct: a 64 MiB grid object costs 64 MiB to admit no
-//!   matter how few of its bytes changed.
-//!
-//! The third arm is the budget itself: a writer whose resident slots would
-//! exceed the ceiling must spill rather than grow, and the daemon's peak RSS
-//! is the evidence.
+//!   matter how few of its bytes changed. What is under test is that it stays
+//!   byte-exact and holds those slots on disk rather than in the daemon.
+//! * A post-fsync SIGKILL, because slots admitted straight out of RAM are the
+//!   surface this change adds and durability across a crash is the claim that
+//!   matters most.
+//! * The budget itself: a writer whose resident slots would exceed the ceiling
+//!   must spill rather than grow, and the daemon's peak RSS is the evidence.
 
 #![cfg(target_os = "linux")]
 
@@ -156,6 +158,26 @@ impl BinMount {
         self.child.id()
     }
 
+    fn sigkill_and_reap(mut self) {
+        let _ = process::Command::new("kill")
+            .args(["-KILL", &self.child.id().to_string()])
+            .status();
+        let _ = self.child.wait();
+        // SIGKILL leaves a disconnected FUSE endpoint; reap it explicitly the
+        // way an operator would.
+        let _ = process::Command::new("fusermount3")
+            .args(["-u", "-z"])
+            .arg(&self.mountpoint)
+            .status();
+        for _ in 0..50 {
+            if !mounted_here(&self.mountpoint) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("stale mount survived cleanup");
+    }
+
     fn sigterm_and_wait(mut self) {
         let _ = process::Command::new("kill")
             .args(["-TERM", &self.child.id().to_string()])
@@ -180,10 +202,10 @@ fn fresh_workspace(label: &str) -> (PathBuf, PathBuf) {
 fn report(arm: &str, logical: u64, written: u64, read: u64) -> f64 {
     let amplification = written as f64 / logical as f64;
     println!(
-        "{arm}: logical {} MiB, daemon wrote {} MiB, read {} MiB -> {amplification:.2}x write amplification",
-        logical / MIB,
-        written / MIB,
-        read / MIB,
+        "{arm}: logical {} KiB, daemon wrote {} KiB, read {} KiB -> {amplification:.2}x write amplification",
+        logical / 1024,
+        written / 1024,
+        read / 1024,
     );
     amplification
 }
@@ -265,7 +287,10 @@ fn an_out_of_order_writer_degrades_to_the_spill_and_stays_exact() {
         return;
     }
     let (root, mountpoint) = fresh_workspace("amp-sparse");
-    let daemon = BinMount::spawn(&root, "main", &mountpoint, None);
+    // A one-slot ceiling so this arm genuinely exercises the overflow path.
+    // Left at the 512 MiB default these six incomplete slots would all fit in
+    // RAM, and the arm would silently stop testing the spill it is named for.
+    let daemon = BinMount::spawn(&root, "main", &mountpoint, Some(64 * MIB));
 
     let slots = 6_u64;
     let size = slots * 64 * MIB;
@@ -324,9 +349,74 @@ fn an_out_of_order_writer_degrades_to_the_spill_and_stays_exact() {
     // for 48 KiB of change is inherent to content addressing on a fixed grid,
     // and pretending otherwise would be a bound on the grid, not on this code.
     assert!(
-        peak_rss < 512 * MIB,
-        "even the degraded path must not scale with the file (peak RSS {} MiB)",
+        peak_rss < 256 * MIB,
+        "the overflow path must hold slots on disk, not in the daemon (peak RSS {} MiB)",
         peak_rss / MIB
+    );
+}
+
+/// The crash arm for the new surface. A slot admitted straight out of RAM is
+/// named by a generation the daemon commits at fsync; nothing about it is
+/// still in memory afterwards. So a SIGKILL immediately after that fsync must
+/// leave every byte readable on a fresh mount — the object was durable before
+/// the generation that names it existed, or the file would not be readable at
+/// all.
+///
+/// Deliberately larger than one grid slot: below 64 MiB nothing ever completes
+/// in RAM and this arm would test the old path by accident.
+#[test]
+fn eagerly_admitted_slots_survive_a_post_fsync_kill() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let (root, mountpoint) = fresh_workspace("amp-crash");
+    let daemon = BinMount::spawn(&root, "main", &mountpoint, None);
+
+    // Two full slots plus a partial one: two are admitted from RAM during the
+    // write, the third composes at fsync.
+    let logical = 140 * MIB;
+    let block = pattern(41, MIB as usize);
+    let file = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(mountpoint.join("crash.bin"))
+        .expect("create works");
+    let mut offset = 0_u64;
+    while offset < logical {
+        file.write_all_at(&block, offset).expect("write works");
+        offset += MIB;
+    }
+    file.sync_all().expect("fsync works");
+    drop(file);
+    daemon.sigkill_and_reap();
+
+    // A fresh daemon over the same store: nothing in the killed process's
+    // memory can help now.
+    let remounted = unique_dir("amp-crash-remnt");
+    let daemon = BinMount::spawn(&root, "main", &remounted, None);
+    let path = remounted.join("crash.bin");
+    let metadata = fs::metadata(&path).expect("the fsynced file survives");
+    assert_eq!(metadata.len(), logical, "the whole file survives the kill");
+
+    let survivor = OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("survivor opens");
+    let mut sample = vec![0_u8; block.len()];
+    // One probe inside each admitted slot and one inside the composed tail.
+    for at in [0_u64, 63 * MIB, 64 * MIB, 127 * MIB, 128 * MIB, 139 * MIB] {
+        survivor
+            .read_exact_at(&mut sample, at)
+            .expect("every slot reads back after the kill");
+        assert_eq!(sample, block, "bytes at {at} survive the post-fsync kill");
+    }
+    drop(survivor);
+    daemon.sigterm_and_wait();
+    println!(
+        "post-fsync kill: {} MiB byte-exact after remount",
+        logical / MIB
     );
 }
 
