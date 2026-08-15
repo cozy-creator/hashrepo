@@ -43,12 +43,18 @@ const ACCEPT_POLL: Duration = Duration::from_millis(200);
 /// the message is for humans and never load-bearing.
 #[derive(Debug)]
 pub struct RpcError {
-    code: &'static str,
+    code: String,
     message: String,
 }
 
 impl RpcError {
     fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self::owned(code.to_owned(), message)
+    }
+
+    /// A refusal whose code originates elsewhere (e.g. a transport's stable
+    /// error vocabulary) and rides through verbatim.
+    fn owned(code: String, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -56,8 +62,8 @@ impl RpcError {
     }
 
     #[must_use]
-    pub const fn code(&self) -> &'static str {
-        self.code
+    pub fn code(&self) -> &str {
+        &self.code
     }
 }
 
@@ -99,6 +105,7 @@ struct MountEntry {
 struct DaemonState {
     store: PathBuf,
     mounts_root: PathBuf,
+    remote: Option<String>,
     next_lease: u64,
     mounts: HashMap<u64, MountEntry>,
 }
@@ -172,6 +179,7 @@ pub fn serve(
     store: impl AsRef<Path>,
     socket: impl AsRef<Path>,
     mounts_root: impl AsRef<Path>,
+    remote: Option<&str>,
     stop: &Arc<AtomicBool>,
 ) -> io::Result<()> {
     let socket = socket.as_ref();
@@ -190,6 +198,7 @@ pub fn serve(
     let state = Arc::new(Mutex::new(DaemonState {
         store: store.as_ref().to_path_buf(),
         mounts_root,
+        remote: remote.map(str::to_owned),
         next_lease: 0,
         mounts: HashMap::new(),
     }));
@@ -490,11 +499,45 @@ fn dispatch(
             Ok(json!({"snapshot": id.to_string()}))
         }
         "push_snapshot" => {
-            let _params: SnapshotParams = parse_params(request)?;
-            Err(RpcError::new(
-                "unimplemented",
-                "push_snapshot is the pgw#1258/th#1960 sync engine, not this slice",
-            ))
+            let params: SnapshotParams = parse_params(request)?;
+            let Some(id) = SnapshotId::parse_hex(&params.snapshot) else {
+                return Err(RpcError::new(
+                    "invalid-snapshot",
+                    "snapshot must be 64 lowercase hex characters",
+                ));
+            };
+            let (meta, remote) = {
+                let state = state.lock().expect("daemon state mutex is healthy");
+                let Some(remote) = state.remote.clone() else {
+                    return Err(RpcError::new(
+                        "unconfigured",
+                        "no --remote was configured; push_snapshot needs a sync target",
+                    ));
+                };
+                (open_store(&state)?, remote)
+            };
+            // The engine is live; the HTTP adapter lands with the th#1960 hub
+            // wire, so today this surfaces its honest typed refusal.
+            let transport = tensorfs_core::sync::http::HttpTransport::new(remote);
+            match tensorfs_core::sync::push_snapshot(
+                &meta,
+                &transport,
+                &id,
+                None,
+                tensorfs_core::sync::PushOptions::default(),
+            ) {
+                Ok(report) => Ok(json!({
+                    "snapshot": id.to_string(),
+                    "uploaded_objects": report.uploaded_objects,
+                    "uploaded_bytes": report.uploaded_bytes,
+                    "packs": report.packs,
+                    "skipped_remote_resident": report.skipped_remote_resident,
+                })),
+                Err(tensorfs_core::sync::SyncError::Transport(
+                    tensorfs_core::sync::TransportError::Refused { code, detail },
+                )) => Err(RpcError::owned(code, detail)),
+                Err(error) => Err(RpcError::owned("sync-failed".to_owned(), error.to_string())),
+            }
         }
         "release" => {
             let params: ReleaseParams = parse_params(request)?;
