@@ -29,7 +29,20 @@ echo "=== tensorfs pod benchmark: $(date -u +%FT%TZ) ==="
 # forty minutes into a build.
 FUSE_OK=1
 echo "--- FUSE availability ---"
+if [ ! -e /dev/fuse ]; then
+  # RunPod containers ship without the device node. Creating it needs only
+  # CAP_MKNOD, which they do grant. Mounting additionally needs CAP_SYS_ADMIN,
+  # which they do not — so this may succeed and the mount still fail. That is
+  # exactly why the real check below is an actual mount attempt.
+  echo "/dev/fuse: absent, attempting mknod"
+  mknod /dev/fuse c 10 229 2>&1 && chmod 666 /dev/fuse && echo "  mknod ok" || echo "  mknod failed"
+fi
 if [ -e /dev/fuse ]; then echo "/dev/fuse: present"; else echo "/dev/fuse: MISSING"; FUSE_OK=0; fi
+echo "capabilities:"
+grep -E 'CapEff|CapBnd' /proc/self/status || true
+if command -v capsh >/dev/null 2>&1; then
+  capsh --print 2>/dev/null | grep -E '^Current:' | head -1
+fi
 if command -v fusermount3 >/dev/null 2>&1; then
   echo "fusermount3: $(command -v fusermount3)"
 else
