@@ -18,8 +18,15 @@ unicode-normalization.workspace = true
 [target.'cfg(any(unix, windows))'.dependencies]
 base64 = "0.22"
 fs4 = { version = "0.8", default-features = false, features = ["sync"] }
-rusqlite = { version = "0.40", features = ["bundled"] }
+turso = { version = "0.7.2", default-features = false }
 ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# rusqlite is kept ONLY to prove the escape hatch: tests/engine_reopen.rs
+# opens the same metadata file under both engines. It is gated to the
+# platforms that module targets so a wasm build never resolves its
+# sqlite-wasm-rs backend.
+[target.'cfg(any(unix, windows))'.dev-dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }

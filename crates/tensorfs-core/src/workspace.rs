@@ -1,6 +1,6 @@
 //! Transactional workspace/snapshot metadata over the immutable object store.
 //!
-//! One SQLite WAL database owns inodes, dirents, ordered object maps,
+//! One Turso WAL database owns inodes, dirents, ordered object maps,
 //! workspace heads, sealed snapshots, leases, and GC quarantine. One durable
 //! transaction advances a workspace generation, and only after every newly
 //! referenced object has been verified resident, so recovery always exposes
@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use crate::workspace_db::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 
 use crate::object::ObjectDigest;
@@ -100,7 +100,7 @@ pub enum Mutation {
 #[derive(Debug, Error)]
 pub enum WorkspaceError {
     #[error("workspace metadata I/O failed")]
-    Sqlite(#[from] rusqlite::Error),
+    Db(#[from] crate::workspace_db::Error),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error("path fact is not canonical: {0}")]
@@ -740,15 +740,15 @@ impl WorkspaceStore {
         // already gone; both make the quarantine reflect reality.
         let quarantined: Vec<(ObjectDigest, i64)> = {
             let mut rows_statement = tx.prepare("SELECT digest, epoch FROM gc_quarantine")?;
-            let collected = rows_statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
+            let mut rows = rows_statement.query([])?;
+            let mut collected = Vec::new();
+            while let Some(row) = rows.next()? {
+                collected.push((
+                    digest_from_row(row.get::<_, Vec<u8>>(0)?)?,
+                    row.get::<_, i64>(1)?,
+                ));
+            }
             collected
-                .into_iter()
-                .map(|(digest, marked)| Ok((digest_from_row(digest)?, marked)))
-                .collect::<Result<Vec<_>, WorkspaceError>>()?
         };
         for (digest, marked) in &quarantined {
             if roots.contains(digest) || !resident_set.contains(digest) {
