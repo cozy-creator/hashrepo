@@ -42,7 +42,10 @@ const WORKSPACE: &str = "TENSORFS_CONC_WORKSPACE";
 fn shared_payload(index: u32) -> Vec<u8> {
     let mut bytes = vec![0_u8; 4096 + index as usize];
     for (position, byte) in bytes.iter_mut().enumerate() {
-        *byte = ((position as u32).wrapping_mul(2_654_435_761).wrapping_add(index) & 0xFF) as u8;
+        *byte = ((position as u32)
+            .wrapping_mul(2_654_435_761)
+            .wrapping_add(index)
+            & 0xFF) as u8;
     }
     bytes
 }
@@ -120,7 +123,7 @@ fn commit_role(root: &str, writer: u32, workspace: &str) {
         // never a silent skip.
         let mut attempts = 0;
         loop {
-            match meta.commit_generation(workspace, &[mutation.clone()]) {
+            match meta.commit_generation(workspace, std::slice::from_ref(&mutation)) {
                 Ok(_) => break,
                 Err(error) => {
                     attempts += 1;
@@ -169,7 +172,9 @@ fn concurrent_admissions_of_identical_bytes_converge_on_one_object() {
     let scratch = Scratch::new("admit-race");
     let meta = WorkspaceStore::open(scratch.path()).expect("parent opens the store");
 
-    let children: Vec<_> = (1..=3).map(|id| spawn(scratch.path(), "admit", id, None)).collect();
+    let children: Vec<_> = (1..=3)
+        .map(|id| spawn(scratch.path(), "admit", id, None))
+        .collect();
     // The parent is the fourth concurrent writer.
     admit_role(&scratch.path().to_string_lossy(), 0);
     join(children);
@@ -326,9 +331,12 @@ fn a_collector_racing_live_commits_never_costs_a_committed_object() {
         match writer.commit_generation("main", &[mutation]) {
             Ok(_) => {
                 committed += 1;
-                writer.store().verify(&admitted.digest()).unwrap_or_else(|error| {
-                    panic!("round {round}: committed object was collected: {error}")
-                });
+                writer
+                    .store()
+                    .verify(&admitted.digest())
+                    .unwrap_or_else(|error| {
+                        panic!("round {round}: committed object was collected: {error}")
+                    });
             }
             Err(WorkspaceError::MissingObject { .. }) => refused += 1,
             Err(other) => panic!("round {round}: unexpected commit failure {other:?}"),
@@ -383,7 +391,9 @@ fn a_collector_racing_other_processes_keeps_every_referenced_object() {
     let rooted = referenced_digests(&meta, "main");
     assert!(!rooted.is_empty());
 
-    let children: Vec<_> = (1..=2).map(|id| spawn(scratch.path(), "admit", id, None)).collect();
+    let children: Vec<_> = (1..=2)
+        .map(|id| spawn(scratch.path(), "admit", id, None))
+        .collect();
     for _ in 0..8 {
         let _ = meta.collect().expect("collection completes");
         for digest in &rooted {

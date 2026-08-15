@@ -99,7 +99,10 @@ fn rate_limiting_maps_to_a_typed_refusal() {
 /// engine replans instead of failing the push.
 #[test]
 fn authentication_failures_are_typed_and_expiry_is_distinguished() {
-    let server = FaultServer::start(vec![Reply::json(401, r#"{"error":{"code":"unauthorized"}}"#)]);
+    let server = FaultServer::start(vec![Reply::json(
+        401,
+        r#"{"error":{"code":"unauthorized"}}"#,
+    )]);
     let error = transport(&server.base).head().expect_err("401 refuses");
     assert!(matches!(error, TransportError::Refused { .. }));
 
@@ -196,7 +199,10 @@ fn broken_response_framing_never_yields_bytes() {
         match transport(&server.base).download(&grant) {
             Err(error) => {
                 assert!(
-                    matches!(error, TransportError::Io(_) | TransportError::Refused { .. }),
+                    matches!(
+                        error,
+                        TransportError::Io(_) | TransportError::Refused { .. }
+                    ),
                     "{name}: unexpected error shape {error:?}"
                 );
             }
@@ -205,7 +211,8 @@ fn broken_response_framing_never_yields_bytes() {
                 // overlong body that happens to contain a correct prefix must
                 // NOT be truncated into a false success.
                 assert_eq!(
-                    bytes, payload,
+                    bytes,
+                    payload,
                     "{name}: transport returned {} bytes that are not the object",
                     bytes.len()
                 );
@@ -611,7 +618,10 @@ fn transient_upload_faults_converge_without_duplicating_work() {
     let report = push_snapshot(&meta, &hub, &id, None, PushOptions::default())
         .expect("bounded transients must converge");
     assert_eq!(hub.state.borrow().head, Some(id));
-    assert!(report.replans > 0, "the expiries should have forced replans");
+    assert!(
+        report.replans > 0,
+        "the expiries should have forced replans"
+    );
 
     // Every object the manifest names is present on the hub exactly once as
     // a promoted object.
@@ -638,16 +648,17 @@ fn transient_download_faults_surface_typed_then_converge_on_retry() {
     let sink = Scratch::new("flap-down-sink");
     let meta = WorkspaceStore::open(sink.path()).expect("sink store opens");
     let error = pull_snapshot(&meta, &hub, &id).expect_err("the injected fault must surface");
-    assert!(matches!(
-        error,
-        SyncError::Transport(TransportError::Io(_))
-    ));
+    assert!(matches!(error, SyncError::Transport(TransportError::Io(_))));
 
     hub.heal();
     pull_snapshot(&meta, &hub, &id).expect("the retry converges");
     assert_snapshot_fully_backed(&meta, &id, "after a transient download outage");
     for (path, bytes) in &originals {
-        assert_eq!(&reconstruct(&meta, &id, path), bytes, "{path} is byte-exact");
+        assert_eq!(
+            &reconstruct(&meta, &id, path),
+            bytes,
+            "{path} is byte-exact"
+        );
     }
 }
 

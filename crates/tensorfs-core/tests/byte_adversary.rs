@@ -42,6 +42,9 @@ fn object_path(root: &std::path::Path, digest: &ObjectDigest) -> PathBuf {
         .join(&hex)
 }
 
+/// One way to damage an object's bytes in place.
+type Corruption = Box<dyn Fn(&[u8]) -> Vec<u8>>;
+
 fn built(name: &str) -> (Scratch, WorkspaceStore, SnapshotId, ObjectDigest) {
     let scratch = Scratch::new(name);
     let (meta, id) = sealed_workspace(
@@ -74,8 +77,11 @@ fn is_root() -> bool {
 /// and — deliberately — does not delete or repair.
 #[test]
 fn verify_catches_every_content_corruption_shape() {
-    let cases: Vec<(&str, Box<dyn Fn(&[u8]) -> Vec<u8>>)> = vec![
-        ("truncated", Box::new(|bytes: &[u8]| bytes[..bytes.len() / 2].to_vec())),
+    let cases: Vec<(&str, Corruption)> = vec![
+        (
+            "truncated",
+            Box::new(|bytes: &[u8]| bytes[..bytes.len() / 2].to_vec()),
+        ),
         (
             "one flipped bit",
             Box::new(|bytes: &[u8]| {
@@ -143,7 +149,10 @@ fn a_valid_object_filed_under_the_wrong_digest_is_refused() {
     let impostor = object_path(scratch.path(), &other.digest());
     fs::copy(&impostor, &victim).expect("impostor overwrites the victim");
 
-    let error = meta.store().verify(&digest).expect_err("a swap must refuse");
+    let error = meta
+        .store()
+        .verify(&digest)
+        .expect_err("a swap must refuse");
     assert!(
         matches!(error, StoreError::CorruptObject { expected, actual }
             if expected == digest && actual == other.digest()),

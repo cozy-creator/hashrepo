@@ -169,7 +169,13 @@ fn sealed_ids(root: &Path) -> Vec<SnapshotId> {
 }
 
 /// Every invariant that must hold after any kill, at any point.
-fn assert_recovered(root: &Path, seed: u64, round: u32, phase: &str, previous_generation: u64) -> u64 {
+fn assert_recovered(
+    root: &Path,
+    seed: u64,
+    round: u32,
+    phase: &str,
+    previous_generation: u64,
+) -> u64 {
     let context = format!("seed {seed}, round {round}, killed at {phase}");
 
     // An independent on-disk rehash: nothing at a digest path may disagree
@@ -277,7 +283,9 @@ fn a_kill_at_any_point_in_the_cycle_leaves_a_consistent_store() {
 
     // The store survived every kill and is still usable for real work.
     let meta = WorkspaceStore::open(root).expect("final reopen");
-    let id = meta.seal_snapshot("main", None).expect("a final seal works");
+    let id = meta
+        .seal_snapshot("main", None)
+        .expect("a final seal works");
     harness::assert_snapshot_fully_backed(&meta, &id, "after the whole matrix");
     Consistency::scan(root).assert_intact("after the whole matrix");
 }

@@ -49,7 +49,9 @@ const DONE: &str = "TENSORFS_XFER_DONE";
 fn corpus() -> Vec<(&'static str, Vec<Vec<u8>>)> {
     let block = |seed: u8, size: usize| -> Vec<u8> {
         (0..size)
-            .map(|position| ((position as u32).wrapping_mul(31).wrapping_add(seed as u32) & 0xFF) as u8)
+            .map(|position| {
+                ((position as u32).wrapping_mul(31).wrapping_add(seed as u32) & 0xFF) as u8
+            })
             .collect()
     };
     vec![
@@ -64,7 +66,11 @@ fn corpus() -> Vec<(&'static str, Vec<Vec<u8>>)> {
         ),
         (
             "weights/a.bin",
-            vec![block(5, 80 * 1024), block(6, 96 * 1024), block(7, 48 * 1024)],
+            vec![
+                block(5, 80 * 1024),
+                block(6, 96 * 1024),
+                block(7, 48 * 1024),
+            ],
         ),
         (
             "weights/b.bin",
@@ -91,8 +97,14 @@ fn transfer_child_role() {
     match role.as_str() {
         "push" => {
             let expected = transport_head(&transport);
-            push_snapshot(&meta, &transport, &id, expected.as_ref(), PushOptions::default())
-                .expect("push completes");
+            push_snapshot(
+                &meta,
+                &transport,
+                &id,
+                expected.as_ref(),
+                PushOptions::default(),
+            )
+            .expect("push completes");
         }
         "pull" => {
             pull_snapshot(&meta, &transport, &id).expect("pull completes");
@@ -134,6 +146,40 @@ fn calibrate(role: &str, store: &Path, hub: &Path, id: &SnapshotId, done: &Path)
     elapsed
 }
 
+/// Picks the next kill delay and adapts the search window to what the box is
+/// actually doing.
+///
+/// A fixed ceiling derived from one calibration run is not robust here: this
+/// suite shares a heavily loaded machine, so a calibration taken under load
+/// yields a window in which every child finishes before the kill lands, and
+/// the interruption assertion then fails for reasons that have nothing to do
+/// with TensorFS. The controller shrinks the window whenever an attempt
+/// completed and grows it whenever one was interrupted, so it converges on
+/// the interruption zone under any load without any wall-clock assertion.
+struct KillWindow {
+    ceiling: u64,
+}
+
+impl KillWindow {
+    fn new(cycle: Duration) -> Self {
+        Self {
+            ceiling: ((cycle.max(Duration::from_millis(10)).as_micros() as u64) * 12 / 10).max(4),
+        }
+    }
+
+    fn delay(&self, rng: &mut Rng) -> Duration {
+        Duration::from_micros(rng.range(0, self.ceiling.max(2)))
+    }
+
+    fn observe(&mut self, completed: bool) {
+        self.ceiling = if completed {
+            (self.ceiling * 6 / 10).max(2)
+        } else {
+            (self.ceiling * 12 / 10).max(4)
+        };
+    }
+}
+
 /// A push interrupted at randomised points, restarted until it converges.
 #[test]
 fn a_push_killed_repeatedly_still_converges_and_never_re_uploads() {
@@ -148,7 +194,7 @@ fn a_push_killed_repeatedly_still_converges_and_never_re_uploads() {
 
     let seed = seed_from_env(0x5EED_1257_C0FF_EE06);
     let mut rng = Rng::new(seed);
-    let ceiling = ((cycle.max(Duration::from_millis(10)).as_micros() as u64) * 12 / 10).max(2);
+    let mut window = KillWindow::new(cycle);
     let attempts = iterations(12, 60);
 
     // Every attempt is a real interruption: the done marker is cleared each
@@ -158,11 +204,13 @@ fn a_push_killed_repeatedly_still_converges_and_never_re_uploads() {
     for attempt in 1..=attempts {
         let _ = fs::remove_file(&done);
         let mut child = spawn("push", source.path(), hub.path(), &id, &done);
-        std::thread::sleep(Duration::from_micros(rng.range(0, ceiling)));
+        std::thread::sleep(window.delay(&mut rng));
         let _ = child.kill();
         let _ = child.wait();
 
-        if !done.exists() {
+        let completed = done.exists();
+        window.observe(completed);
+        if !completed {
             interrupted += 1;
         }
 
@@ -226,18 +274,20 @@ fn a_pull_killed_repeatedly_converges_byte_exactly_without_re_downloading() {
 
     let seed = seed_from_env(0x5EED_1257_C0FF_EE07);
     let mut rng = Rng::new(seed);
-    let ceiling = ((cycle.max(Duration::from_millis(10)).as_micros() as u64) * 12 / 10).max(2);
+    let mut window = KillWindow::new(cycle);
     let attempts = iterations(12, 60);
 
     let mut interrupted = 0_u32;
     for attempt in 1..=attempts {
         let _ = fs::remove_file(&done);
         let mut child = spawn("pull", sink.path(), hub.path(), &id, &done);
-        std::thread::sleep(Duration::from_micros(rng.range(0, ceiling)));
+        std::thread::sleep(window.delay(&mut rng));
         let _ = child.kill();
         let _ = child.wait();
 
-        if !done.exists() {
+        let completed = done.exists();
+        window.observe(completed);
+        if !completed {
             interrupted += 1;
         }
 

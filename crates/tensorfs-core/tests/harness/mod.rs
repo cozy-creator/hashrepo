@@ -71,7 +71,9 @@ impl Rng {
     }
 
     pub fn bytes(&mut self, length: usize) -> Vec<u8> {
-        (0..length).map(|_| (self.next_u64() & 0xFF) as u8).collect()
+        (0..length)
+            .map(|_| (self.next_u64() & 0xFF) as u8)
+            .collect()
     }
 }
 
@@ -89,9 +91,7 @@ pub fn seed_from_env(default: u64) -> u64 {
 /// the default run takes the fast subset so the suite stays usable.
 #[must_use]
 pub fn iterations(fast: u32, heavy: u32) -> u32 {
-    std::env::var("TENSORFS_HEAVY")
-        .ok()
-        .map_or(fast, |_| heavy)
+    std::env::var("TENSORFS_HEAVY").ok().map_or(fast, |_| heavy)
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +193,10 @@ fn walk(dir: &Path, report: &mut Consistency) {
             continue;
         }
         report.objects += 1;
-        if name.len() != 64 || !name.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        if name.len() != 64
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
         {
             report.malformed.push(name);
             continue;
@@ -836,7 +839,7 @@ impl SyncTransport for FaultHub {
                 grants.push(DownloadGrant {
                     digest: ObjectDigest::from_bytes(*digest),
                     length: bytes.len() as u64,
-                    url: format!("fake-get://unrequested"),
+                    url: "fake-get://unrequested".to_owned(),
                 });
             }
         }
@@ -1144,7 +1147,8 @@ fn write_reply(stream: &mut std::net::TcpStream, answer: &Reply) {
             );
         }
         Reply::HtmlPage => {
-            let body = "<html><head><title>502 Bad Gateway</title></head><body>proxy error</body></html>";
+            let body =
+                "<html><head><title>502 Bad Gateway</title></head><body>proxy error</body></html>";
             let _ = write!(
                 stream,
                 "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
@@ -1309,9 +1313,9 @@ impl SyncTransport for DirTransport {
         // would make a later push against a moved head fail as a spurious
         // conflict — the head assertion above has already validated this
         // declare against the live head.
-        let mut value = self.load_session(&session).unwrap_or_else(|_| {
-            serde_json::json!({ "packs": {} })
-        });
+        let mut value = self
+            .load_session(&session)
+            .unwrap_or_else(|_| serde_json::json!({ "packs": {} }));
         value["snapshot_id"] = serde_json::json!(digest_hex(&manifest_object_digest(&id)));
         value["expected_head"] =
             serde_json::json!(expected_head.map(std::string::ToString::to_string));
@@ -1435,7 +1439,12 @@ impl SyncTransport for DirTransport {
 
     fn complete(&self, session: &str) -> Result<CompleteStatus, TransportError> {
         let value = self.load_session(session)?;
-        for pack in value["packs"].as_object().into_iter().flatten().map(|(_, p)| p) {
+        for pack in value["packs"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(_, p)| p)
+        {
             let key = pack["staging_key"].as_str().unwrap_or_default();
             let Ok(bytes) = std::fs::read(self.root.join(key)) else {
                 continue;
