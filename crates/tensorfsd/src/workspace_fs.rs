@@ -710,17 +710,22 @@ impl Filesystem for WorkspaceFs {
         // never consults the table; with it, lock state is mount-owned and
         // uniform across the future macFUSE/WinFsp backends.
         let _ = config.add_capabilities(fuser::consts::FUSE_POSIX_LOCKS);
-        // Performance negotiation, measured in the pgw#1256 matrix:
-        // FUSE_MAX_PAGES lifts requests from the historic 32-page (128 KiB)
-        // cap to max_write/max_readahead, and the kernel clamps both to its
-        // own ceiling (1 MiB on current Linux). FUSE_WRITEBACK_CACHE batches
-        // dirty pages in the kernel so ordinary write() streams arrive as
-        // full-sized WRITE requests instead of per-call trickles; the
-        // durability contract is unchanged because the kernel flushes dirty
-        // pages ahead of FSYNC on the same file, and dirty-unsynced bytes
-        // dying with the daemon is already the documented semantic.
-        let _ = config
-            .add_capabilities(fuser::consts::FUSE_MAX_PAGES | fuser::consts::FUSE_WRITEBACK_CACHE);
+        // Performance negotiation. FUSE_MAX_PAGES lifts requests from the
+        // historic 32-page (128 KiB) cap to max_write/max_readahead, and the
+        // kernel clamps both to its own ceiling (1 MiB on current Linux).
+        //
+        // FUSE_WRITEBACK_CACHE is deliberately NOT enabled, and the reason is
+        // measured rather than assumed: with it, write amplification on the
+        // import and seq_rewrite arms rose from 3.00x to 4.00x (4096 MiB
+        // logical -> 16385 MiB written, both reps, byte counters that do not
+        // move with machine load). The kernel materialises dirty pages into
+        // its own cache and STILL forwards them as WRITE ops into the spill,
+        // so the spill -> compose -> admit chain gains a whole extra copy of
+        // every byte. Batching cannot pay for that on a filesystem whose
+        // writes already land in a dirty overlay; the honest write win is
+        // removing a copy from the compose path, not adding one in the
+        // kernel. Revisit only alongside a spill-free whole-slot fast path.
+        let _ = config.add_capabilities(fuser::consts::FUSE_MAX_PAGES);
         let _ = config.set_max_write(1024 * 1024);
         let _ = config.set_max_readahead(1024 * 1024);
         Ok(())
