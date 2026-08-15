@@ -90,6 +90,10 @@ pub enum Mutation {
         path: String,
         target: String,
     },
+    SetExecutable {
+        path: String,
+        executable: bool,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -364,6 +368,16 @@ impl WorkspaceStore {
         )?;
         tx.commit()?;
         Ok(next)
+    }
+
+    /// Builds (without storing) the canonical snapshot value of the committed
+    /// head tree. This is the one tree-read seam the daemon mounts through:
+    /// the snapshot value already carries every fact a filesystem surface
+    /// needs, in the exact vocabulary TFM1 freezes.
+    pub fn head_tree(&self, name: &str) -> Result<Snapshot, WorkspaceError> {
+        let connection = self.connection.lock().expect("metadata mutex is healthy");
+        let workspace = workspace_row(&connection, name)?;
+        build_snapshot(&connection, &workspace, None)
     }
 
     /// Seals the committed head tree as one canonical TFM1 snapshot, stores
@@ -976,6 +990,17 @@ fn apply_mutation(
             connection.execute(
                 "INSERT INTO dirents (parent_inode, name, child_inode) VALUES (?1, ?2, ?3)",
                 params![parent, name, target_inode.id],
+            )?;
+        }
+        Mutation::SetExecutable { path, executable } => {
+            let inode = resolve_path(connection, workspace, path)?
+                .ok_or_else(|| WorkspaceError::Missing(path.clone()))?;
+            if inode.kind != KIND_FILE {
+                return Err(WorkspaceError::NotAFile(path.clone()));
+            }
+            connection.execute(
+                "UPDATE inodes SET executable = ?1 WHERE id = ?2",
+                params![i64::from(*executable), inode.id],
             )?;
         }
     }
