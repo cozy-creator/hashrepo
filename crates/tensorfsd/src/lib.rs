@@ -14,6 +14,11 @@ mod snapshot_fs;
 #[cfg(target_os = "linux")]
 mod workspace_fs;
 
+/// The Unix-socket control plane shares the Linux gate; the Windows named
+/// pipe is the seam a later platform slice fills.
+#[cfg(target_os = "linux")]
+pub mod rpc;
+
 #[cfg(target_os = "linux")]
 pub use snapshot_fs::{MountError, SnapshotMount, mount_snapshot};
 #[cfg(target_os = "linux")]

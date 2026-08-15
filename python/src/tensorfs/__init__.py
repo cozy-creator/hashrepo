@@ -8,6 +8,14 @@ from .manifest import MAX_CHUNK_SIZE, Chunk, FileEntry, RepositoryManifest
 from .refs import CASRef
 
 if TYPE_CHECKING:
+    from .daemon import (
+        DaemonClient,
+        DaemonError,
+        DaemonHello,
+        DaemonMount,
+        DaemonStatus,
+        MountedPath,
+    )
     from .transfer import (
         TransferGrant,
         TransferReport,
@@ -24,13 +32,29 @@ _TRANSFER_EXPORTS = frozenset(
     )
 )
 
+_DAEMON_EXPORTS = frozenset(
+    (
+        "DaemonClient",
+        "DaemonError",
+        "DaemonHello",
+        "DaemonMount",
+        "DaemonStatus",
+        "MountedPath",
+    )
+)
+
 
 def __getattr__(name: str) -> Any:
-    if name not in _TRANSFER_EXPORTS:
-        raise AttributeError(name)
-    from . import transfer
+    if name in _TRANSFER_EXPORTS:
+        from . import transfer
 
-    value = getattr(transfer, name)
+        value = getattr(transfer, name)
+    elif name in _DAEMON_EXPORTS:
+        from . import daemon
+
+        value = getattr(daemon, name)
+    else:
+        raise AttributeError(name)
     globals()[name] = value
     return value
 
@@ -38,10 +62,16 @@ def __getattr__(name: str) -> Any:
 __all__ = [
     "CASRef",
     "Chunk",
+    "DaemonClient",
+    "DaemonError",
+    "DaemonHello",
+    "DaemonMount",
+    "DaemonStatus",
     "DigestMismatch",
     "FileEntry",
     "LocalCAS",
     "MAX_CHUNK_SIZE",
+    "MountedPath",
     "RefConflict",
     "RepositoryManifest",
     "TransferGrant",
