@@ -20,12 +20,13 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 
 use crate::object::ObjectDigest;
-use crate::planner::PlannerId;
+use crate::planner::{ByteSource, PlanError, PlannerId, plan};
 use crate::store::{ObjectStore, StoreError};
 use crate::tfm1::{
     Entry, FileRecord, Snapshot, SnapshotBuilder, SnapshotId, Tfm1Error, case_fold, decode,
     validate_path, validate_records, validate_symlink_target,
 };
+use crate::workspace_source::RecordsSource;
 
 const KIND_DIRECTORY: i64 = 1;
 const KIND_FILE: i64 = 2;
@@ -132,6 +133,10 @@ pub enum WorkspaceError {
     UnknownLease(i64),
     #[error("rename would move {0:?} into its own subtree")]
     RenameIntoSelf(String),
+    #[error("seal-time planning failed")]
+    Plan(#[from] PlanError),
+    #[error("the workspace kept changing during seal; retries exhausted")]
+    SealContention,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -382,27 +387,189 @@ impl WorkspaceStore {
 
     /// Seals the committed head tree as one canonical TFM1 snapshot, stores
     /// its exact bytes, and returns the identity.
+    ///
+    /// Before sealing, the closed planner registry re-establishes semantic
+    /// boundaries: each pure-data file is planned through a records-backed
+    /// byte source (bounded header reads only), and when the planned regions
+    /// differ from the committed record boundaries the file is re-sliced —
+    /// exact-range records keep their digests without a payload read, every
+    /// other region is read once and admitted. The re-boundaried records and
+    /// the sealed snapshot land in one transaction, so the workspace head and
+    /// the snapshot always agree. Files containing holes are not semantic
+    /// candidates — re-planning them would materialize their sparseness — and
+    /// seal with their committed records unchanged, as do malformed files
+    /// (whose plan is the raw grid they already carry).
     pub fn seal_snapshot(
         &self,
         name: &str,
         parent: Option<SnapshotId>,
     ) -> Result<SnapshotId, WorkspaceError> {
-        let mut connection = self.connection.lock().expect("metadata mutex is healthy");
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let workspace = workspace_row(&tx, name)?;
-        let snapshot = build_snapshot(&tx, &workspace, parent)?;
-        let bytes = snapshot.to_bytes();
-        let id = snapshot.snapshot_id();
-        tx.execute(
-            "INSERT OR IGNORE INTO snapshots (id, blob, sealed_generation) VALUES (?1, ?2, ?3)",
-            params![
-                id.as_bytes().as_slice(),
-                bytes,
-                workspace.head_generation as i64
-            ],
-        )?;
-        tx.commit()?;
-        Ok(id)
+        for _attempt in 0..3 {
+            // Phase A: capture the committed tree and its generation.
+            let (generation, tree) = {
+                let connection = self.connection.lock().expect("metadata mutex is healthy");
+                let workspace = workspace_row(&connection, name)?;
+                (
+                    workspace.head_generation,
+                    build_snapshot(&connection, &workspace, None)?,
+                )
+            };
+
+            // Phase B: plan and admit outside the lock — region reads and
+            // object admission must not hold the metadata store.
+            let mut jobs = Vec::new();
+            for (path, entry) in tree.entries() {
+                if let Entry::File {
+                    planner, records, ..
+                } = entry
+                {
+                    if let Some(job) = self.plan_seal_job(path, *planner, records)? {
+                        jobs.push(job);
+                    }
+                }
+            }
+
+            // Phase C: one transaction re-checks the generation, applies the
+            // re-boundary, and seals. A moved head invalidates phase B's
+            // analysis, so it retries from the top.
+            let mut connection = self.connection.lock().expect("metadata mutex is healthy");
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let workspace = workspace_row(&tx, name)?;
+            if workspace.head_generation != generation {
+                drop(tx);
+                continue;
+            }
+            for job in &jobs {
+                for digest in &job.new_digests {
+                    if !self.store.exists(digest) {
+                        return Err(WorkspaceError::MissingObject { digest: *digest });
+                    }
+                }
+            }
+            for job in &jobs {
+                if job.update_records {
+                    apply_mutation(
+                        &tx,
+                        &workspace,
+                        &Mutation::SetRecords {
+                            path: job.path.clone(),
+                            records: job.records.clone(),
+                        },
+                    )?;
+                }
+                let inode = resolve_path(&tx, &workspace, &job.path)?
+                    .ok_or_else(|| WorkspaceError::Missing(job.path.clone()))?;
+                tx.execute(
+                    "UPDATE inodes SET planner = ?1 WHERE id = ?2",
+                    params![planner_to_row(job.planner), inode.id],
+                )?;
+            }
+            let sealed_generation = if jobs.is_empty() {
+                workspace.head_generation
+            } else {
+                let next = workspace.head_generation + 1;
+                tx.execute(
+                    "UPDATE workspaces SET head_generation = ?1 WHERE id = ?2",
+                    params![next as i64, workspace.id],
+                )?;
+                next
+            };
+            let workspace = WorkspaceRow {
+                head_generation: sealed_generation,
+                ..workspace
+            };
+            let snapshot = build_snapshot(&tx, &workspace, parent)?;
+            let bytes = snapshot.to_bytes();
+            let id = snapshot.snapshot_id();
+            tx.execute(
+                "INSERT OR IGNORE INTO snapshots (id, blob, sealed_generation) VALUES (?1, ?2, ?3)",
+                params![id.as_bytes().as_slice(), bytes, sealed_generation as i64],
+            )?;
+            tx.commit()?;
+            return Ok(id);
+        }
+        Err(WorkspaceError::SealContention)
+    }
+
+    /// Computes one file's seal-time re-boundary work, or `None` when the
+    /// committed records already are the canonical form.
+    fn plan_seal_job(
+        &self,
+        path: &str,
+        stored_planner: PlannerId,
+        records: &[FileRecord],
+    ) -> Result<Option<SealJob>, WorkspaceError> {
+        if records.is_empty()
+            || records
+                .iter()
+                .any(|record| matches!(record, FileRecord::Hole { .. }))
+        {
+            return Ok(None);
+        }
+        let source = RecordsSource::new(&self.store, records);
+        let planned = plan(&source)?;
+
+        let mut committed = Vec::with_capacity(records.len());
+        let mut position = 0_u64;
+        for record in records {
+            let FileRecord::Data { digest, length } = record else {
+                unreachable!("hole records were excluded above");
+            };
+            committed.push((position, *length, *digest));
+            position += *length;
+        }
+        let boundaries_match = committed.len() == planned.regions().len()
+            && committed
+                .iter()
+                .zip(planned.regions())
+                .all(|((start, length, _), region)| {
+                    *start == region.offset() && *length == region.length()
+                });
+        if boundaries_match {
+            if planned.planner() == stored_planner {
+                return Ok(None);
+            }
+            return Ok(Some(SealJob {
+                path: path.to_owned(),
+                planner: planned.planner(),
+                records: records.to_vec(),
+                update_records: false,
+                new_digests: Vec::new(),
+            }));
+        }
+
+        let by_range: HashMap<(u64, u64), ObjectDigest> = committed
+            .iter()
+            .map(|(start, length, digest)| ((*start, *length), *digest))
+            .collect();
+        let mut new_records = Vec::with_capacity(planned.regions().len());
+        let mut new_digests = Vec::new();
+        for region in planned.regions() {
+            if let Some(digest) = by_range.get(&(region.offset(), region.length())) {
+                new_records.push(FileRecord::Data {
+                    digest: *digest,
+                    length: region.length(),
+                });
+                continue;
+            }
+            let mut buffer = vec![0_u8; region.length() as usize];
+            source
+                .read_exact_at(region.offset(), &mut buffer)
+                .map_err(PlanError::Read)?;
+            let admitted = self.store.put_bytes(&buffer)?;
+            new_digests.push(admitted.digest());
+            new_records.push(FileRecord::Data {
+                digest: admitted.digest(),
+                length: region.length(),
+            });
+        }
+        Ok(Some(SealJob {
+            path: path.to_owned(),
+            planner: planned.planner(),
+            records: new_records,
+            update_records: true,
+            new_digests,
+        }))
     }
 
     /// Loads and re-verifies one sealed snapshot's canonical bytes.
@@ -610,6 +777,16 @@ struct WorkspaceRow {
     id: i64,
     head_generation: u64,
     root_inode: i64,
+}
+
+/// One file's computed seal-time re-boundary: the canonical records, the
+/// planner provenance they came from, and the digests admitted for them.
+struct SealJob {
+    path: String,
+    planner: PlannerId,
+    records: Vec<FileRecord>,
+    update_records: bool,
+    new_digests: Vec<ObjectDigest>,
 }
 
 struct ResolvedInode {
