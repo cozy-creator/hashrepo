@@ -93,6 +93,23 @@ fn pattern(seed: u8, length: usize) -> Vec<u8> {
 struct BinMount {
     child: process::Child,
     mountpoint: PathBuf,
+    done: bool,
+}
+
+impl Drop for BinMount {
+    /// A panicking test skips its explicit teardown; the guard still kills
+    /// the daemon and reaps the mount so no failure path leaks either.
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = process::Command::new("fusermount3")
+            .args(["-u", "-z"])
+            .arg(&self.mountpoint)
+            .status();
+    }
 }
 
 impl BinMount {
@@ -106,6 +123,10 @@ impl BinMount {
                 workspace,
                 mountpoint.to_str().expect("test paths are UTF-8"),
             ])
+            // Null stdio: an inherited pipe would keep the test harness's
+            // output stream open for as long as a leaked daemon lives.
+            .stdout(process::Stdio::null())
+            .stderr(process::Stdio::null())
             .spawn()
             .expect("daemon spawns");
         for _ in 0..100 {
@@ -113,6 +134,7 @@ impl BinMount {
                 return Self {
                     child,
                     mountpoint: mountpoint.to_path_buf(),
+                    done: false,
                 };
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -123,6 +145,7 @@ impl BinMount {
     }
 
     fn sigterm_and_wait(mut self) {
+        self.done = true;
         let _ = process::Command::new("kill")
             .args(["-TERM", &self.child.id().to_string()])
             .status();
@@ -134,6 +157,7 @@ impl BinMount {
     }
 
     fn sigkill_and_reap(mut self) {
+        self.done = true;
         let _ = process::Command::new("kill")
             .args(["-KILL", &self.child.id().to_string()])
             .status();
