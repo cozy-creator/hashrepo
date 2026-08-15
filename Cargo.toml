@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/tensorfs-core"]
+members = ["crates/tensorfs-core", "crates/tensorfsd"]
 resolver = "2"
 
 [workspace.package]
