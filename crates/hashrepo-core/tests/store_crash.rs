@@ -3,6 +3,8 @@
 //! and then be reclaimed, and a live writer in another process must never be
 //! collected. The child role re-invokes this test binary with an env flag.
 
+#![cfg(any(unix, windows))]
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
