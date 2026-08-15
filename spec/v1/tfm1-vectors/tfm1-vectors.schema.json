@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cozy-creator/tensorfs/spec/v1/tfm1-vectors/tfm1-vectors.schema.json",
+  "title": "TensorFS TFM1 manifest vectors v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "format",
+    "hash",
+    "max_object_size",
+    "fixture_encoding",
+    "golden",
+    "refusals"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "tfm1-vectors.schema.json"
+    },
+    "format": {
+      "const": 1
+    },
+    "hash": {
+      "const": "sha256"
+    },
+    "max_object_size": {
+      "const": 67108864
+    },
+    "fixture_encoding": {
+      "const": "lowercase-hex-lf-v1"
+    },
+    "golden": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/golden"
+      }
+    },
+    "refusals": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/refusal"
+      }
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "fixture": {
+      "type": "string",
+      "pattern": "^fixtures/[a-z0-9]+(?:-[a-z0-9]+)*\\.hex$"
+    },
+    "golden": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "fixture", "snapshot_id", "description"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "fixture": {
+          "$ref": "#/$defs/fixture"
+        },
+        "snapshot_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "refusal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "fixture", "reason"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "fixture": {
+          "$ref": "#/$defs/fixture"
+        },
+        "reason": {
+          "$ref": "#/$defs/name"
+        }
+      }
+    }
+  }
+}

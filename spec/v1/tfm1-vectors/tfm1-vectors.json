@@ -1,0 +1,216 @@
+{
+  "$schema": "tfm1-vectors.schema.json",
+  "format": 1,
+  "hash": "sha256",
+  "max_object_size": 67108864,
+  "fixture_encoding": "lowercase-hex-lf-v1",
+  "golden": [
+    {
+      "name": "empty-snapshot",
+      "fixture": "fixtures/empty-snapshot.hex",
+      "snapshot_id": "e67d41aa5666a5bb2d34e8666c51541eadaede2c23570d1580f9ff1b771b3289",
+      "description": "no parent and no entries; the smallest canonical manifest"
+    },
+    {
+      "name": "single-file",
+      "fixture": "fixtures/single-file.hex",
+      "snapshot_id": "46c0d86a44a7c496ef5ed409bdc36ee4d86856ad5f889661a0f9f7923bb5b6cc",
+      "description": "one raw-planned regular file with one data record"
+    },
+    {
+      "name": "tree",
+      "fixture": "fixtures/tree.hex",
+      "snapshot_id": "16adf8c18c1a8e07a5cebc5ce2418132eb5aeea4622aa70cb7dbdd1326ff65d7",
+      "description": "nested explicit directories, safetensors provenance, and an executable file"
+    },
+    {
+      "name": "sparse-file",
+      "fixture": "fixtures/sparse-file.hex",
+      "snapshot_id": "5aa22d0a296c14d208562b94339a2cee5a80cbc17309cff6014de2a66057d658",
+      "description": "hole, data, and a beyond-object-size trailing hole"
+    },
+    {
+      "name": "hardlink-group",
+      "fixture": "fixtures/hardlink-group.hex",
+      "snapshot_id": "2e8b14539f9b34fe8304557db60b036581dbfaa2505cdbcebc054a0f7cde6a60",
+      "description": "a three-path link group re-rooted onto its first sorted path"
+    },
+    {
+      "name": "symlink",
+      "fixture": "fixtures/symlink.hex",
+      "snapshot_id": "a7803a12794a04ace6394064affd594010c8f252424459fc7889aac0e44fd0d3",
+      "description": "a symlink whose target is stored bytes, not a resolved path"
+    },
+    {
+      "name": "empty-directory",
+      "fixture": "fixtures/empty-directory.hex",
+      "snapshot_id": "501fb3a851bab361eba3d0118586a2105513cf6d8ae13d9aca0558f9b54e7bbe",
+      "description": "an explicit directory with no children"
+    },
+    {
+      "name": "boundary-objects",
+      "fixture": "fixtures/boundary-objects.hex",
+      "snapshot_id": "f4d792b531b50c325b73788c35e9600d99958c0140af9f8246cfb3dc6bf17a85",
+      "description": "data record lengths 1, 64 MiB minus one, and exactly 64 MiB, plus an empty file"
+    },
+    {
+      "name": "with-parent",
+      "fixture": "fixtures/with-parent.hex",
+      "snapshot_id": "2a760bb2a5e3f0e59f01489a8d26cba76468fc728531d1dd2571307b63165c68",
+      "description": "names the empty snapshot as its explicit parent history"
+    },
+    {
+      "name": "gguf-provenance",
+      "fixture": "fixtures/gguf-provenance.hex",
+      "snapshot_id": "7fee109aa9cec7c36a2109ce5d1c99be9d2e4cde8d37c5c2e8a76003dce978bd",
+      "description": "a gguf-v1 planned file pinning the remaining planner tag"
+    }
+  ],
+  "refusals": [
+    {
+      "name": "bad-magic",
+      "fixture": "fixtures/refusal-bad-magic.hex",
+      "reason": "bad-magic"
+    },
+    {
+      "name": "truncated",
+      "fixture": "fixtures/refusal-truncated.hex",
+      "reason": "truncated"
+    },
+    {
+      "name": "trailing-bytes",
+      "fixture": "fixtures/refusal-trailing-bytes.hex",
+      "reason": "trailing-bytes"
+    },
+    {
+      "name": "parent-flag",
+      "fixture": "fixtures/refusal-parent-flag.hex",
+      "reason": "parent-flag"
+    },
+    {
+      "name": "entry-order",
+      "fixture": "fixtures/refusal-entry-order.hex",
+      "reason": "entry-order"
+    },
+    {
+      "name": "duplicate-path",
+      "fixture": "fixtures/refusal-duplicate-path.hex",
+      "reason": "duplicate-path"
+    },
+    {
+      "name": "case-fold-collision",
+      "fixture": "fixtures/refusal-case-fold-collision.hex",
+      "reason": "case-fold-collision"
+    },
+    {
+      "name": "missing-parent-directory",
+      "fixture": "fixtures/refusal-missing-parent-directory.hex",
+      "reason": "missing-parent-directory"
+    },
+    {
+      "name": "path-absolute",
+      "fixture": "fixtures/refusal-path-absolute.hex",
+      "reason": "path-absolute"
+    },
+    {
+      "name": "path-dot-segment",
+      "fixture": "fixtures/refusal-path-dot-segment.hex",
+      "reason": "path-dot-segment"
+    },
+    {
+      "name": "path-empty-segment",
+      "fixture": "fixtures/refusal-path-empty-segment.hex",
+      "reason": "path-empty-segment"
+    },
+    {
+      "name": "path-forbidden-character",
+      "fixture": "fixtures/refusal-path-forbidden-character.hex",
+      "reason": "path-forbidden-character"
+    },
+    {
+      "name": "path-trailing-dot-space",
+      "fixture": "fixtures/refusal-path-trailing-dot-space.hex",
+      "reason": "path-trailing-dot-space"
+    },
+    {
+      "name": "path-windows-reserved",
+      "fixture": "fixtures/refusal-path-windows-reserved.hex",
+      "reason": "path-windows-reserved"
+    },
+    {
+      "name": "path-not-nfc",
+      "fixture": "fixtures/refusal-path-not-nfc.hex",
+      "reason": "path-not-nfc"
+    },
+    {
+      "name": "path-utf8",
+      "fixture": "fixtures/refusal-path-utf8.hex",
+      "reason": "path-utf8"
+    },
+    {
+      "name": "path-length",
+      "fixture": "fixtures/refusal-path-length.hex",
+      "reason": "path-length"
+    },
+    {
+      "name": "unknown-entry-kind",
+      "fixture": "fixtures/refusal-unknown-entry-kind.hex",
+      "reason": "unknown-entry-kind"
+    },
+    {
+      "name": "executable-flag",
+      "fixture": "fixtures/refusal-executable-flag.hex",
+      "reason": "executable-flag"
+    },
+    {
+      "name": "unknown-planner",
+      "fixture": "fixtures/refusal-unknown-planner.hex",
+      "reason": "unknown-planner"
+    },
+    {
+      "name": "unknown-record-tag",
+      "fixture": "fixtures/refusal-unknown-record-tag.hex",
+      "reason": "unknown-record-tag"
+    },
+    {
+      "name": "zero-length-record",
+      "fixture": "fixtures/refusal-zero-length-record.hex",
+      "reason": "zero-length-record"
+    },
+    {
+      "name": "adjacent-holes",
+      "fixture": "fixtures/refusal-adjacent-holes.hex",
+      "reason": "adjacent-holes"
+    },
+    {
+      "name": "data-too-large",
+      "fixture": "fixtures/refusal-data-too-large.hex",
+      "reason": "data-too-large"
+    },
+    {
+      "name": "length-sum-mismatch",
+      "fixture": "fixtures/refusal-length-sum-mismatch.hex",
+      "reason": "length-sum-mismatch"
+    },
+    {
+      "name": "record-limit",
+      "fixture": "fixtures/refusal-record-limit.hex",
+      "reason": "record-limit"
+    },
+    {
+      "name": "count-exceeds-input",
+      "fixture": "fixtures/refusal-count-exceeds-input.hex",
+      "reason": "count-exceeds-input"
+    },
+    {
+      "name": "hardlink-ordinal",
+      "fixture": "fixtures/refusal-hardlink-ordinal.hex",
+      "reason": "hardlink-ordinal"
+    },
+    {
+      "name": "symlink-target",
+      "fixture": "fixtures/refusal-symlink-target.hex",
+      "reason": "symlink-target"
+    }
+  ]
+}
