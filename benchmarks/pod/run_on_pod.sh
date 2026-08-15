@@ -161,7 +161,10 @@ if [ "$FUSE_OK" = 1 ]; then
 fi
 if [ "$FUSE_OK" != 1 ]; then
   echo "NOTE: mount arms unavailable on this pod; native + bypass only."
-  MOUNT_FILE="$WORK/native.bin"   # bench.py needs a path; rows get labelled below
+  # "-" omits the mount lane entirely. Pointing it at the native file instead
+  # would silently emit "mount" rows that are really native rows measured
+  # twice -- a fabricated arm, which is worse than a missing one.
+  MOUNT_FILE="-"
 fi
 
 # --------------------------------------------------------------- READ ARMS
