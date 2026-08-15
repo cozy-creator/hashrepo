@@ -20,8 +20,15 @@
 //! The kill-point distribution is printed, so coverage is observable rather
 //! than assumed: a matrix whose kills all land in one phase is not a matrix.
 //!
-//! Default run: 30 iterations. `TENSORFS_HEAVY=1` runs 200. Any failure
-//! prints the seed for exact replay.
+//! Default run: 30 iterations, well under a minute. `TENSORFS_HEAVY=1` runs
+//! 200. Any failure prints the seed for exact replay.
+//!
+//! The heavy run costs QUADRATIC time, not 6.7x the default: the store
+//! accumulates across rounds, and each round re-verifies the whole head tree
+//! and rehashes every resident object. That is the point — the invariant is
+//! checked against everything the store has ever accumulated, not just the
+//! latest round — but it means the 200-round variant takes tens of minutes
+//! on a loaded box and belongs in a deliberate soak, never in per-PR CI.
 
 #![cfg(any(unix, windows))]
 
