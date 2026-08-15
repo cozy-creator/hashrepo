@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cozy-creator/tensorfs/spec/v1/tfp1-vectors/tfp1-vectors.schema.json",
+  "title": "TensorFS TFP1 staging-envelope vectors v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "format",
+    "hash",
+    "max_object_size",
+    "fixture_encoding",
+    "golden",
+    "refusals"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "tfp1-vectors.schema.json"
+    },
+    "format": {
+      "const": 1
+    },
+    "hash": {
+      "const": "sha256"
+    },
+    "max_object_size": {
+      "const": 67108864
+    },
+    "fixture_encoding": {
+      "const": "lowercase-hex-lf-v1"
+    },
+    "golden": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "fixture", "fixture_sha256", "description"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "fixture": { "type": "string", "pattern": "^fixtures/[a-z0-9-]+\\.hex$" },
+          "fixture_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 of the fixture bytes; a corpus drift pin, never an identity"
+          },
+          "description": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "refusals": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "fixture", "reason"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "fixture": { "type": "string", "pattern": "^fixtures/refusal-[a-z0-9-]+\\.hex$" },
+          "reason": { "type": "string", "pattern": "^[a-z0-9-]+$" }
+        }
+      }
+    }
+  }
+}
