@@ -63,6 +63,10 @@ use tensorfs_core::workspace::{LeaseId, LeaseKind, Mutation, WorkspaceError, Wor
 use crate::MountError;
 use crate::locks::LockTable;
 
+/// Bounded compose parallelism: hash+admit workers per fsync batch. Peak
+/// compose memory is this many 64 MiB slot buffers.
+const COMPOSE_WORKERS: usize = 4;
+
 /// Namespace facts change under this mount, so the kernel may only cache them
 /// briefly; one daemon owns the workspace, so one second is safe and cheap.
 const TTL: Duration = Duration::from_secs(1);
@@ -525,7 +529,11 @@ impl WorkspaceFs {
         let size = file.size;
         let committed_size = file.committed_size;
 
-        let mut records: Vec<FileRecord> = Vec::new();
+        // Pass 1: classify every 64 MiB grid slot without doing byte work,
+        // so the byte work can then run with bounded parallelism. A `None`
+        // plan entry is a slot whose bytes must be composed and admitted.
+        let mut records: Vec<Option<FileRecord>> = Vec::new();
+        let mut compose: Vec<(usize, u64, u64)> = Vec::new();
         let mut slot_start = 0_u64;
         while slot_start < size {
             let slot_end = (slot_start + MAX_OBJECT_SIZE).min(size);
@@ -544,49 +552,85 @@ impl WorkspaceFs {
                     _ => None,
                 };
                 if let Some(record) = reused {
-                    records.push(record);
+                    records.push(Some(record));
                     slot_start = slot_end;
                     continue;
                 }
                 if slot_start >= committed_size {
-                    records.push(FileRecord::Hole {
+                    records.push(Some(FileRecord::Hole {
                         length: slot_length,
-                    });
+                    }));
                     slot_start = slot_end;
                     continue;
                 }
             }
-            let mut buffer = vec![0_u8; slot_length as usize];
-            self.fill_committed(ino, None, slot_start, &mut buffer)?;
-            if let Some(WNode::File(file)) = self.nodes.get(&ino) {
-                let dirty = file.dirty.as_ref().expect("dirty state checked above");
-                for (&s, &l) in dirty.ranges.range(..slot_end) {
-                    let range_end = s + l;
-                    if range_end <= slot_start {
-                        continue;
-                    }
-                    let from = slot_start.max(s);
-                    let to = slot_end.min(range_end);
-                    dirty
-                        .spill
-                        .read_exact_at(
-                            &mut buffer[(from - slot_start) as usize..(to - slot_start) as usize],
-                            from,
-                        )
-                        .map_err(|_| libc::EIO)?;
-                }
-            }
-            let admitted = self
-                .meta
-                .store()
-                .put_bytes(&buffer)
-                .map_err(|_| libc::EIO)?;
-            records.push(FileRecord::Data {
-                digest: admitted.digest(),
-                length: slot_length,
-            });
+            compose.push((records.len(), slot_start, slot_length));
+            records.push(None);
             slot_start = slot_end;
         }
+
+        // Pass 2: compose in batches — buffers fill sequentially (page-cache
+        // and spill reads), then hash+admit runs across a bounded worker
+        // pool. Peak memory is COMPOSE_WORKERS slot buffers; admission order
+        // within a batch is irrelevant because each record lands at its
+        // planned index.
+        for batch in compose.chunks(COMPOSE_WORKERS) {
+            let mut filled: Vec<(usize, Vec<u8>)> = Vec::with_capacity(batch.len());
+            for &(index, slot_start, slot_length) in batch {
+                let slot_end = slot_start + slot_length;
+                let mut buffer = vec![0_u8; slot_length as usize];
+                self.fill_committed(ino, None, slot_start, &mut buffer)?;
+                if let Some(WNode::File(file)) = self.nodes.get(&ino) {
+                    let dirty = file.dirty.as_ref().expect("dirty state checked above");
+                    for (&s, &l) in dirty.ranges.range(..slot_end) {
+                        let range_end = s + l;
+                        if range_end <= slot_start {
+                            continue;
+                        }
+                        let from = slot_start.max(s);
+                        let to = slot_end.min(range_end);
+                        dirty
+                            .spill
+                            .read_exact_at(
+                                &mut buffer
+                                    [(from - slot_start) as usize..(to - slot_start) as usize],
+                                from,
+                            )
+                            .map_err(|_| libc::EIO)?;
+                    }
+                }
+                filled.push((index, buffer));
+            }
+            let store = self.meta.store();
+            let admitted: Vec<(usize, Result<FileRecord, i32>)> = std::thread::scope(|scope| {
+                let workers: Vec<_> = filled
+                    .iter()
+                    .map(|(index, buffer)| {
+                        scope.spawn(move || {
+                            let record = store
+                                .put_bytes(buffer)
+                                .map(|object| FileRecord::Data {
+                                    digest: object.digest(),
+                                    length: buffer.len() as u64,
+                                })
+                                .map_err(|_| libc::EIO);
+                            (*index, record)
+                        })
+                    })
+                    .collect();
+                workers
+                    .into_iter()
+                    .map(|worker| worker.join().expect("compose workers do not panic"))
+                    .collect()
+            });
+            for (index, record) in admitted {
+                records[index] = Some(record?);
+            }
+        }
+        let records: Vec<FileRecord> = records
+            .into_iter()
+            .map(|record| record.expect("every slot is planned or composed"))
+            .collect();
 
         // TFM1 refuses adjacent holes, so consecutive hole slots merge.
         let mut merged: Vec<FileRecord> = Vec::new();
@@ -666,6 +710,19 @@ impl Filesystem for WorkspaceFs {
         // never consults the table; with it, lock state is mount-owned and
         // uniform across the future macFUSE/WinFsp backends.
         let _ = config.add_capabilities(fuser::consts::FUSE_POSIX_LOCKS);
+        // Performance negotiation, measured in the pgw#1256 matrix:
+        // FUSE_MAX_PAGES lifts requests from the historic 32-page (128 KiB)
+        // cap to max_write/max_readahead, and the kernel clamps both to its
+        // own ceiling (1 MiB on current Linux). FUSE_WRITEBACK_CACHE batches
+        // dirty pages in the kernel so ordinary write() streams arrive as
+        // full-sized WRITE requests instead of per-call trickles; the
+        // durability contract is unchanged because the kernel flushes dirty
+        // pages ahead of FSYNC on the same file, and dirty-unsynced bytes
+        // dying with the daemon is already the documented semantic.
+        let _ = config
+            .add_capabilities(fuser::consts::FUSE_MAX_PAGES | fuser::consts::FUSE_WRITEBACK_CACHE);
+        let _ = config.set_max_write(1024 * 1024);
+        let _ = config.set_max_readahead(1024 * 1024);
         Ok(())
     }
 
