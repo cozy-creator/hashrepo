@@ -13,3 +13,5 @@ pub mod tfp1;
 /// store's real-filesystem platform gate.
 #[cfg(any(unix, windows))]
 pub mod workspace;
+#[cfg(any(unix, windows))]
+mod workspace_source;
