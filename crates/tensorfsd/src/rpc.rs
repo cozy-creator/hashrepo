@@ -291,19 +291,42 @@ fn serve_connection(mut stream: UnixStream, state: &Mutex<DaemonState>, stop: &A
     drop(detached);
 }
 
+/// Fills `buffer` from `filled` onward, riding out poll-window timeouts once
+/// any byte of the frame has arrived. `read_exact` cannot be retried after
+/// `WouldBlock` — it leaves the buffer unspecified and the stream position
+/// advanced — so this tracks the fill offset explicitly.
+fn fill_frame_bytes(
+    stream: &mut UnixStream,
+    buffer: &mut [u8],
+    frame_started: bool,
+) -> Result<Option<usize>, RpcError> {
+    let mut filled = 0_usize;
+    while filled < buffer.len() {
+        match stream.read(&mut buffer[filled..]) {
+            Ok(0) => return Ok(None),
+            Ok(read) => filled += read,
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.kind() == io::ErrorKind::TimedOut =>
+            {
+                if !frame_started && filled == 0 {
+                    // Nothing of this frame has arrived; let the caller
+                    // re-check the stop flag.
+                    return Err(RpcError::new("idle", "no frame within the poll window"));
+                }
+                // A frame is in flight; keep riding out idle ticks.
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => return Ok(None),
+        }
+    }
+    Ok(Some(filled))
+}
+
 fn read_frame(stream: &mut UnixStream) -> Result<Option<Vec<u8>>, RpcError> {
     let mut length = [0_u8; 4];
-    match stream.read_exact(&mut length) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error)
-            if error.kind() == io::ErrorKind::WouldBlock
-                || error.kind() == io::ErrorKind::TimedOut =>
-        {
-            // No frame within the poll window; the caller re-checks stop.
-            return Err(RpcError::new("idle", "no frame within the poll window"));
-        }
-        Err(_) => return Ok(None),
+    if fill_frame_bytes(stream, &mut length, false)?.is_none() {
+        return Ok(None);
     }
     let length = u32::from_le_bytes(length);
     if length == 0 || length > MAX_FRAME_BYTES {
@@ -313,19 +336,11 @@ fn read_frame(stream: &mut UnixStream) -> Result<Option<Vec<u8>>, RpcError> {
         ));
     }
     let mut bytes = vec![0_u8; length as usize];
-    // The body follows its length immediately; ride out idle ticks so a
-    // slowly written frame is not misread as a hangup.
-    loop {
-        match stream.read_exact(&mut bytes) {
-            Ok(()) => return Ok(Some(bytes)),
-            Err(error)
-                if error.kind() == io::ErrorKind::WouldBlock
-                    || error.kind() == io::ErrorKind::TimedOut =>
-            {
-                continue;
-            }
-            Err(_) => return Ok(None),
-        }
+    // The body follows its length immediately; a body read never treats the
+    // poll window as idle because the frame is already in flight.
+    match fill_frame_bytes(stream, &mut bytes, true)? {
+        Some(_) => Ok(Some(bytes)),
+        None => Ok(None),
     }
 }
 
