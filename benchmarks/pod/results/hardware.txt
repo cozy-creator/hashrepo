@@ -1,0 +1,43 @@
+## cpu
+model name	: AMD EPYC 4564P 16-Core Processor
+cores(nproc): 16
+siblings: 32
+sha_ni: sha_ni
+
+## memory
+MemTotal:       130963916 kB
+MemAvailable:   120064992 kB
+
+## block devices
+NAME          SIZE TYPE ROTA MODEL
+loop0       115.3M loop    0 
+loop1        63.8M loop    0 
+loop2        50.1M loop    0 
+loop3        50.1M loop    0 
+loop5        63.8M loop    0 
+loop7          74M loop    0 
+loop8       115.1M loop    0 
+nvme0n1       1.8T disk    0 Samsung SSD 990 EVO Plus 2TB            
+|-nvme0n1p1     1G part    0 
+|-nvme0n1p2     2G part    0 
+`-nvme0n1p3   1.8T part    0 
+/sys/block/dm-0/queue/rotational = 0
+/sys/block/dm-1/queue/rotational = 0
+/sys/block/loop0/queue/rotational = 0
+/sys/block/loop1/queue/rotational = 0
+/sys/block/loop2/queue/rotational = 0
+/sys/block/loop3/queue/rotational = 0
+/sys/block/loop4/queue/rotational = 0
+/sys/block/loop5/queue/rotational = 0
+/sys/block/loop6/queue/rotational = 0
+/sys/block/loop7/queue/rotational = 0
+/sys/block/loop8/queue/rotational = 0
+/sys/block/nvme0n1/queue/rotational = 0
+
+## filesystem under /workspace/bench
+Filesystem     Type     Size  Used Avail Use% Mounted on
+overlay        overlay  100G  124M  100G   1% /
+overlay on / type overlay (rw,relatime,lowerdir=/var/lib/docker/overlay2/l/Z2UMIW354ONG3KOM44AGNKIBP5:/var/lib/docker/overlay2/l/BAQO3UZJT3377DIRVILQDWSSO7:/var/lib/docker/overlay2/l/VPDFMJ63LLFW6QRYQIUR4DHBT2:/var/lib/docker/overlay2/l/MEWJH32SQAINDSHQ6EG4USXG7W:/var/lib/docker/overlay2/l/FSVVBFWLOQTN5DR57I2XDQKHEL:/var/lib/docker/overlay2/l/PUZNGDLV4QNLAZINZZW6YL2JU3:/var/lib/docker/overlay2/l/RTETQKWFKJB4E6U5RGWL4VK735:/var/lib/docker/overlay2/l/BRJMT2RLXTOKAC734TWBVHE4JR:/var/lib/docker/overlay2/l/DVMAFGVOKDZNB7OHW7YZ3GI37U:/var/lib/docker/overlay2/l/VW5PCGRQUYFU4LQ6KFC6VBUXKQ:/var/lib/docker/overlay2/l/UIKH7OZNH7WCSLJMAH57NJQOTK:/var/lib/docker/overlay2/l/7NFQLX46HW5U2OFUR3FUYJ3KFH:/var/lib/docker/overlay2/l/BN37ALFLP4W256BGTCSLATZ4BY:/var/lib/docker/overlay2/l/TDKPUZS7AUT3VIEMPQGZHEY42H:/var/lib/docker/overlay2/l/64U3Y6ET22KLMGUSZZAZGMAIMT:/var/lib/docker/overlay2/l/ACVT3HYBTNKI7MHLC2WXOE6RHI:/var/lib/docker/overlay2/l/SRRXLCODWVDYVC6FXPTV5ILVL3:/var/lib/docker/overlay2/l/B4XAPGPTRMFVXEXGVROC2LPWEO:/var/lib/docker/overlay2/l/F4VEOWEWZRCTQHBW5UGP6WN6BF:/var/lib/docker/overlay2/l/UBM7LEL4YBHC7HYH4AWTLDW7UV:/var/lib/docker/overlay2/l/WYRED4DRAOR2FJE4IEYTWBOVT4:/var/lib/docker/overlay2/l/GGIQLZQEK4C7IIT3Q7HUADPV7C:/var/lib/docker/overlay2/l/GL7GBQVQ3XQ7UNLKZ5UISFVUW5:/var/lib/docker/overlay2/l/YW7SKQ7SW4V5VDCHVDRJTWJABV:/var/lib/docker/overlay2/l/7BC7WRXHNU3FSN2SG7WKPUNXRM:/var/lib/docker/overlay2/l/QNUV5T5THXZ3YI6ZA3K47KYTMG:/var/lib/docker/overlay2/l/DCK7GCSPY3APIZR6BVAGR54VUR:/var/lib/docker/overlay2/l/NXXXOEBQI7NPMXKH2O755OAY7K:/var/lib/docker/overlay2/l/KVSMDUC32QTEUEBDNRCKNKBMP5:/var/lib/docker/overlay2/l/PF4QUWQC5V5EXREGSSFUAENC7A:/var/lib/docker/overlay2/l/C7TS2NV5H4BLAF3CZW2ID7BCVA,upperdir=/var/lib/docker/overlay2/19e7aab322d3cee925e8c8a0683eb01201825ac39d98e07ecc24d285006cc5df/diff,workdir=/var/lib/docker/overlay2/19e7aab322d3cee925e8c8a0683eb01201825ac39d98e07ecc24d285006cc5df/work,nouserxattr)
+
+## load at profile time
+1.24 2.26 2.21 1/1265 1043
