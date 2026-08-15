@@ -859,8 +859,11 @@ mod linux {
         digest
             .iter()
             .take(6)
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+            .fold(String::with_capacity(12), |mut hex, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            })
     }
 
     fn fs_type_of(path: &Path) -> String {
