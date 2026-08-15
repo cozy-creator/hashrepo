@@ -289,20 +289,28 @@ fn a_cross_host_redirect_does_not_forward_the_bearer_token() {
     // The result itself does not matter; what the redirect target saw does.
     let _ = transport(&server.base).head();
 
-    let _first = server
+    let first = server
         .requests
         .recv_timeout(std::time::Duration::from_secs(10))
         .expect("the first server saw the request");
-    if let Ok(followed) = victim
+    assert_eq!(
+        first.authorization.as_deref(),
+        Some("Bearer t"),
+        "the token must ride the original request, or this test proves nothing"
+    );
+
+    // The redirect IS followed (measured), so this assertion is live rather
+    // than vacuous: had the token been forwarded, it would appear here.
+    let followed = victim
         .requests
         .recv_timeout(std::time::Duration::from_secs(10))
-    {
-        assert!(
-            followed.authorization.is_none(),
-            "the bearer token was forwarded across a redirect to {:?} — credential leak",
-            followed.host
-        );
-    }
+        .expect("the redirect target was reached; if this ever stops holding the test is vacuous");
+    assert_eq!(followed.path, "/stolen", "the redirect was not followed");
+    assert!(
+        followed.authorization.is_none(),
+        "the bearer token was forwarded across a redirect to {:?} — credential leak",
+        followed.host
+    );
 }
 
 // ===========================================================================
@@ -371,17 +379,20 @@ fn no_content_adversarial_download_can_place_wrong_bytes_locally() {
         let error = pull_snapshot(&meta, &hub, &id)
             .expect_err(&format!("{fault:?} must refuse, never adopt"));
 
-        // The refusal must come from the admission boundary or the manifest
-        // guard — a store/length/digest error, not a generic success.
+        // The refusal must come from the ADMISSION boundary specifically:
+        // the streaming writer hashes remote bytes as they arrive and refuses
+        // on any length or digest lie. Accepting a downstream guard here
+        // (e.g. adopt_snapshot's existence check) would let this test pass
+        // even with `finish_expecting` weakened to `finish`, which is exactly
+        // the mutation this assertion exists to kill.
         assert!(
             matches!(
                 error,
                 SyncError::Store(
                     StoreError::DigestMismatch { .. } | StoreError::LengthMismatch { .. }
-                ) | SyncError::Workspace(_)
-                    | SyncError::Transport(_)
+                )
             ),
-            "{fault:?} produced {error:?}"
+            "{fault:?} was not caught at the admission boundary; got {error:?}"
         );
 
         // Nothing landed: the poisoned digest is absent, and the snapshot was
