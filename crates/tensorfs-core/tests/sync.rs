@@ -189,10 +189,10 @@ impl SyncTransport for FakeHub {
         for (_path, entry) in snapshot.entries() {
             if let tensorfs_core::tfm1::Entry::File { records, .. } = entry {
                 for record in records {
-                    if let FileRecord::Data { digest, length } = record {
-                        if seen.insert(*digest.as_bytes()) {
-                            closure.push((*digest.as_bytes(), *length));
-                        }
+                    if let FileRecord::Data { digest, length } = record
+                        && seen.insert(*digest.as_bytes())
+                    {
+                        closure.push((*digest.as_bytes(), *length));
                     }
                 }
             }
@@ -584,11 +584,12 @@ fn an_edited_clone_pushes_only_its_changed_objects() {
         .expect("base has the file");
     let mut edited = records;
     for record in &mut edited {
-        if let FileRecord::Data { digest, length } = record {
-            if *length == 4096 && *digest != replacement.digest() {
-                *digest = replacement.digest();
-                break;
-            }
+        if let FileRecord::Data { digest, length } = record
+            && *length == 4096
+            && *digest != replacement.digest()
+        {
+            *digest = replacement.digest();
+            break;
         }
     }
     meta.commit_generation(

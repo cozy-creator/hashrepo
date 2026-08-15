@@ -515,7 +515,7 @@ fn parse_metadata_array<S: ByteSource + ?Sized>(
 }
 
 fn tensor_length(dimensions: [u64; 4], block_elements: u64, block_bytes: u64) -> ParseResult<u64> {
-    if dimensions[0] % block_elements != 0 {
+    if !dimensions[0].is_multiple_of(block_elements) {
         return Err(ParseFailure::Invalid);
     }
     let element_count = dimensions

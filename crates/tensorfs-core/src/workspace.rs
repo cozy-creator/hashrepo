@@ -422,10 +422,9 @@ impl WorkspaceStore {
                 if let Entry::File {
                     planner, records, ..
                 } = entry
+                    && let Some(job) = self.plan_seal_job(path, *planner, records)?
                 {
-                    if let Some(job) = self.plan_seal_job(path, *planner, records)? {
-                        jobs.push(job);
-                    }
+                    jobs.push(job);
                 }
             }
 
@@ -600,10 +599,10 @@ impl WorkspaceStore {
         for (_path, entry) in snapshot.entries() {
             if let Entry::File { records, .. } = entry {
                 for record in records {
-                    if let FileRecord::Data { digest, .. } = record {
-                        if !self.store.exists(digest) {
-                            return Err(WorkspaceError::MissingObject { digest: *digest });
-                        }
+                    if let FileRecord::Data { digest, .. } = record
+                        && !self.store.exists(digest)
+                    {
+                        return Err(WorkspaceError::MissingObject { digest: *digest });
                     }
                 }
             }

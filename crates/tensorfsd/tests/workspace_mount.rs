@@ -98,16 +98,16 @@ fn count_store_objects(root: &Path) -> usize {
 fn file_digests(store: &WorkspaceStore, workspace: &str, path: &str) -> Vec<String> {
     let tree = store.head_tree(workspace).expect("head tree builds");
     for (entry_path, entry) in tree.entries() {
-        if entry_path == path {
-            if let Entry::File { records, .. } = entry {
-                return records
-                    .iter()
-                    .map(|record| match record {
-                        FileRecord::Data { digest, .. } => digest.to_string(),
-                        FileRecord::Hole { length } => format!("hole:{length}"),
-                    })
-                    .collect();
-            }
+        if entry_path == path
+            && let Entry::File { records, .. } = entry
+        {
+            return records
+                .iter()
+                .map(|record| match record {
+                    FileRecord::Data { digest, .. } => digest.to_string(),
+                    FileRecord::Hole { length } => format!("hole:{length}"),
+                })
+                .collect();
         }
     }
     panic!("{path} is not a committed file");

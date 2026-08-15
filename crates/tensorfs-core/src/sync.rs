@@ -224,10 +224,10 @@ fn data_closure(snapshot: &Snapshot) -> Vec<(ObjectDigest, u64)> {
     for (_path, entry) in snapshot.entries() {
         if let Entry::File { records, .. } = entry {
             for record in records {
-                if let FileRecord::Data { digest, length } = record {
-                    if seen.insert(*digest.as_bytes()) {
-                        closure.push((*digest, *length));
-                    }
+                if let FileRecord::Data { digest, length } = record
+                    && seen.insert(*digest.as_bytes())
+                {
+                    closure.push((*digest, *length));
                 }
             }
         }

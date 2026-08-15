@@ -123,10 +123,10 @@ impl Dirty {
         for s in beyond {
             self.ranges.remove(&s);
         }
-        if let Some((&s, &l)) = self.ranges.range(..size).next_back() {
-            if s + l > size {
-                self.ranges.insert(s, size - s);
-            }
+        if let Some((&s, &l)) = self.ranges.range(..size).next_back()
+            && s + l > size
+        {
+            self.ranges.insert(s, size - s);
         }
     }
 
@@ -1100,12 +1100,11 @@ impl Filesystem for WorkspaceFs {
                 _ => (None, false),
             };
             if changed {
-                if let Some(path) = path {
-                    if let Err(code) = self.commit(&[Mutation::SetExecutable { path, executable }])
-                    {
-                        reply.error(code);
-                        return;
-                    }
+                if let Some(path) = path
+                    && let Err(code) = self.commit(&[Mutation::SetExecutable { path, executable }])
+                {
+                    reply.error(code);
+                    return;
                 }
                 if let Some(WNode::File(file)) = self.nodes.get_mut(&ino) {
                     file.executable = executable;
