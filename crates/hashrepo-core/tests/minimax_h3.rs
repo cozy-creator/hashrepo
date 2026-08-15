@@ -1,6 +1,6 @@
 //! Opt-in proof over the pinned official MiniMax-H3 transformer.
 //!
-//! Point `HASHREPO_MINIMAX_H3_DIR` at a directory holding the 14 shards of
+//! Point `TENSORFS_MINIMAX_H3_DIR` at a directory holding the 14 shards of
 //! `MiniMaxAI/MiniMax-H3` at revision
 //! `42ed227ee7df40d41602854ae760620d6eb651fe`. The corpus is about 62 GiB, so
 //! this is never a CI gate; without the variable the test reports skip and
@@ -22,7 +22,7 @@ use hashrepo_core::object::plan_and_hash;
 use hashrepo_core::planner::{ByteSource, MAX_OBJECT_SIZE, PlannerId, RegionKind};
 use hashrepo_core::source::FileByteSource;
 
-const ENV_DIR: &str = "HASHREPO_MINIMAX_H3_DIR";
+const ENV_DIR: &str = "TENSORFS_MINIMAX_H3_DIR";
 const SHARD_COUNT: usize = 14;
 const ADALN_MARKER: &str = "adaln_proj.linear.";
 
