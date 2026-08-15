@@ -284,9 +284,29 @@ mod linux {
         }
     }
 
+    /// Total bytes a process has moved, as stall-detector evidence. A big
+    /// `fsync` composes for minutes with zero driver-side progress, but the
+    /// composing child is reading and admitting objects the whole time — so
+    /// child I/O counts as progress too.
+    fn child_io_progress(pid: u32) -> u64 {
+        let text = fs::read_to_string(format!("/proc/{pid}/io")).unwrap_or_default();
+        let field = |name: &str| {
+            text.lines()
+                .find_map(|line| line.strip_prefix(name))
+                .and_then(|rest| rest.trim().parse::<u64>().ok())
+                .unwrap_or(0)
+        };
+        field("read_bytes:")
+            .wrapping_add(field("write_bytes:"))
+            .wrapping_add(field("syscr:"))
+            .wrapping_add(field("syscw:"))
+    }
+
     /// Runs one mounted workload on a worker thread under a stall watchdog.
-    /// No progress for [`WATCHDOG_STALL`] kills the mount child, which fails
-    /// the worker with EIO instead of wedging the whole run.
+    /// Progress is driver ticks plus the mount child's own I/O counters; only
+    /// when BOTH are flat for [`WATCHDOG_STALL`] is the arm wedged, and the
+    /// mount child is killed so the worker fails with EIO instead of wedging
+    /// the whole run.
     fn with_watchdog<T: Send + 'static>(
         mount: &mut ChildMount,
         progress: Arc<AtomicU64>,
@@ -296,29 +316,35 @@ mod linux {
         let worker = thread::spawn(move || {
             let _ = sender.send(work());
         });
-        let mut last_seen = progress.load(Ordering::Relaxed);
+        let child_pid = mount.child.id();
+        let observed = |driver: &AtomicU64| {
+            driver
+                .load(Ordering::Relaxed)
+                .wrapping_add(child_io_progress(child_pid))
+        };
+        let mut last_seen = observed(&progress);
         let mut last_change = Instant::now();
         let result = loop {
             match receiver.recv_timeout(Duration::from_millis(500)) {
                 Ok(result) => break result,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let now = progress.load(Ordering::Relaxed);
+                    let now = observed(&progress);
                     if now != last_seen {
                         last_seen = now;
                         last_change = Instant::now();
                     } else if last_change.elapsed() > WATCHDOG_STALL {
                         mount.abort();
-                        break receiver
+                        let outcome = receiver
                             .recv_timeout(Duration::from_secs(30))
                             .unwrap_or_else(|_| {
                                 Err("worker did not return after the mount abort".to_owned())
-                            })
-                            .and_then(|_| {
-                                Err::<T, String>(
-                                    "failed: timeout — no progress for 120s, mount child killed"
-                                        .to_owned(),
-                                )
                             });
+                        break match outcome {
+                            Ok(_) | Err(_) => Err(format!(
+                                "failed: timeout — no driver or child progress for                                  {}s, mount child killed",
+                                WATCHDOG_STALL.as_secs()
+                            )),
+                        };
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
