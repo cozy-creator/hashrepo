@@ -255,8 +255,8 @@ fn the_control_socket_serves_the_full_workspace_lifecycle() {
             "push_snapshot",
             json!({"snapshot": snapshot})
         ),
-        "unimplemented",
-        "push_snapshot refuses honestly until pgw#1258/th#1960"
+        "unconfigured",
+        "push_snapshot refuses honestly when the daemon has no sync target"
     );
     assert_eq!(
         error_code(&mut stream, 9, "mount_everything", json!({})),

@@ -3,7 +3,7 @@
 //! `tensorfsd mount-snapshot --store <root> --snapshot <hex> <mountpoint>`
 //! `tensorfsd mount-workspace --store <root> --workspace <name> <mountpoint>`
 //! `tensorfsd seal --store <root> --workspace <name> [--parent <hex>]`
-//! `tensorfsd serve --store <root> --socket <path> --mounts <dir>`
+//! `tensorfsd serve --store <root> --socket <path> --mounts <dir> [--remote <url>]`
 //!
 //! Foreground mounts, on-demand sealing, and the foreground control-plane
 //! daemon serving the eight-method v1 RPC surface over one mode-0600 Unix
@@ -37,7 +37,7 @@ mod linux {
         tensorfsd mount-snapshot --store <root> --snapshot <64-hex> <mountpoint>\n  \
         tensorfsd mount-workspace --store <root> --workspace <name> <mountpoint>\n  \
         tensorfsd seal --store <root> --workspace <name> [--parent <64-hex>]\n  \
-        tensorfsd serve --store <root> --socket <path> --mounts <dir>";
+        tensorfsd serve --store <root> --socket <path> --mounts <dir> [--remote <url>]";
 
     struct Parsed {
         store: Option<String>,
@@ -46,6 +46,7 @@ mod linux {
         parent: Option<String>,
         socket: Option<String>,
         mounts: Option<String>,
+        remote: Option<String>,
         positional: Option<String>,
     }
 
@@ -57,6 +58,7 @@ mod linux {
             parent: None,
             socket: None,
             mounts: None,
+            remote: None,
             positional: None,
         };
         let mut rest = arguments.iter();
@@ -68,6 +70,7 @@ mod linux {
                 "--parent" => parsed.parent = rest.next().cloned(),
                 "--socket" => parsed.socket = rest.next().cloned(),
                 "--mounts" => parsed.mounts = rest.next().cloned(),
+                "--remote" => parsed.remote = rest.next().cloned(),
                 _ if parsed.positional.is_none() => parsed.positional = Some(argument.clone()),
                 _ => return None,
             }
@@ -173,7 +176,13 @@ mod linux {
                     }
                 }
                 eprintln!("tensorfsd: serving control socket {socket} (store {store})");
-                match tensorfsd::rpc::serve(&store, &socket, &mounts, &stop) {
+                match tensorfsd::rpc::serve(
+                    &store,
+                    &socket,
+                    &mounts,
+                    parsed.remote.as_deref(),
+                    &stop,
+                ) {
                     Ok(()) => {
                         eprintln!("tensorfsd: control socket closed");
                         ExitCode::SUCCESS

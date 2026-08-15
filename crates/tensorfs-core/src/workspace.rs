@@ -589,6 +589,34 @@ impl WorkspaceStore {
         Ok(decode(&blob)?)
     }
 
+    /// Adopts one canonical TFM1 snapshot fetched from a remote. The bytes
+    /// are strictly decoded (every grammar and tree rule refuses), every
+    /// referenced data object must already be resident — pull admits objects
+    /// through the verifying writer before adopting, so a stat here is the
+    /// cheap re-check, not the trust boundary — and the blob is stored
+    /// idempotently under its self-verifying id.
+    pub fn adopt_snapshot(&self, bytes: &[u8]) -> Result<SnapshotId, WorkspaceError> {
+        let snapshot = decode(bytes)?;
+        for (_path, entry) in snapshot.entries() {
+            if let Entry::File { records, .. } = entry {
+                for record in records {
+                    if let FileRecord::Data { digest, .. } = record {
+                        if !self.store.exists(digest) {
+                            return Err(WorkspaceError::MissingObject { digest: *digest });
+                        }
+                    }
+                }
+            }
+        }
+        let id = snapshot.snapshot_id();
+        let connection = self.connection.lock().expect("metadata mutex is healthy");
+        connection.execute(
+            "INSERT OR IGNORE INTO snapshots (id, blob, sealed_generation) VALUES (?1, ?2, 0)",
+            params![id.as_bytes().as_slice(), bytes],
+        )?;
+        Ok(id)
+    }
+
     pub fn delete_snapshot(&self, id: &SnapshotId) -> Result<(), WorkspaceError> {
         let connection = self.connection.lock().expect("metadata mutex is healthy");
         let deleted = connection.execute(
