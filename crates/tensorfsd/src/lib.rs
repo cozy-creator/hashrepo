@@ -29,4 +29,6 @@ pub mod bench;
 #[cfg(target_os = "linux")]
 pub use snapshot_fs::{MountError, SnapshotMount, mount_snapshot};
 #[cfg(target_os = "linux")]
-pub use workspace_fs::{WorkspaceMount, mount_workspace};
+pub use workspace_fs::{
+    WorkspaceMount, assembly_budget_bytes, assembly_peak_bytes, mount_workspace,
+};
