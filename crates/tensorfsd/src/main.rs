@@ -3,10 +3,11 @@
 //! `tensorfsd mount-snapshot --store <root> --snapshot <hex> <mountpoint>`
 //! `tensorfsd mount-workspace --store <root> --workspace <name> <mountpoint>`
 //! `tensorfsd seal --store <root> --workspace <name> [--parent <hex>]`
+//! `tensorfsd serve --store <root> --socket <path> --mounts <dir>`
 //!
-//! Foreground mounts and on-demand sealing. The UDS control plane arrives
-//! with a later slice; this binary exists so every mount is drivable end to
-//! end.
+//! Foreground mounts, on-demand sealing, and the foreground control-plane
+//! daemon serving the eight-method v1 RPC surface over one mode-0600 Unix
+//! socket.
 
 use std::process::ExitCode;
 
@@ -35,13 +36,16 @@ mod linux {
     const USAGE: &str = "usage:\n  \
         tensorfsd mount-snapshot --store <root> --snapshot <64-hex> <mountpoint>\n  \
         tensorfsd mount-workspace --store <root> --workspace <name> <mountpoint>\n  \
-        tensorfsd seal --store <root> --workspace <name> [--parent <64-hex>]";
+        tensorfsd seal --store <root> --workspace <name> [--parent <64-hex>]\n  \
+        tensorfsd serve --store <root> --socket <path> --mounts <dir>";
 
     struct Parsed {
         store: Option<String>,
         snapshot: Option<String>,
         workspace: Option<String>,
         parent: Option<String>,
+        socket: Option<String>,
+        mounts: Option<String>,
         positional: Option<String>,
     }
 
@@ -51,6 +55,8 @@ mod linux {
             snapshot: None,
             workspace: None,
             parent: None,
+            socket: None,
+            mounts: None,
             positional: None,
         };
         let mut rest = arguments.iter();
@@ -60,6 +66,8 @@ mod linux {
                 "--snapshot" => parsed.snapshot = rest.next().cloned(),
                 "--workspace" => parsed.workspace = rest.next().cloned(),
                 "--parent" => parsed.parent = rest.next().cloned(),
+                "--socket" => parsed.socket = rest.next().cloned(),
+                "--mounts" => parsed.mounts = rest.next().cloned(),
                 _ if parsed.positional.is_none() => parsed.positional = Some(argument.clone()),
                 _ => return None,
             }
@@ -147,6 +155,31 @@ mod linux {
                     }
                     Err(error) => {
                         eprintln!("tensorfsd: seal failed: {error}");
+                        ExitCode::FAILURE
+                    }
+                }
+            }
+            "serve" => {
+                let (Some(store), Some(socket), Some(mounts)) =
+                    (parsed.store, parsed.socket, parsed.mounts)
+                else {
+                    return usage();
+                };
+                let stop = Arc::new(AtomicBool::new(false));
+                for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+                    if signal_hook::flag::register(signal, Arc::clone(&stop)).is_err() {
+                        eprintln!("tensorfsd: could not install a signal handler");
+                        return ExitCode::FAILURE;
+                    }
+                }
+                eprintln!("tensorfsd: serving control socket {socket} (store {store})");
+                match tensorfsd::rpc::serve(&store, &socket, &mounts, &stop) {
+                    Ok(()) => {
+                        eprintln!("tensorfsd: control socket closed");
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("tensorfsd: serve failed: {error}");
                         ExitCode::FAILURE
                     }
                 }
