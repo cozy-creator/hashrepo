@@ -1,11 +1,11 @@
 [workspace]
-members = ["crates/hashrepo-core"]
+members = ["crates/tensorfs-core"]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/cozy-creator/hashrepo"
+repository = "https://github.com/cozy-creator/tensorfs"
 rust-version = "1.85"
 
 [workspace.dependencies]

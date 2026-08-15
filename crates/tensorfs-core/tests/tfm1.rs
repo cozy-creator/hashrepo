@@ -1,6 +1,6 @@
-use hashrepo_core::object::ObjectDigest;
-use hashrepo_core::planner::{MAX_OBJECT_SIZE, PlannerId};
-use hashrepo_core::tfm1::{
+use tensorfs_core::object::ObjectDigest;
+use tensorfs_core::planner::{MAX_OBJECT_SIZE, PlannerId};
+use tensorfs_core::tfm1::{
     Entry, FileRecord, MAX_FILE_RECORDS, Snapshot, SnapshotBuilder, SnapshotId, Tfm1Error, decode,
 };
 

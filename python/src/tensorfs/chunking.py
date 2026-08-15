@@ -17,10 +17,10 @@ _TENSOR_FLOOR_BYTES = MAX_CHUNK_SIZE
 _TENSOR_STRIDE_BYTES = MAX_CHUNK_SIZE
 # safetensors 0.8.0's Rust reader refuses header lengths above 100,000,000
 # bytes (MAX_HEADER_SIZE in safetensors/src/tensor.rs). Match that format
-# boundary instead of conflating it with HashRepo's smaller object ceiling;
+# boundary instead of conflating it with TensorFS's smaller object ceiling;
 # the header region is sub-split below when it exceeds one CAS object.
 _MAX_SAFETENSORS_HEADER_BYTES = 100_000_000
-# HashRepo v1 targets 64-bit Linux/POSIX. Safetensors decodes every shape
+# TensorFS v1 targets 64-bit Linux/POSIX. Safetensors decodes every shape
 # dimension into Rust usize before it checks tensor byte lengths.
 _MAX_USIZE = (1 << 64) - 1
 

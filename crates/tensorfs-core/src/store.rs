@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn a_recycled_candidate_name_is_never_reclaimed() {
         let root = std::env::temp_dir().join(format!(
-            "hashrepo-store-unit-{}-{}",
+            "tensorfs-store-unit-{}-{}",
             process::id(),
             TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));

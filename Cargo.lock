@@ -83,19 +83,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hashrepo-core"
-version = "0.1.0"
-dependencies = [
- "fs4",
- "libc",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "unicode-normalization",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -213,6 +200,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tensorfs-core"
+version = "0.1.0"
+dependencies = [
+ "fs4",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "unicode-normalization",
 ]
 
 [[package]]

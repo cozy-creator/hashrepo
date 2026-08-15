@@ -8,10 +8,10 @@ import time
 from pathlib import Path
 from typing import TypedDict, cast
 
-import hashrepo
 import pytest
-from hashrepo import FileEntry, LocalCAS, RepositoryManifest
-from hashrepo import chunking as chunking_policy
+import tensorfs
+from tensorfs import FileEntry, LocalCAS, RepositoryManifest
+from tensorfs import chunking as chunking_policy
 
 HEADER_SAMPLES = Path(__file__).parent / "testdata" / "safetensors_header_samples.json"
 
@@ -488,8 +488,8 @@ def test_writer_is_automatic_and_retired_selector_is_not_accepted(
     entry = cas.ingest_file(source)
     header_end = len(expected) - 100
     assert [chunk.length for chunk in entry.chunks] == [header_end, 64, 36]
-    assert "WriterPolicy" not in hashrepo.__all__
-    assert not hasattr(hashrepo, "WriterPolicy")
+    assert "WriterPolicy" not in tensorfs.__all__
+    assert not hasattr(tensorfs, "WriterPolicy")
     assert "writer_policy" not in inspect.signature(LocalCAS.ingest_file).parameters
     assert "writer_policy" not in inspect.signature(LocalCAS.ingest_repository).parameters
     with pytest.raises(TypeError, match="writer_policy"):

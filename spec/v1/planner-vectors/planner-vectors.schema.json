@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/cozy-creator/hashrepo/spec/v1/planner-vectors/planner-vectors.schema.json",
-  "title": "HashRepo automatic planner vectors v1",
+  "$id": "https://github.com/cozy-creator/tensorfs/spec/v1/planner-vectors/planner-vectors.schema.json",
+  "title": "TensorFS automatic planner vectors v1",
   "type": "object",
   "additionalProperties": false,
   "required": [

@@ -1,6 +1,6 @@
-# HashRepo planner vectors v1
+# TensorFS planner vectors v1
 
-This directory is the language-neutral conformance corpus for HashRepo's
+This directory is the language-neutral conformance corpus for TensorFS's
 closed automatic planner registry. Rust, Go, and Python consumers decode the
 same fixture sources and compare the automatic result with the exact ordered
 regions and SHA-256 object digests in `planner-vectors.json`.

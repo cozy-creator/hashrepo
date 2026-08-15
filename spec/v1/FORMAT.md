@@ -1,4 +1,4 @@
-# hashrepo manifest v1
+# tensorfs manifest v1
 
 V1 has one canonical JSON representation. Chunk boundaries are explicit data,
 not a manifest-format version axis.
@@ -50,7 +50,7 @@ reference.
 
 ## Writer policy
 
-HashRepo has one automatic writer with a closed built-in planner registry.
+TensorFS has one automatic writer with a closed built-in planner registry.
 Planner selection uses bounded file bytes, never the path extension or a caller
 argument. Exactly these profile identifiers exist in v1:
 
@@ -133,6 +133,6 @@ stores lifecycle-expire the session-scoped staging namespace.
 Logical refs are atomic roots into immutable objects. A ref may target an
 ordinary object or a repository manifest; a manifest root reaches every object
 listed by its files. Local collection takes additional roots and manifests
-from consumers plus a mandatory age cutoff. HashRepo computes and deletes the
+from consumers plus a mandatory age cutoff. TensorFS computes and deletes the
 unreachable set, but never invents model, graph, tenant, quota, or retention
 policy.

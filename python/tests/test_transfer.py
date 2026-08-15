@@ -6,12 +6,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from hashrepo import (
+from tensorfs import (
     CASRef,
     LocalCAS,
     TransferGrant,
 )
-from hashrepo.transfer import _download, _TransientTransferError, _upload
+from tensorfs.transfer import _download, _TransientTransferError, _upload
 
 
 class MemoryTransport:

@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::io;
 
-use hashrepo_core::planner::{
+use tensorfs_core::planner::{
     ByteSource, MAX_OBJECT_SIZE, Plan, PlanError, PlannerId, RegionKind, plan,
 };
 

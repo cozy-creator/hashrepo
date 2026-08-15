@@ -635,7 +635,7 @@ class LocalCAS:
         """Delete unreferenced immutable objects older than a caller cutoff.
 
         Current logical refs are always roots. Consumers add active byte refs
-        and repository manifests; HashRepo deliberately owns no retention
+        and repository manifests; TensorFS deliberately owns no retention
         policy. A required age cutoff protects freshly produced bytes during the
         gap before a consumer installs its logical ref.
         """

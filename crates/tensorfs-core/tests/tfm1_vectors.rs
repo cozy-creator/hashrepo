@@ -9,11 +9,11 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
-use hashrepo_core::object::ObjectDigest;
-use hashrepo_core::planner::{MAX_OBJECT_SIZE, PlannerId};
-use hashrepo_core::tfm1::{FileRecord, SnapshotBuilder, SnapshotId, decode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tensorfs_core::object::ObjectDigest;
+use tensorfs_core::planner::{MAX_OBJECT_SIZE, PlannerId};
+use tensorfs_core::tfm1::{FileRecord, SnapshotBuilder, SnapshotId, decode};
 
 const CORPUS_DIR: &str = "../../spec/v1/tfm1-vectors";
 const REGEN_ENV: &str = "TENSORFS_WRITE_TFM1_VECTORS";
