@@ -180,6 +180,20 @@ impl BinMount {
 /// killed, so contention genuinely crosses process boundaries.
 struct LockHolder {
     child: process::Child,
+    done: bool,
+}
+
+impl Drop for LockHolder {
+    /// A panicking test skips its explicit `kill`; the holder sleeps for
+    /// minutes otherwise, holding its locks (and, if stdio were inherited,
+    /// the test harness's output pipe) the whole time.
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 impl LockHolder {
@@ -204,11 +218,13 @@ impl LockHolder {
         );
         let mut child = process::Command::new("python3")
             .args(["-c", &code])
+            .stdout(process::Stdio::null())
+            .stderr(process::Stdio::null())
             .spawn()
             .expect("lock holder spawns");
         for _ in 0..100 {
             if sentinel.exists() {
-                return Self { child };
+                return Self { child, done: false };
             }
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -217,11 +233,32 @@ impl LockHolder {
         panic!("lock holder did not signal readiness");
     }
 
+    /// Spawns an arbitrary lock-holding script that signals readiness
+    /// through `sentinel`, under the same guard as `hold`.
+    fn spawn_raw(code: &str, sentinel: &Path) -> Self {
+        let mut child = process::Command::new("python3")
+            .args(["-c", code])
+            .stdout(process::Stdio::null())
+            .stderr(process::Stdio::null())
+            .spawn()
+            .expect("lock helper spawns");
+        for _ in 0..100 {
+            if sentinel.exists() {
+                return Self { child, done: false };
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("lock helper did not signal readiness");
+    }
+
     fn pid(&self) -> u32 {
         self.child.id()
     }
 
     fn kill(mut self) {
+        self.done = true;
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -562,17 +599,7 @@ fn posix_locks_conflict_split_and_release_across_processes() {
         file = file.display(),
         sentinel = split_sentinel.display(),
     );
-    let mut splitter = process::Command::new("python3")
-        .args(["-c", &split_code])
-        .spawn()
-        .expect("splitter spawns");
-    for _ in 0..100 {
-        if split_sentinel.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    assert!(split_sentinel.exists(), "splitter signalled readiness");
+    let splitter = LockHolder::spawn_raw(&split_code, &split_sentinel);
     assert!(
         try_lock(&file, 4000, 2000, true),
         "the unlocked middle of a split lock is free"
@@ -585,8 +612,7 @@ fn posix_locks_conflict_split_and_release_across_processes() {
         !try_lock(&file, 9000, 500, true),
         "the right fragment still holds"
     );
-    let _ = splitter.kill();
-    let _ = splitter.wait();
+    splitter.kill();
 
     mount.sigterm_and_wait();
     fs::remove_dir_all(&root).ok();
