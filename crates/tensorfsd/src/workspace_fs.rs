@@ -3,15 +3,37 @@
 //! Ordinary file semantics over immutable CAS objects, with no whole-file
 //! materialization anywhere. Namespace mutations (create, mkdir, rename,
 //! unlink, symlink, chmod) commit durably as their own metadata generations
-//! the moment they return. File bytes land in a per-inode dirty overlay — an
-//! unlinked spill file holding only the dirty bytes at their logical offsets —
-//! and reads merge committed records with the newest dirty ranges. A durable
+//! the moment they return. File bytes land in a per-inode dirty overlay and
+//! reads merge committed records with the newest dirty ranges. A durable
 //! flush (`fsync`, `fdatasync`, or any close of a dirty handle) composes only
 //! the 64 MiB-grid objects the dirty ranges intersect, admits exactly those
 //! through the object store, and commits one new generation; untouched
 //! objects keep their digests without being read or rewritten. A daemon
 //! killed before the flush loses exactly the dirty bytes: recovery exposes
 //! the last committed generation, never a hybrid.
+//!
+//! # Slot assembly, and why a sequential write costs one write
+//!
+//! The overlay assembles bytes in RAM one 64 MiB grid slot at a time. The
+//! instant a slot is complete — fully dirty and a full grid object — it is
+//! hashed and admitted straight out of memory and its buffer is freed, so a
+//! sequential writer moves each byte to disk exactly once instead of once to
+//! a staging file and again into the object. Slots that cannot complete
+//! within a process-wide budget ([`assembly_budget_bytes`]) — a sparse or
+//! wildly out-of-order writer, or too many files dirty at once — degrade to
+//! the previous behaviour: an unlinked spill file holding the dirty bytes at
+//! their logical offsets, composed and admitted at flush. The overlay
+//! degrades; it never grows without bound.
+//!
+//! Admitting a slot before the generation that names it commits is safe
+//! precisely because objects are immutable and content addressed. Admission
+//! is itself atomic and durable (hash while writing, fsync, then no-clobber
+//! link at the digest path), so a crash mid-assembly can leave an
+//! unreferenced object for the epoch collector but never a torn one, and
+//! never a committed generation naming bytes that are not on disk. Bytes
+//! still in RAM when a daemon is killed are lost exactly as spilled bytes
+//! were: neither was ever fsynced, and both predate the flush that is the
+//! only durability promise.
 //!
 //! # Coherence and mmap
 //!
@@ -75,34 +97,174 @@ const LEASE_HOLDER: &str = "tensorfsd";
 
 static SPILL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// The dirty overlay of one regular file: an unlinked spill file holding only
-/// the dirty bytes at their logical offsets, plus the coalesced range list.
-/// The spill is disk-backed and self-cleaning on process death, so overlay
-/// memory stays O(ranges) regardless of how many bytes are dirty.
+/// Process-wide ceiling on bytes held in RAM for slot assembly, and the
+/// environment variable that overrides it.
+///
+/// The default is eight full grid slots. A single sequential writer never
+/// needs more than one resident slot — a slot is hashed, admitted and freed
+/// the moment its last byte lands — so 512 MiB lets eight writers stream at
+/// full speed simultaneously while capping the worst case, a sparse writer
+/// that touches the far end of many slots and completes none of them, at half
+/// a gigabyte on a host that routinely moves multi-gigabyte tensors. Past the
+/// ceiling the overlay degrades to the spill file rather than growing.
+const ASSEMBLY_BUDGET_ENV: &str = "TENSORFS_ASSEMBLY_BUDGET_BYTES";
+const DEFAULT_ASSEMBLY_BUDGET: u64 = 8 * MAX_OBJECT_SIZE;
+
+/// Bytes currently charged to the assembly budget, and the high-water mark
+/// over the process lifetime. The mark is evidence, not bookkeeping: a test
+/// that asserts memory stayed bounded reads it.
+static ASSEMBLY_CHARGED: AtomicU64 = AtomicU64::new(0);
+static ASSEMBLY_PEAK: AtomicU64 = AtomicU64::new(0);
+
+/// The configured assembly ceiling in bytes.
+pub fn assembly_budget_bytes() -> u64 {
+    std::env::var(ASSEMBLY_BUDGET_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_ASSEMBLY_BUDGET)
+}
+
+/// The most bytes this process has ever held in RAM for slot assembly.
+pub fn assembly_peak_bytes() -> u64 {
+    ASSEMBLY_PEAK.load(Ordering::Relaxed)
+}
+
+/// Reserves `bytes` against the process-wide ceiling, or refuses. Refusal is
+/// the whole point: the caller then spills instead of allocating.
+fn charge_assembly(bytes: u64) -> bool {
+    let budget = assembly_budget_bytes();
+    let mut current = ASSEMBLY_CHARGED.load(Ordering::Relaxed);
+    loop {
+        let next = current + bytes;
+        if next > budget {
+            return false;
+        }
+        match ASSEMBLY_CHARGED.compare_exchange_weak(
+            current,
+            next,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => {
+                ASSEMBLY_PEAK.fetch_max(next, Ordering::Relaxed);
+                return true;
+            }
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn release_assembly(bytes: u64) {
+    ASSEMBLY_CHARGED.fetch_sub(bytes, Ordering::Relaxed);
+}
+
+/// Where one 64 MiB grid slot's dirty bytes live.
+enum Slot {
+    /// In RAM, covering `[slot_start, slot_start + bytes.len())`, charged
+    /// against the assembly budget. Bytes outside the file's dirty ranges are
+    /// zero padding that no reader ever consults.
+    Resident(Vec<u8>),
+    /// The slot filled completely, so it was hashed and admitted straight out
+    /// of RAM — one write, no spill — and its memory was released. The object
+    /// is durable and immutable; only the generation naming it is still
+    /// uncommitted.
+    Admitted(tensorfs_core::object::ObjectDigest),
+    /// Overflow. The budget refused this slot, so its bytes went to the
+    /// unlinked spill file at their logical offsets, exactly as before.
+    Spilled,
+}
+
+/// The dirty overlay of one regular file.
+///
+/// Bytes are assembled in RAM one grid slot at a time and admitted the moment
+/// a slot completes, so a sequential writer moves each byte to disk exactly
+/// once. Slots that cannot complete within the process-wide budget — a sparse
+/// or wildly out-of-order writer, or simply too many files dirty at once —
+/// fall back to the unlinked spill file. Overlay bookkeeping stays O(ranges +
+/// slots) either way, and `ranges` remains the sole authority on which bytes
+/// are dirty regardless of where they live.
 struct Dirty {
-    spill: File,
+    /// Grid slot index -> where that slot's dirty bytes live.
+    slots: BTreeMap<u64, Slot>,
+    /// The overflow spill, created lazily and only when a slot overflows.
+    spill: Option<File>,
     /// start -> length; disjoint and coalesced.
     ranges: BTreeMap<u64, u64>,
+    /// Bytes this overlay currently charges to the assembly budget.
+    charged: u64,
+}
+
+impl Drop for Dirty {
+    fn drop(&mut self) {
+        release_assembly(self.charged);
+    }
 }
 
 impl Dirty {
-    fn new() -> io::Result<Self> {
-        let path = std::env::temp_dir().join(format!(
-            "tensorfsd-spill-{}-{}",
-            process::id(),
-            SPILL_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        let spill = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
-        // Unlink-open: the bytes live exactly as long as this handle.
-        std::fs::remove_file(&path)?;
-        Ok(Self {
-            spill,
+    fn new() -> Self {
+        Self {
+            slots: BTreeMap::new(),
+            spill: None,
             ranges: BTreeMap::new(),
-        })
+            charged: 0,
+        }
+    }
+
+    /// Opens the overflow spill on first use. An overlay that never overflows
+    /// never creates a file at all.
+    fn spill(&mut self) -> io::Result<&File> {
+        if self.spill.is_none() {
+            let path = std::env::temp_dir().join(format!(
+                "tensorfsd-spill-{}-{}",
+                process::id(),
+                SPILL_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            let spill = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path)?;
+            // Unlink-open: the bytes live exactly as long as this handle.
+            std::fs::remove_file(&path)?;
+            self.spill = Some(spill);
+        }
+        Ok(self.spill.as_ref().expect("spill was just ensured"))
+    }
+
+    /// Moves one resident slot's bytes to the spill and releases its charge.
+    fn demote(&mut self, index: u64, bytes: Vec<u8>) -> io::Result<()> {
+        let start = index * MAX_OBJECT_SIZE;
+        self.spill()?.write_all_at(&bytes, start)?;
+        let charged = bytes.len() as u64;
+        drop(bytes);
+        self.charged -= charged;
+        release_assembly(charged);
+        self.slots.insert(index, Slot::Spilled);
+        Ok(())
+    }
+
+    /// Grows a resident slot buffer to `needed` in-slot bytes, or reports that
+    /// the budget refused. Zero padding is invisible: `ranges` decides what is
+    /// readable.
+    fn grow(&mut self, bytes: &mut Vec<u8>, needed: usize) -> bool {
+        if bytes.len() >= needed {
+            return true;
+        }
+        let extra = (needed - bytes.len()) as u64;
+        if !charge_assembly(extra) {
+            return false;
+        }
+        bytes.resize(needed, 0);
+        self.charged += extra;
+        true
+    }
+
+    /// True when `ranges` covers `[start, end)` with no gap.
+    fn covers(&self, start: u64, end: u64) -> bool {
+        self.ranges
+            .range(..=start)
+            .next_back()
+            .is_some_and(|(&s, &l)| s <= start && s + l >= end)
     }
 
     fn add_range(&mut self, start: u64, length: u64) {
@@ -132,6 +294,18 @@ impl Dirty {
         {
             self.ranges.insert(s, size - s);
         }
+        // Slots wholly past the new end are unreachable through `ranges`;
+        // dropping them returns their memory to the budget instead of holding
+        // it until the file closes.
+        let first_dead = size.div_ceil(MAX_OBJECT_SIZE);
+        let dead: Vec<u64> = self.slots.range(first_dead..).map(|(&i, _)| i).collect();
+        for index in dead {
+            if let Some(Slot::Resident(bytes)) = self.slots.remove(&index) {
+                let charged = bytes.len() as u64;
+                self.charged -= charged;
+                release_assembly(charged);
+            }
+        }
     }
 
     fn overlaps(&self, start: u64, end: u64) -> bool {
@@ -140,6 +314,28 @@ impl Dirty {
             .next_back()
             .is_some_and(|(&s, &l)| s < end && s + l > start)
     }
+}
+
+/// The grid slot index holding `offset`, and that slot's byte range.
+fn slot_of(offset: u64) -> (u64, u64, u64) {
+    let index = offset / MAX_OBJECT_SIZE;
+    let start = index * MAX_OBJECT_SIZE;
+    (index, start, start + MAX_OBJECT_SIZE)
+}
+
+/// Splits `[start, end)` on the 64 MiB grid, yielding one piece per slot.
+fn per_slot(start: u64, end: u64) -> impl Iterator<Item = (u64, u64, u64)> {
+    let mut cursor = start;
+    std::iter::from_fn(move || {
+        if cursor >= end {
+            return None;
+        }
+        let (index, _, slot_end) = slot_of(cursor);
+        let piece_end = slot_end.min(end);
+        let piece = (index, cursor, piece_end);
+        cursor = piece_end;
+        Some(piece)
+    })
 }
 
 struct WFile {
@@ -459,6 +655,218 @@ impl WorkspaceFs {
         Ok(())
     }
 
+    /// The overlay pieces of `[start, end)`: the sub-ranges of that window the
+    /// dirty range list actually covers.
+    fn dirty_pieces(dirty: &Dirty, start: u64, end: u64) -> Vec<(u64, u64)> {
+        dirty
+            .ranges
+            .range(..end)
+            .filter_map(|(&s, &l)| {
+                let range_end = s + l;
+                (range_end > start).then(|| (start.max(s), end.min(range_end)))
+            })
+            .collect()
+    }
+
+    /// Copies the overlay's bytes for `[from, to)` into `dest`, from wherever
+    /// each grid slot's dirty bytes currently live — RAM, an object already
+    /// admitted out of RAM, or the overflow spill.
+    fn read_dirty(&self, dirty: &Dirty, from: u64, to: u64, dest: &mut [u8]) -> Result<(), i32> {
+        for (index, piece_start, piece_end) in per_slot(from, to) {
+            let slot_start = index * MAX_OBJECT_SIZE;
+            let target = &mut dest[(piece_start - from) as usize..(piece_end - from) as usize];
+            match dirty.slots.get(&index) {
+                Some(Slot::Resident(bytes)) => {
+                    let a = (piece_start - slot_start) as usize;
+                    let b = (piece_end - slot_start) as usize;
+                    if b > bytes.len() {
+                        return Err(libc::EIO);
+                    }
+                    target.copy_from_slice(&bytes[a..b]);
+                }
+                Some(Slot::Admitted(digest)) => {
+                    let object = self
+                        .meta
+                        .store()
+                        .open_object(digest)
+                        .map_err(|_| libc::EIO)?;
+                    object
+                        .read_exact_at(target, piece_start - slot_start)
+                        .map_err(|_| libc::EIO)?;
+                }
+                Some(Slot::Spilled) => {
+                    let spill = dirty.spill.as_ref().ok_or(libc::EIO)?;
+                    spill
+                        .read_exact_at(target, piece_start)
+                        .map_err(|_| libc::EIO)?;
+                }
+                // Every dirty range is created together with its slot.
+                None => return Err(libc::EIO),
+            }
+        }
+        Ok(())
+    }
+
+    /// Brings an already-admitted slot's bytes back under the overlay so it
+    /// can be written again. Content addressing forbids editing the object in
+    /// place; the superseded one becomes garbage the epoch collector reclaims.
+    fn rehydrate(
+        &self,
+        dirty: &mut Dirty,
+        index: u64,
+        digest: &tensorfs_core::object::ObjectDigest,
+    ) -> Result<(), i32> {
+        let slot_start = index * MAX_OBJECT_SIZE;
+        let object = self
+            .meta
+            .store()
+            .open_object(digest)
+            .map_err(|_| libc::EIO)?;
+        let length = object.metadata().map_err(|_| libc::EIO)?.len();
+        let mut bytes = Vec::new();
+        if dirty.grow(&mut bytes, usize::try_from(length).map_err(|_| libc::EIO)?) {
+            object.read_exact_at(&mut bytes, 0).map_err(|_| libc::EIO)?;
+            dirty.slots.insert(index, Slot::Resident(bytes));
+            return Ok(());
+        }
+        // No budget left to hold it: stream it into the spill instead.
+        let mut chunk = vec![0_u8; 1 << 20];
+        let mut done = 0_u64;
+        while done < length {
+            let take = usize::try_from(length - done)
+                .unwrap_or(usize::MAX)
+                .min(chunk.len());
+            object
+                .read_exact_at(&mut chunk[..take], done)
+                .map_err(|_| libc::EIO)?;
+            dirty
+                .spill()
+                .map_err(|_| libc::EIO)?
+                .write_all_at(&chunk[..take], slot_start + done)
+                .map_err(|_| libc::EIO)?;
+            done += take as u64;
+        }
+        dirty.slots.insert(index, Slot::Spilled);
+        Ok(())
+    }
+
+    /// Lands one write into a single grid slot, in RAM where the budget allows
+    /// and in the overflow spill where it does not.
+    fn land_piece(&self, dirty: &mut Dirty, index: u64, at: u64, piece: &[u8]) -> Result<(), i32> {
+        let slot_start = index * MAX_OBJECT_SIZE;
+        let in_slot = (at - slot_start) as usize;
+        let needed = in_slot + piece.len();
+        if let Some(Slot::Admitted(digest)) = dirty.slots.get(&index) {
+            let digest = *digest;
+            self.rehydrate(dirty, index, &digest)?;
+        }
+        let existing = dirty.slots.remove(&index);
+        let resident = match existing {
+            Some(Slot::Spilled) => None,
+            Some(Slot::Resident(bytes)) => Some(bytes),
+            Some(Slot::Admitted(_)) => return Err(libc::EIO),
+            // One allocation for the slot's whole address range so a writer
+            // arriving 128 KiB at a time never reallocates and recopies. The
+            // budget charges resized length, not capacity, and that is the
+            // honest number: untouched capacity is never faulted in.
+            None => Some(Vec::with_capacity(
+                usize::try_from(MAX_OBJECT_SIZE).map_err(|_| libc::EIO)?,
+            )),
+        };
+        if let Some(mut bytes) = resident {
+            if dirty.grow(&mut bytes, needed) {
+                bytes[in_slot..needed].copy_from_slice(piece);
+                dirty.slots.insert(index, Slot::Resident(bytes));
+                return Ok(());
+            }
+            // The budget refused: this slot degrades to the spill path.
+            dirty.demote(index, bytes).map_err(|_| libc::EIO)?;
+        } else {
+            dirty.slots.insert(index, Slot::Spilled);
+        }
+        dirty
+            .spill()
+            .map_err(|_| libc::EIO)?
+            .write_all_at(piece, at)
+            .map_err(|_| libc::EIO)
+    }
+
+    /// Hashes and admits a slot the instant it is complete — fully dirty and a
+    /// full grid object — then releases its memory. This is what makes a
+    /// sequential writer move each byte to disk exactly once.
+    ///
+    /// Admitting before the naming generation commits is safe because objects
+    /// are immutable and content addressed: a crash in between leaves an
+    /// unreferenced object the epoch collector reclaims, never a torn object
+    /// and never a generation naming bytes that are not there.
+    fn admit_if_complete(&self, dirty: &mut Dirty, index: u64, size: u64) -> Result<(), i32> {
+        let slot_start = index * MAX_OBJECT_SIZE;
+        let slot_end = slot_start + MAX_OBJECT_SIZE;
+        if size < slot_end || !dirty.covers(slot_start, slot_end) {
+            return Ok(());
+        }
+        let Some(Slot::Resident(bytes)) = dirty.slots.get(&index) else {
+            return Ok(());
+        };
+        if bytes.len() as u64 != MAX_OBJECT_SIZE {
+            return Ok(());
+        }
+        let digest = self
+            .meta
+            .store()
+            .put_bytes(bytes)
+            .map_err(|_| libc::EIO)?
+            .digest();
+        if let Some(Slot::Resident(bytes)) = dirty.slots.insert(index, Slot::Admitted(digest)) {
+            let charged = bytes.len() as u64;
+            dirty.charged -= charged;
+            release_assembly(charged);
+        }
+        Ok(())
+    }
+
+    /// Lands one FUSE write across however many grid slots it spans, then
+    /// admits every slot it completed.
+    fn overlay_write(&mut self, ino: u64, offset: u64, data: &[u8]) -> Result<(), i32> {
+        let Some(WNode::File(file)) = self.nodes.get_mut(&ino) else {
+            return Err(libc::ENOENT);
+        };
+        if file.dirty.is_none() {
+            file.dirty = Some(Dirty::new());
+        }
+        let mut dirty = file.dirty.take().expect("dirty state was just ensured");
+        let end = offset + data.len() as u64;
+        let size_after = file.size.max(end);
+
+        let mut result = Ok(());
+        for (index, from, to) in per_slot(offset, end) {
+            let piece = &data[(from - offset) as usize..(to - offset) as usize];
+            result = self.land_piece(&mut dirty, index, from, piece);
+            if result.is_err() {
+                break;
+            }
+        }
+        if result.is_ok() {
+            // The range list is the authority on what is readable, so it must
+            // be true before any slot is judged complete.
+            dirty.add_range(offset, data.len() as u64);
+            for (index, _, _) in per_slot(offset, end) {
+                result = self.admit_if_complete(&mut dirty, index, size_after);
+                if result.is_err() {
+                    break;
+                }
+            }
+        }
+
+        if let Some(WNode::File(file)) = self.nodes.get_mut(&ino) {
+            file.dirty = Some(dirty);
+            if result.is_ok() {
+                file.size = size_after;
+            }
+        }
+        result
+    }
+
     /// Serves one read by merging committed records with the newest dirty
     /// ranges, exactly in that order.
     fn read_merged(
@@ -474,20 +882,13 @@ impl WorkspaceFs {
         };
         if let Some(dirty) = &file.dirty {
             let end = offset + buffer.len() as u64;
-            for (&s, &l) in dirty.ranges.range(..end) {
-                let range_end = s + l;
-                if range_end <= offset {
-                    continue;
-                }
-                let from = offset.max(s);
-                let to = end.min(range_end);
-                dirty
-                    .spill
-                    .read_exact_at(
-                        &mut buffer[(from - offset) as usize..(to - offset) as usize],
-                        from,
-                    )
-                    .map_err(|_| libc::EIO)?;
+            for (from, to) in Self::dirty_pieces(dirty, offset, end) {
+                self.read_dirty(
+                    dirty,
+                    from,
+                    to,
+                    &mut buffer[(from - offset) as usize..(to - offset) as usize],
+                )?;
             }
         }
         Ok(())
@@ -533,19 +934,41 @@ impl WorkspaceFs {
         // so the byte work can then run with bounded parallelism. A `None`
         // plan entry is a slot whose bytes must be composed and admitted.
         let mut records: Vec<Option<FileRecord>> = Vec::new();
-        let mut compose: Vec<(usize, u64, u64)> = Vec::new();
+        let mut compose: Vec<(usize, u64, u64, bool)> = Vec::new();
         let mut slot_start = 0_u64;
         while slot_start < size {
             let slot_end = (slot_start + MAX_OBJECT_SIZE).min(size);
             let slot_length = slot_end - slot_start;
-            let dirty_hit = match &self.nodes[&ino] {
-                WNode::File(file) => file
-                    .dirty
-                    .as_ref()
-                    .expect("dirty state checked above")
-                    .overlaps(slot_start, slot_end),
-                _ => false,
+            let index = slot_start / MAX_OBJECT_SIZE;
+            let (dirty_hit, preadmitted, fully_dirty) = match &self.nodes[&ino] {
+                WNode::File(file) => {
+                    let dirty = file.dirty.as_ref().expect("dirty state checked above");
+                    let covered = dirty.covers(slot_start, slot_end);
+                    // Only a full-size slot can be served by an object that was
+                    // admitted as a full-size slot; a truncate landing inside
+                    // one drops it back to the composing path below.
+                    let preadmitted = match dirty.slots.get(&index) {
+                        Some(Slot::Admitted(digest))
+                            if covered && slot_length == MAX_OBJECT_SIZE =>
+                        {
+                            Some(*digest)
+                        }
+                        _ => None,
+                    };
+                    (dirty.overlaps(slot_start, slot_end), preadmitted, covered)
+                }
+                _ => (false, None, false),
             };
+            // A slot already hashed and admitted straight out of RAM is
+            // finished: its digest is the record, and no byte moves again.
+            if let Some(digest) = preadmitted {
+                records.push(Some(FileRecord::Data {
+                    digest,
+                    length: slot_length,
+                }));
+                slot_start = slot_end;
+                continue;
+            }
             if !dirty_hit {
                 let reused = match &self.nodes[&ino] {
                     WNode::File(file) => self.exact_committed(file, slot_start, slot_length),
@@ -564,7 +987,7 @@ impl WorkspaceFs {
                     continue;
                 }
             }
-            compose.push((records.len(), slot_start, slot_length));
+            compose.push((records.len(), slot_start, slot_length, fully_dirty));
             records.push(None);
             slot_start = slot_end;
         }
@@ -576,27 +999,24 @@ impl WorkspaceFs {
         // planned index.
         for batch in compose.chunks(COMPOSE_WORKERS) {
             let mut filled: Vec<(usize, Vec<u8>)> = Vec::with_capacity(batch.len());
-            for &(index, slot_start, slot_length) in batch {
+            for &(index, slot_start, slot_length, fully_dirty) in batch {
                 let slot_end = slot_start + slot_length;
                 let mut buffer = vec![0_u8; slot_length as usize];
-                self.fill_committed(ino, None, slot_start, &mut buffer)?;
+                // A slot the overlay covers end to end inherits nothing:
+                // reading the superseded object under bytes that are all
+                // about to be overwritten is pure read amplification.
+                if !fully_dirty {
+                    self.fill_committed(ino, None, slot_start, &mut buffer)?;
+                }
                 if let Some(WNode::File(file)) = self.nodes.get(&ino) {
                     let dirty = file.dirty.as_ref().expect("dirty state checked above");
-                    for (&s, &l) in dirty.ranges.range(..slot_end) {
-                        let range_end = s + l;
-                        if range_end <= slot_start {
-                            continue;
-                        }
-                        let from = slot_start.max(s);
-                        let to = slot_end.min(range_end);
-                        dirty
-                            .spill
-                            .read_exact_at(
-                                &mut buffer
-                                    [(from - slot_start) as usize..(to - slot_start) as usize],
-                                from,
-                            )
-                            .map_err(|_| libc::EIO)?;
+                    for (from, to) in Self::dirty_pieces(dirty, slot_start, slot_end) {
+                        self.read_dirty(
+                            dirty,
+                            from,
+                            to,
+                            &mut buffer[(from - slot_start) as usize..(to - slot_start) as usize],
+                        )?;
                     }
                 }
                 filled.push((index, buffer));
@@ -1139,13 +1559,7 @@ impl Filesystem for WorkspaceFs {
                 return;
             };
             if file.dirty.is_none() {
-                match Dirty::new() {
-                    Ok(dirty) => file.dirty = Some(dirty),
-                    Err(_) => {
-                        reply.error(libc::EIO);
-                        return;
-                    }
-                }
+                file.dirty = Some(Dirty::new());
             }
             if new_size < file.size {
                 file.dirty
@@ -1187,16 +1601,14 @@ impl Filesystem for WorkspaceFs {
         };
         if truncate {
             if file.dirty.is_none() {
-                match Dirty::new() {
-                    Ok(dirty) => file.dirty = Some(dirty),
-                    Err(_) => {
-                        reply.error(libc::EIO);
-                        return;
-                    }
-                }
+                file.dirty = Some(Dirty::new());
             }
-            let dirty = file.dirty.as_mut().expect("dirty state was just ensured");
-            dirty.ranges.clear();
+            // Truncating to zero drops every slot, returning their assembly
+            // memory to the budget rather than holding it until close.
+            file.dirty
+                .as_mut()
+                .expect("dirty state was just ensured")
+                .shrink_to(0);
             file.size = 0;
         }
         file.open_handles += 1;
@@ -1249,28 +1661,11 @@ impl Filesystem for WorkspaceFs {
         _lock_owner: Option<u64>,
         reply: fuser::ReplyWrite,
     ) {
-        let Some(WNode::File(file)) = self.nodes.get_mut(&ino) else {
-            reply.error(libc::ENOENT);
-            return;
-        };
         let offset = offset.max(0) as u64;
-        if file.dirty.is_none() {
-            match Dirty::new() {
-                Ok(dirty) => file.dirty = Some(dirty),
-                Err(_) => {
-                    reply.error(libc::EIO);
-                    return;
-                }
-            }
+        match self.overlay_write(ino, offset, data) {
+            Ok(()) => reply.written(data.len() as u32),
+            Err(code) => reply.error(code),
         }
-        let dirty = file.dirty.as_mut().expect("dirty state was just ensured");
-        if dirty.spill.write_all_at(data, offset).is_err() {
-            reply.error(libc::EIO);
-            return;
-        }
-        dirty.add_range(offset, data.len() as u64);
-        file.size = file.size.max(offset + data.len() as u64);
-        reply.written(data.len() as u32);
     }
 
     fn flush(
