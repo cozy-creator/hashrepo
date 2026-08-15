@@ -32,7 +32,7 @@ fn main() -> ExitCode {
 mod linux {
     use std::fs::{self, File, OpenOptions};
     use std::io::{Read, Seek, SeekFrom, Write};
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::{FileExt, MetadataExt};
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command, ExitCode, Stdio};
     use std::sync::Arc;
@@ -55,6 +55,12 @@ mod linux {
     const USER_HZ: f64 = 100.0;
     const COPY_BUFFER: usize = 4 << 20;
     const LOAD_CAVEAT_THRESHOLD: f64 = 4.0;
+    /// Cold sequential floor below which the native baseline is contention,
+    /// not hardware. Measured reference on this class of NVMe: `dd bs=1M`
+    /// after POSIX_FADV_DONTNEED reaches 1.6 GB/s idle and collapses to
+    /// 67 MB/s at 1-min load 31 — the same 5x swing this harness sees, so the
+    /// floor exists to disqualify a row, never to assert a speed.
+    const NATIVE_READ_SANITY_FLOOR: f64 = 1.0e9;
     /// A mounted arm with no byte progress for this long is wedged, not slow.
     const WATCHDOG_STALL: Duration = Duration::from_secs(120);
     const MOUNT_READY: Duration = Duration::from_secs(15);
@@ -633,6 +639,42 @@ mod linux {
     // Store accounting
     // ------------------------------------------------------------------
 
+    /// True-cold protocol: evict a file's pages so a "cold" read measures
+    /// disk, not yesterday's page cache. POSIX_FADV_DONTNEED needs no
+    /// privileges; eviction is advisory but reliable for clean pages.
+    fn evict_pages(path: &Path) {
+        if let Ok(file) = File::open(path) {
+            let _ = file.sync_all();
+            let _ = nix::fcntl::posix_fadvise(
+                &file,
+                0,
+                0,
+                nix::fcntl::PosixFadviseAdvice::POSIX_FADV_DONTNEED,
+            );
+        }
+    }
+
+    /// Evicts every object file in a store plus the named extra files.
+    fn evict_store_and(store: &Path, extra: &[&Path]) {
+        let sha = store.join("objects").join("sha256");
+        if let Ok(level1) = fs::read_dir(&sha) {
+            for l1 in level1.flatten() {
+                if let Ok(level2) = fs::read_dir(l1.path()) {
+                    for l2 in level2.flatten() {
+                        if let Ok(objects) = fs::read_dir(l2.path()) {
+                            for object in objects.flatten() {
+                                evict_pages(&object.path());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for path in extra {
+            evict_pages(path);
+        }
+    }
+
     fn store_census(store: &Path) -> (u64, u64) {
         let mut objects = 0_u64;
         let mut bytes = 0_u64;
@@ -932,6 +974,8 @@ mod linux {
         // -------- honesty baselines --------
         let silent = AtomicU64::new(0);
         for rep in 0..config.reps {
+            evict_pages(&corpus.safetensors.path);
+            evict_pages(&corpus.gguf.path);
             let (bytes, measured) = measure(|| {
                 let mut total = read_fully(&corpus.safetensors.path, &silent)?;
                 total += read_fully(&corpus.gguf.path, &silent)?;
@@ -939,6 +983,20 @@ mod linux {
             })?;
             let mut row = base_row(&run_id, "native_read", rep, &measured);
             row.bytes_total = Some(bytes);
+            // A baseline anchors every mount-vs-native ratio in this run, so a
+            // baseline that is itself wrong poisons the whole table silently.
+            // This box's NVMe (Crucial P3 Plus, PCIe 4.0 x4) does >1 GB/s cold
+            // sequential when idle; anything far below that is contention, not
+            // disk, and the row says so instead of anchoring a ratio.
+            let rate = bytes as f64 / measured.wall_s.max(f64::MIN_POSITIVE);
+            if rate < NATIVE_READ_SANITY_FLOOR {
+                row.note = Some(format!(
+                    "BASELINE UNTRUSTWORTHY: {:.0} MB/s cold is below the {:.0} MB/s                      floor for this hardware — the box was contended (1-min load                      {:.1}); ratios against this row are not publishable",
+                    rate / 1e6,
+                    NATIVE_READ_SANITY_FLOOR / 1e6,
+                    measured.load_1m,
+                ));
+            }
             emitter.emit_arm(row)?;
         }
         for rep in 0..config.reps {
@@ -1323,8 +1381,9 @@ mod linux {
             emitter.emit_arm(row)?;
         }
 
-        // -------- remount / cold read --------
+        // -------- remount / cold read (pages evicted: disk, not cache) -----
         for rep in 0..config.reps {
+            evict_store_and(&main_store, &[]);
             let mountpoint = scratch.join(format!("mnt-cold-{rep}"));
             let (outcome, measured) = measure(|| {
                 let mut mount =
@@ -1347,6 +1406,112 @@ mod linux {
                 Ok(bytes) => row.bytes_total = Some(bytes),
                 Err(failure) => row.note = Some(failure),
             }
+            emitter.emit_arm(row)?;
+        }
+
+        // -------- direct-path cold read (lane 3: no FUSE) -------------------
+        for rep in 0..config.reps {
+            evict_store_and(&main_store, &[]);
+            let (outcome, measured) = measure(|| {
+                let meta = WorkspaceStore::open(&main_store).map_err(|error| error.to_string())?;
+                let tree = meta
+                    .load_snapshot(&snapshot_a)
+                    .map_err(|error| error.to_string())?;
+                let mut total = 0_u64;
+                let mut buffer = vec![0_u8; COPY_BUFFER];
+                for (path, entry) in tree.entries() {
+                    if path != "model-a.safetensors" {
+                        continue;
+                    }
+                    let Entry::File { records, .. } = entry else {
+                        continue;
+                    };
+                    for record in records {
+                        let FileRecord::Data { digest, .. } = record else {
+                            continue;
+                        };
+                        let mut object = meta
+                            .store()
+                            .open_object(digest)
+                            .map_err(|error| error.to_string())?;
+                        loop {
+                            let read = object
+                                .read(&mut buffer)
+                                .map_err(|error| error.to_string())?;
+                            if read == 0 {
+                                break;
+                            }
+                            total += read as u64;
+                        }
+                    }
+                }
+                Ok(total)
+            })?;
+            let mut row = base_row(&run_id, "direct_path_read", rep, &measured);
+            row.bytes_total = Some(outcome);
+            row.note = Some(
+                "lane 3: daemon-resolved verified objects read with no FUSE in the path".to_owned(),
+            );
+            emitter.emit_arm(row)?;
+        }
+
+        // -------- direct ingest (no mount: bounded parallel hash+admit) -----
+        for rep in 0..config.reps {
+            let store = scratch.join(format!("direct-ingest-{rep}"));
+            evict_pages(&corpus.safetensors.path);
+            evict_pages(&corpus.gguf.path);
+            let (bytes, measured) = measure(|| {
+                let meta = WorkspaceStore::open(&store).map_err(|error| error.to_string())?;
+                let mut total = 0_u64;
+                for path in [&corpus.safetensors.path, &corpus.gguf.path] {
+                    let file = File::open(path).map_err(|error| error.to_string())?;
+                    let size = file.metadata().map_err(|error| error.to_string())?.len();
+                    let mut offset = 0_u64;
+                    while offset < size {
+                        let batch_end =
+                            (offset + 4 * tensorfs_core::planner::MAX_OBJECT_SIZE).min(size);
+                        let mut slots: Vec<Vec<u8>> = Vec::new();
+                        while offset < batch_end {
+                            let length = (tensorfs_core::planner::MAX_OBJECT_SIZE)
+                                .min(size - offset)
+                                as usize;
+                            let mut slot = vec![0_u8; length];
+                            file.read_exact_at(&mut slot, offset)
+                                .map_err(|error| error.to_string())?;
+                            offset += length as u64;
+                            slots.push(slot);
+                        }
+                        let store_ref = meta.store();
+                        let results: Vec<Result<u64, String>> = thread::scope(|scope| {
+                            let workers: Vec<_> = slots
+                                .iter()
+                                .map(|slot| {
+                                    scope.spawn(move || {
+                                        store_ref
+                                            .put_bytes(slot)
+                                            .map(|object| object.length())
+                                            .map_err(|error| error.to_string())
+                                    })
+                                })
+                                .collect();
+                            workers
+                                .into_iter()
+                                .map(|w| w.join().expect("ingest worker does not panic"))
+                                .collect()
+                        });
+                        for result in results {
+                            total += result?;
+                        }
+                    }
+                }
+                Ok(total)
+            })?;
+            let mut row = base_row(&run_id, "direct_ingest", rep, &measured);
+            row.bytes_total = Some(bytes);
+            row.note = Some(
+                "no mount: raw 64 MiB slots, 4-way parallel hash+admit — the bulk write lane"
+                    .to_owned(),
+            );
             emitter.emit_arm(row)?;
         }
 
