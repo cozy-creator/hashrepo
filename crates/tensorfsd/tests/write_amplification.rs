@@ -345,11 +345,14 @@ fn an_out_of_order_writer_degrades_to_the_spill_and_stays_exact() {
         peak_rss / MIB
     );
 
-    // No amplification bound is asserted: admitting six 64 MiB grid objects
-    // for 48 KiB of change is inherent to content addressing on a fixed grid,
+    // No amplification bound is asserted: admitting three 64 MiB grid objects
+    // for 24 KiB of change is inherent to content addressing on a fixed grid,
     // and pretending otherwise would be a bound on the grid, not on this code.
+    //
+    // Three composed slots ride the bounded compose pool, so ~192 MiB here is
+    // legitimate; what must not happen is the overlay itself holding them.
     assert!(
-        peak_rss < 256 * MIB,
+        peak_rss < 320 * MIB,
         "the overflow path must hold slots on disk, not in the daemon (peak RSS {} MiB)",
         peak_rss / MIB
     );
@@ -477,13 +480,16 @@ fn a_writer_past_the_budget_spills_instead_of_growing_memory() {
         peak_before_flush / MIB,
         peak_rss / MIB
     );
-    // Composing a slot at flush legitimately holds one slot-sized buffer on
-    // top of the ceiling, so the bound is generous — but nowhere near the
-    // 360 MiB an unbudgeted overlay reaches (measured: it does).
+    // Assert the PRE-FLUSH peak: at that point assembly is the only thing
+    // holding slot buffers, so the number is about the budget and nothing
+    // else. After the flush, composing legitimately holds COMPOSE_WORKERS
+    // slot buffers, which floors the measurement near 256 MiB and would
+    // drown out exactly what this arm tests.
     assert!(
-        peak_rss < 200 * MIB,
-        "the assembly budget must force the spill path (peak RSS {} MiB, ceiling {} MiB)",
-        peak_rss / MIB,
+        peak_before_flush < 200 * MIB,
+        "the assembly budget must force the spill path \
+         (pre-flush peak RSS {} MiB, ceiling {} MiB)",
+        peak_before_flush / MIB,
         budget / MIB
     );
 }
