@@ -1,0 +1,1097 @@
+//! Transactional workspace/snapshot metadata over the immutable object store.
+//!
+//! One SQLite WAL database owns inodes, dirents, ordered object maps,
+//! workspace heads, sealed snapshots, leases, and GC quarantine. One durable
+//! transaction advances a workspace generation, and only after every newly
+//! referenced object has been verified resident, so recovery always exposes
+//! the previous generation or the new one, never a hybrid. GC marks
+//! unreferenced objects into quarantine and deletes them only after they have
+//! stayed unreferenced for two full collection epochs.
+//!
+//! This layer is deliberately below any filesystem surface: callers admit
+//! bytes to the [`crate::store::ObjectStore`] themselves and record metadata
+//! here at digest/length granularity.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
+use std::sync::Mutex;
+
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use thiserror::Error;
+
+use crate::object::ObjectDigest;
+use crate::planner::PlannerId;
+use crate::store::{ObjectStore, StoreError};
+use crate::tfm1::{
+    Entry, FileRecord, Snapshot, SnapshotBuilder, SnapshotId, Tfm1Error, case_fold, decode,
+    validate_path, validate_records, validate_symlink_target,
+};
+
+const KIND_DIRECTORY: i64 = 1;
+const KIND_FILE: i64 = 2;
+const KIND_SYMLINK: i64 = 3;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LeaseKind {
+    Open,
+    Unlinked,
+    Mmap,
+    PendingSync,
+}
+
+impl LeaseKind {
+    const fn to_row(self) -> i64 {
+        match self {
+            Self::Open => 1,
+            Self::Unlinked => 2,
+            Self::Mmap => 3,
+            Self::PendingSync => 4,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LeaseId(i64);
+
+#[derive(Clone, Debug)]
+pub enum Mutation {
+    Mkdir {
+        path: String,
+    },
+    CreateFile {
+        path: String,
+        executable: bool,
+        planner: PlannerId,
+        records: Vec<FileRecord>,
+    },
+    SetRecords {
+        path: String,
+        records: Vec<FileRecord>,
+    },
+    Truncate {
+        path: String,
+        length: u64,
+    },
+    Rename {
+        from: String,
+        to: String,
+    },
+    Unlink {
+        path: String,
+    },
+    Rmdir {
+        path: String,
+    },
+    Symlink {
+        path: String,
+        target: String,
+    },
+    Hardlink {
+        path: String,
+        target: String,
+    },
+}
+
+#[derive(Debug, Error)]
+pub enum WorkspaceError {
+    #[error("workspace metadata I/O failed")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error("path fact is not canonical: {0}")]
+    Tfm1(#[from] Tfm1Error),
+    #[error("workspace {0:?} does not exist")]
+    UnknownWorkspace(String),
+    #[error("workspace {0:?} already exists")]
+    WorkspaceExists(String),
+    #[error("path {0:?} does not exist")]
+    Missing(String),
+    #[error("path {0:?} already exists")]
+    Exists(String),
+    #[error("path {0:?} is not a directory")]
+    NotADirectory(String),
+    #[error("path {0:?} is not a regular file")]
+    NotAFile(String),
+    #[error("directory {0:?} is not empty")]
+    NotEmpty(String),
+    #[error("a sibling of {0:?} collides under case folding")]
+    CaseFoldCollision(String),
+    #[error("truncating {path:?} at {length} would cut a data record")]
+    MidRecordTruncate { path: String, length: u64 },
+    #[error("referenced object {digest} is not verified resident")]
+    MissingObject { digest: ObjectDigest },
+    #[error("snapshot {0} is unknown")]
+    UnknownSnapshot(SnapshotId),
+    #[error("stored snapshot bytes no longer hash to their id")]
+    SnapshotCorrupt,
+    #[error("lease {0:?} is unknown")]
+    UnknownLease(i64),
+    #[error("rename would move {0:?} into its own subtree")]
+    RenameIntoSelf(String),
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GcReport {
+    pub roots: u64,
+    pub resident: u64,
+    pub newly_quarantined: u64,
+    pub rescued: u64,
+    pub deleted: u64,
+    pub bytes_deleted: u64,
+    pub epoch: u64,
+}
+
+/// The one metadata authority beside an object store root.
+pub struct WorkspaceStore {
+    store: ObjectStore,
+    connection: Mutex<Connection>,
+}
+
+impl WorkspaceStore {
+    pub fn open(root: impl AsRef<Path>) -> Result<Self, WorkspaceError> {
+        let root = root.as_ref();
+        let store = ObjectStore::open(root)?;
+        let connection = Connection::open(root.join("metadata.sqlite3"))?;
+        connection.pragma_update(None, "journal_mode", "WAL")?;
+        connection.pragma_update(None, "synchronous", "FULL")?;
+        connection.pragma_update(None, "foreign_keys", "ON")?;
+        connection.busy_timeout(std::time::Duration::from_secs(30))?;
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS workspaces (
+                 id INTEGER PRIMARY KEY,
+                 name TEXT NOT NULL UNIQUE,
+                 head_generation INTEGER NOT NULL,
+                 root_inode INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS inodes (
+                 id INTEGER PRIMARY KEY,
+                 workspace_id INTEGER NOT NULL
+                     REFERENCES workspaces(id) ON DELETE CASCADE,
+                 kind INTEGER NOT NULL,
+                 executable INTEGER NOT NULL DEFAULT 0,
+                 planner INTEGER,
+                 symlink_target TEXT
+             );
+             CREATE TABLE IF NOT EXISTS dirents (
+                 parent_inode INTEGER NOT NULL REFERENCES inodes(id) ON DELETE CASCADE,
+                 name TEXT NOT NULL,
+                 child_inode INTEGER NOT NULL REFERENCES inodes(id),
+                 PRIMARY KEY (parent_inode, name)
+             );
+             CREATE TABLE IF NOT EXISTS object_maps (
+                 inode INTEGER NOT NULL REFERENCES inodes(id) ON DELETE CASCADE,
+                 ordinal INTEGER NOT NULL,
+                 hole INTEGER NOT NULL,
+                 digest BLOB,
+                 length INTEGER NOT NULL,
+                 PRIMARY KEY (inode, ordinal)
+             );
+             CREATE TABLE IF NOT EXISTS snapshots (
+                 id BLOB PRIMARY KEY,
+                 blob BLOB NOT NULL,
+                 sealed_generation INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS leases (
+                 id INTEGER PRIMARY KEY,
+                 kind INTEGER NOT NULL,
+                 holder TEXT NOT NULL,
+                 workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
+                 inode INTEGER REFERENCES inodes(id)
+             );
+             CREATE TABLE IF NOT EXISTS gc_state (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 epoch INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS gc_quarantine (
+                 digest BLOB PRIMARY KEY,
+                 epoch INTEGER NOT NULL
+             );
+             INSERT OR IGNORE INTO gc_state (id, epoch) VALUES (1, 0);",
+        )?;
+        Ok(Self {
+            store,
+            connection: Mutex::new(connection),
+        })
+    }
+
+    #[must_use]
+    pub const fn store(&self) -> &ObjectStore {
+        &self.store
+    }
+
+    pub fn create_workspace(&self, name: &str) -> Result<(), WorkspaceError> {
+        let mut connection = self.connection.lock().expect("metadata mutex is healthy");
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if workspace_row(&tx, name).is_ok() {
+            return Err(WorkspaceError::WorkspaceExists(name.to_owned()));
+        }
+        tx.execute(
+            "INSERT INTO workspaces (name, head_generation, root_inode) VALUES (?1, 0, 0)",
+            params![name],
+        )?;
+        let workspace_id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO inodes (workspace_id, kind) VALUES (?1, ?2)",
+            params![workspace_id, KIND_DIRECTORY],
+        )?;
+        let root_inode = tx.last_insert_rowid();
+        tx.execute(
+            "UPDATE workspaces SET root_inode = ?1 WHERE id = ?2",
+            params![root_inode, workspace_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Clones a sealed snapshot's decoded tree into a fresh workspace. The
+    /// stored TFM1 bytes are verified against their id before use.
+    pub fn create_workspace_from_snapshot(
+        &self,
+        name: &str,
+        snapshot: &SnapshotId,
+    ) -> Result<(), WorkspaceError> {
+        let decoded = self.load_snapshot(snapshot)?;
+        self.create_workspace(name)?;
+        let mut mutations = Vec::new();
+        for (path, entry) in decoded.entries() {
+            match entry {
+                Entry::Directory => mutations.push(Mutation::Mkdir { path: path.clone() }),
+                Entry::File {
+                    executable,
+                    planner,
+                    records,
+                    ..
+                } => mutations.push(Mutation::CreateFile {
+                    path: path.clone(),
+                    executable: *executable,
+                    planner: *planner,
+                    records: records.clone(),
+                }),
+                Entry::Symlink { target } => mutations.push(Mutation::Symlink {
+                    path: path.clone(),
+                    target: target.clone(),
+                }),
+                Entry::Hardlink { ordinal } => {
+                    let target = decoded
+                        .ordinal_path(*ordinal)
+                        .expect("decoded snapshots resolve every ordinal")
+                        .to_owned();
+                    mutations.push(Mutation::Hardlink {
+                        path: path.clone(),
+                        target,
+                    });
+                }
+            }
+        }
+        self.commit_generation(name, &mutations)?;
+        Ok(())
+    }
+
+    pub fn delete_workspace(&self, name: &str) -> Result<(), WorkspaceError> {
+        let mut connection = self.connection.lock().expect("metadata mutex is healthy");
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let workspace = workspace_row(&tx, name)?;
+        tx.execute(
+            "DELETE FROM dirents WHERE parent_inode IN
+                 (SELECT id FROM inodes WHERE workspace_id = ?1)",
+            params![workspace.id],
+        )?;
+        tx.execute(
+            "DELETE FROM workspaces WHERE id = ?1",
+            params![workspace.id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn head_generation(&self, name: &str) -> Result<u64, WorkspaceError> {
+        let connection = self.connection.lock().expect("metadata mutex is healthy");
+        let workspace = workspace_row(&connection, name)?;
+        Ok(workspace.head_generation)
+    }
+
+    /// Applies one batch of tree mutations as one durable generation advance.
+    ///
+    /// Every digest the batch newly references is rehash-verified resident in
+    /// the object store before the WAL commit; an unverifiable object refuses
+    /// the whole batch and the head does not move.
+    pub fn commit_generation(
+        &self,
+        name: &str,
+        mutations: &[Mutation],
+    ) -> Result<u64, WorkspaceError> {
+        let mut referenced = HashSet::new();
+        for mutation in mutations {
+            match mutation {
+                Mutation::CreateFile { records, .. } | Mutation::SetRecords { records, .. } => {
+                    let logical_size = records_length(records)?;
+                    validate_records(records, logical_size)?;
+                    for record in records {
+                        if let FileRecord::Data { digest, .. } = record {
+                            referenced.insert(*digest);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for digest in &referenced {
+            self.store
+                .verify(digest)
+                .map_err(|_| WorkspaceError::MissingObject { digest: *digest })?;
+        }
+
+        let mut connection = self.connection.lock().expect("metadata mutex is healthy");
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Re-check presence inside the metadata transaction: `verify` above
+        // ran outside it, and a GC pass that marked these still-unreferenced
+        // objects epochs ago must not be able to delete them between the
+        // rehash and this commit. The transaction serializes against
+        // `collect`, so a stat here closes that window completely.
+        for digest in &referenced {
+            if !self.store.exists(digest) {
+                return Err(WorkspaceError::MissingObject { digest: *digest });
+            }
+        }
+        let workspace = workspace_row(&tx, name)?;
+        for mutation in mutations {
+            apply_mutation(&tx, &workspace, mutation)?;
+        }
+        let next = workspace.head_generation + 1;
+        tx.execute(
+            "UPDATE workspaces SET head_generation = ?1 WHERE id = ?2",
+            params![next as i64, workspace.id],
+        )?;
+        tx.commit()?;
+        Ok(next)
+    }
+
+    /// Seals the committed head tree as one canonical TFM1 snapshot, stores
+    /// its exact bytes, and returns the identity.
+    pub fn seal_snapshot(
+        &self,
+        name: &str,
+        parent: Option<SnapshotId>,
+    ) -> Result<SnapshotId, WorkspaceError> {
+        let mut connection = self.connection.lock().expect("metadata mutex is healthy");
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let workspace = workspace_row(&tx, name)?;
+        let snapshot = build_snapshot(&tx, &workspace, parent)?;
+        let bytes = snapshot.to_bytes();
+        let id = snapshot.snapshot_id();
+        tx.execute(
+            "INSERT OR IGNORE INTO snapshots (id, blob, sealed_generation) VALUES (?1, ?2, ?3)",
+            params![
+                id.as_bytes().as_slice(),
+                bytes,
+                workspace.head_generation as i64
+            ],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// Loads and re-verifies one sealed snapshot's canonical bytes.
+    pub fn load_snapshot(&self, id: &SnapshotId) -> Result<Snapshot, WorkspaceError> {
+        let connection = self.connection.lock().expect("metadata mutex is healthy");
+        let blob: Option<Vec<u8>> = connection
+            .query_row(
+                "SELECT blob FROM snapshots WHERE id = ?1",
+                params![id.as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let blob = blob.ok_or(WorkspaceError::UnknownSnapshot(*id))?;
+        if SnapshotId::of(&blob) != *id {
+            return Err(WorkspaceError::SnapshotCorrupt);
+        }
+        Ok(decode(&blob)?)
+    }
+
+    pub fn delete_snapshot(&self, id: &SnapshotId) -> Result<(), WorkspaceError> {
+        let connection = self.connection.lock().expect("metadata mutex is healthy");
+        let deleted = connection.execute(
+            "DELETE FROM snapshots WHERE id = ?1",
+            params![id.as_bytes().as_slice()],
+        )?;
+        if deleted == 0 {
+            return Err(WorkspaceError::UnknownSnapshot(*id));
+        }
+        Ok(())
+    }
+
+    /// Pins one path's inode (and therefore its object map) for the holder.
+    pub fn acquire_lease(
+        &self,
+        workspace: &str,
+        path: &str,
+        kind: LeaseKind,
+        holder: &str,
+    ) -> Result<LeaseId, WorkspaceError> {
+        let mut connection = self.connection.lock().expect("metadata mutex is healthy");
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row = workspace_row(&tx, workspace)?;
+        let inode = resolve_path(&tx, &row, path)?
+            .ok_or_else(|| WorkspaceError::Missing(path.to_owned()))?;
+        tx.execute(
+            "INSERT INTO leases (kind, holder, workspace_id, inode) VALUES (?1, ?2, ?3, ?4)",
+            params![kind.to_row(), holder, row.id, inode.id],
+        )?;
+        let lease = LeaseId(tx.last_insert_rowid());
+        tx.commit()?;
+        Ok(lease)
+    }
+
+    /// Releases one lease. An orphaned inode whose last lease is released is
+    /// removed together with its object map.
+    pub fn release_lease(&self, lease: LeaseId) -> Result<(), WorkspaceError> {
+        let mut connection = self.connection.lock().expect("metadata mutex is healthy");
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let inode: Option<Option<i64>> = tx
+            .query_row(
+                "SELECT inode FROM leases WHERE id = ?1",
+                params![lease.0],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(inode) = inode else {
+            return Err(WorkspaceError::UnknownLease(lease.0));
+        };
+        tx.execute("DELETE FROM leases WHERE id = ?1", params![lease.0])?;
+        if let Some(inode) = inode {
+            drop_inode_if_orphaned(&tx, inode)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// One collection pass: advances the epoch, marks unreferenced resident
+    /// objects, rescues re-referenced ones, and deletes only objects that
+    /// have stayed quarantined for at least two full epochs. The whole pass
+    /// holds the metadata write transaction, so the root set cannot move
+    /// under it and a live object can never enter the delete set.
+    pub fn collect(&self) -> Result<GcReport, WorkspaceError> {
+        let mut connection = self.connection.lock().expect("metadata mutex is healthy");
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        let epoch: i64 = tx.query_row("SELECT epoch FROM gc_state WHERE id = 1", [], |row| {
+            row.get(0)
+        })?;
+        let epoch = epoch + 1;
+        tx.execute(
+            "UPDATE gc_state SET epoch = ?1 WHERE id = 1",
+            params![epoch],
+        )?;
+
+        let mut roots: HashSet<ObjectDigest> = HashSet::new();
+        {
+            let mut map_digests =
+                tx.prepare("SELECT digest FROM object_maps WHERE digest IS NOT NULL")?;
+            let mut rows = map_digests.query([])?;
+            while let Some(row) = rows.next()? {
+                roots.insert(digest_from_row(row.get::<_, Vec<u8>>(0)?)?);
+            }
+        }
+        {
+            let mut blobs = tx.prepare("SELECT id, blob FROM snapshots")?;
+            let mut rows = blobs.query([])?;
+            while let Some(row) = rows.next()? {
+                let id = digest_from_row(row.get::<_, Vec<u8>>(0)?)?;
+                let blob: Vec<u8> = row.get(1)?;
+                if SnapshotId::of(&blob) != SnapshotId::from_bytes(*id.as_bytes()) {
+                    return Err(WorkspaceError::SnapshotCorrupt);
+                }
+                for (_, entry) in decode(&blob)?.entries() {
+                    if let Entry::File { records, .. } = entry {
+                        for record in records {
+                            if let FileRecord::Data { digest, .. } = record {
+                                roots.insert(*digest);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut resident: Vec<(ObjectDigest, u64)> = Vec::new();
+        self.store
+            .each_object(|digest, length| resident.push((digest, length)))?;
+
+        let mut report = GcReport {
+            roots: roots.len() as u64,
+            resident: resident.len() as u64,
+            epoch: epoch as u64,
+            ..GcReport::default()
+        };
+
+        let resident_set: HashSet<ObjectDigest> =
+            resident.iter().map(|(digest, _)| *digest).collect();
+        let mut lengths: HashMap<ObjectDigest, u64> = resident.into_iter().collect();
+
+        // Rescue everything referenced again, and drop rows whose object is
+        // already gone; both make the quarantine reflect reality.
+        let quarantined: Vec<(ObjectDigest, i64)> = {
+            let mut rows_statement = tx.prepare("SELECT digest, epoch FROM gc_quarantine")?;
+            let collected = rows_statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            collected
+                .into_iter()
+                .map(|(digest, marked)| Ok((digest_from_row(digest)?, marked)))
+                .collect::<Result<Vec<_>, WorkspaceError>>()?
+        };
+        for (digest, marked) in &quarantined {
+            if roots.contains(digest) || !resident_set.contains(digest) {
+                tx.execute(
+                    "DELETE FROM gc_quarantine WHERE digest = ?1",
+                    params![digest.as_bytes().as_slice()],
+                )?;
+                if roots.contains(digest) {
+                    report.rescued += 1;
+                }
+                continue;
+            }
+            if *marked <= epoch - 2 {
+                if self.store.remove_object(digest)? {
+                    report.deleted += 1;
+                    report.bytes_deleted += lengths.remove(digest).unwrap_or(0);
+                }
+                tx.execute(
+                    "DELETE FROM gc_quarantine WHERE digest = ?1",
+                    params![digest.as_bytes().as_slice()],
+                )?;
+            }
+        }
+
+        let already: HashSet<ObjectDigest> =
+            quarantined.iter().map(|(digest, _)| *digest).collect();
+        for digest in resident_set {
+            if !roots.contains(&digest) && !already.contains(&digest) {
+                tx.execute(
+                    "INSERT OR IGNORE INTO gc_quarantine (digest, epoch) VALUES (?1, ?2)",
+                    params![digest.as_bytes().as_slice(), epoch],
+                )?;
+                report.newly_quarantined += 1;
+            }
+        }
+
+        tx.commit()?;
+        Ok(report)
+    }
+
+    /// Rebuilds every workspace named in `pairs` from its snapshot in a fresh
+    /// metadata database, proving snapshots alone carry the identity.
+    pub fn rebuild_from_snapshot(
+        &self,
+        name: &str,
+        snapshot: &SnapshotId,
+    ) -> Result<(), WorkspaceError> {
+        self.create_workspace_from_snapshot(name, snapshot)
+    }
+}
+
+struct WorkspaceRow {
+    id: i64,
+    head_generation: u64,
+    root_inode: i64,
+}
+
+struct ResolvedInode {
+    id: i64,
+    kind: i64,
+}
+
+fn workspace_row(connection: &Connection, name: &str) -> Result<WorkspaceRow, WorkspaceError> {
+    connection
+        .query_row(
+            "SELECT id, head_generation, root_inode FROM workspaces WHERE name = ?1",
+            params![name],
+            |row| {
+                Ok(WorkspaceRow {
+                    id: row.get(0)?,
+                    head_generation: row.get::<_, i64>(1)? as u64,
+                    root_inode: row.get(2)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or_else(|| WorkspaceError::UnknownWorkspace(name.to_owned()))
+}
+
+fn digest_from_row(bytes: Vec<u8>) -> Result<ObjectDigest, WorkspaceError> {
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| WorkspaceError::SnapshotCorrupt)?;
+    Ok(ObjectDigest::from_bytes(bytes))
+}
+
+fn records_length(records: &[FileRecord]) -> Result<u64, Tfm1Error> {
+    let mut sum = 0_u64;
+    for record in records {
+        let length = match record {
+            FileRecord::Data { length, .. } | FileRecord::Hole { length } => *length,
+        };
+        sum = sum
+            .checked_add(length)
+            .ok_or(Tfm1Error::LengthSumMismatch)?;
+    }
+    Ok(sum)
+}
+
+fn split_parent(path: &str) -> (Option<&str>, &str) {
+    match path.rsplit_once('/') {
+        Some((parent, name)) => (Some(parent), name),
+        None => (None, path),
+    }
+}
+
+fn resolve_path(
+    connection: &Connection,
+    workspace: &WorkspaceRow,
+    path: &str,
+) -> Result<Option<ResolvedInode>, WorkspaceError> {
+    if path.is_empty() {
+        return Ok(Some(ResolvedInode {
+            id: workspace.root_inode,
+            kind: KIND_DIRECTORY,
+        }));
+    }
+    validate_path(path)?;
+    let mut current = ResolvedInode {
+        id: workspace.root_inode,
+        kind: KIND_DIRECTORY,
+    };
+    for segment in path.split('/') {
+        if current.kind != KIND_DIRECTORY {
+            return Ok(None);
+        }
+        let child: Option<(i64, i64)> = connection
+            .query_row(
+                "SELECT inodes.id, inodes.kind FROM dirents
+                     JOIN inodes ON inodes.id = dirents.child_inode
+                     WHERE dirents.parent_inode = ?1 AND dirents.name = ?2",
+                params![current.id, segment],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match child {
+            Some((id, kind)) => current = ResolvedInode { id, kind },
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(current))
+}
+
+/// Resolves the parent directory of `path` and validates the leaf name,
+/// including sibling case-fold uniqueness.
+fn resolve_new_leaf(
+    connection: &Connection,
+    workspace: &WorkspaceRow,
+    path: &str,
+) -> Result<(i64, String), WorkspaceError> {
+    validate_path(path)?;
+    let (parent, name) = split_parent(path);
+    let parent_inode = match parent {
+        None => workspace.root_inode,
+        Some(parent_path) => {
+            let resolved = resolve_path(connection, workspace, parent_path)?
+                .ok_or_else(|| WorkspaceError::Missing(parent_path.to_owned()))?;
+            if resolved.kind != KIND_DIRECTORY {
+                return Err(WorkspaceError::NotADirectory(parent_path.to_owned()));
+            }
+            resolved.id
+        }
+    };
+    let exact: Option<i64> = connection
+        .query_row(
+            "SELECT child_inode FROM dirents WHERE parent_inode = ?1 AND name = ?2",
+            params![parent_inode, name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if exact.is_some() {
+        return Err(WorkspaceError::Exists(path.to_owned()));
+    }
+    let folded = case_fold(name);
+    let mut siblings = connection.prepare("SELECT name FROM dirents WHERE parent_inode = ?1")?;
+    let mut rows = siblings.query(params![parent_inode])?;
+    while let Some(row) = rows.next()? {
+        let sibling: String = row.get(0)?;
+        if case_fold(&sibling) == folded {
+            return Err(WorkspaceError::CaseFoldCollision(path.to_owned()));
+        }
+    }
+    Ok((parent_inode, name.to_owned()))
+}
+
+fn planner_to_row(planner: PlannerId) -> i64 {
+    match planner {
+        PlannerId::SafetensorsV1 => 1,
+        PlannerId::GgufV1 => 2,
+        PlannerId::RawFixed64mV1 => 3,
+    }
+}
+
+fn planner_from_row(tag: i64) -> PlannerId {
+    match tag {
+        1 => PlannerId::SafetensorsV1,
+        2 => PlannerId::GgufV1,
+        _ => PlannerId::RawFixed64mV1,
+    }
+}
+
+fn insert_records(
+    connection: &Connection,
+    inode: i64,
+    records: &[FileRecord],
+) -> Result<(), WorkspaceError> {
+    connection.execute("DELETE FROM object_maps WHERE inode = ?1", params![inode])?;
+    for (ordinal, record) in records.iter().enumerate() {
+        match record {
+            FileRecord::Data { digest, length } => connection.execute(
+                "INSERT INTO object_maps (inode, ordinal, hole, digest, length)
+                     VALUES (?1, ?2, 0, ?3, ?4)",
+                params![
+                    inode,
+                    ordinal as i64,
+                    digest.as_bytes().as_slice(),
+                    *length as i64
+                ],
+            )?,
+            FileRecord::Hole { length } => connection.execute(
+                "INSERT INTO object_maps (inode, ordinal, hole, digest, length)
+                     VALUES (?1, ?2, 1, NULL, ?3)",
+                params![inode, ordinal as i64, *length as i64],
+            )?,
+        };
+    }
+    Ok(())
+}
+
+fn read_records(connection: &Connection, inode: i64) -> Result<Vec<FileRecord>, WorkspaceError> {
+    let mut statement = connection.prepare(
+        "SELECT hole, digest, length FROM object_maps WHERE inode = ?1 ORDER BY ordinal",
+    )?;
+    let mut rows = statement.query(params![inode])?;
+    let mut records = Vec::new();
+    while let Some(row) = rows.next()? {
+        let hole: i64 = row.get(0)?;
+        let length = row.get::<_, i64>(2)? as u64;
+        if hole == 1 {
+            records.push(FileRecord::Hole { length });
+        } else {
+            records.push(FileRecord::Data {
+                digest: digest_from_row(row.get::<_, Vec<u8>>(1)?)?,
+                length,
+            });
+        }
+    }
+    Ok(records)
+}
+
+fn link_count(connection: &Connection, inode: i64) -> Result<i64, WorkspaceError> {
+    Ok(connection.query_row(
+        "SELECT COUNT(*) FROM dirents WHERE child_inode = ?1",
+        params![inode],
+        |row| row.get(0),
+    )?)
+}
+
+fn lease_count(connection: &Connection, inode: i64) -> Result<i64, WorkspaceError> {
+    Ok(connection.query_row(
+        "SELECT COUNT(*) FROM leases WHERE inode = ?1",
+        params![inode],
+        |row| row.get(0),
+    )?)
+}
+
+fn drop_inode_if_orphaned(connection: &Connection, inode: i64) -> Result<(), WorkspaceError> {
+    if link_count(connection, inode)? == 0 && lease_count(connection, inode)? == 0 {
+        connection.execute("DELETE FROM inodes WHERE id = ?1", params![inode])?;
+    }
+    Ok(())
+}
+
+fn apply_mutation(
+    connection: &Connection,
+    workspace: &WorkspaceRow,
+    mutation: &Mutation,
+) -> Result<(), WorkspaceError> {
+    match mutation {
+        Mutation::Mkdir { path } => {
+            let (parent, name) = resolve_new_leaf(connection, workspace, path)?;
+            connection.execute(
+                "INSERT INTO inodes (workspace_id, kind) VALUES (?1, ?2)",
+                params![workspace.id, KIND_DIRECTORY],
+            )?;
+            let inode = connection.last_insert_rowid();
+            connection.execute(
+                "INSERT INTO dirents (parent_inode, name, child_inode) VALUES (?1, ?2, ?3)",
+                params![parent, name, inode],
+            )?;
+        }
+        Mutation::CreateFile {
+            path,
+            executable,
+            planner,
+            records,
+        } => {
+            let (parent, name) = resolve_new_leaf(connection, workspace, path)?;
+            connection.execute(
+                "INSERT INTO inodes (workspace_id, kind, executable, planner)
+                     VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    workspace.id,
+                    KIND_FILE,
+                    i64::from(*executable),
+                    planner_to_row(*planner)
+                ],
+            )?;
+            let inode = connection.last_insert_rowid();
+            connection.execute(
+                "INSERT INTO dirents (parent_inode, name, child_inode) VALUES (?1, ?2, ?3)",
+                params![parent, name, inode],
+            )?;
+            insert_records(connection, inode, records)?;
+        }
+        Mutation::SetRecords { path, records } => {
+            let inode = resolve_path(connection, workspace, path)?
+                .ok_or_else(|| WorkspaceError::Missing(path.clone()))?;
+            if inode.kind != KIND_FILE {
+                return Err(WorkspaceError::NotAFile(path.clone()));
+            }
+            insert_records(connection, inode.id, records)?;
+        }
+        Mutation::Truncate { path, length } => {
+            let inode = resolve_path(connection, workspace, path)?
+                .ok_or_else(|| WorkspaceError::Missing(path.clone()))?;
+            if inode.kind != KIND_FILE {
+                return Err(WorkspaceError::NotAFile(path.clone()));
+            }
+            let records = read_records(connection, inode.id)?;
+            let truncated = truncate_records(records, *length).ok_or_else(|| {
+                WorkspaceError::MidRecordTruncate {
+                    path: path.clone(),
+                    length: *length,
+                }
+            })?;
+            validate_records(&truncated, *length)?;
+            insert_records(connection, inode.id, &truncated)?;
+        }
+        Mutation::Rename { from, to } => {
+            let source = resolve_path(connection, workspace, from)?
+                .ok_or_else(|| WorkspaceError::Missing(from.clone()))?;
+            if source.kind == KIND_DIRECTORY && (to == from || to.starts_with(&format!("{from}/")))
+            {
+                return Err(WorkspaceError::RenameIntoSelf(from.clone()));
+            }
+            let (new_parent, new_name) = resolve_new_leaf(connection, workspace, to)?;
+            let (old_parent, old_name) = split_parent(from);
+            let old_parent_inode = match old_parent {
+                None => workspace.root_inode,
+                Some(parent_path) => {
+                    resolve_path(connection, workspace, parent_path)?
+                        .expect("the source parent resolved during source lookup")
+                        .id
+                }
+            };
+            connection.execute(
+                "UPDATE dirents SET parent_inode = ?1, name = ?2
+                     WHERE parent_inode = ?3 AND name = ?4",
+                params![new_parent, new_name, old_parent_inode, old_name],
+            )?;
+        }
+        Mutation::Unlink { path } => {
+            let inode = resolve_path(connection, workspace, path)?
+                .ok_or_else(|| WorkspaceError::Missing(path.clone()))?;
+            if inode.kind == KIND_DIRECTORY {
+                return Err(WorkspaceError::NotAFile(path.clone()));
+            }
+            let (parent, name) = split_parent(path);
+            let parent_inode = match parent {
+                None => workspace.root_inode,
+                Some(parent_path) => {
+                    resolve_path(connection, workspace, parent_path)?
+                        .expect("the parent resolved during path lookup")
+                        .id
+                }
+            };
+            connection.execute(
+                "DELETE FROM dirents WHERE parent_inode = ?1 AND name = ?2",
+                params![parent_inode, name],
+            )?;
+            drop_inode_if_orphaned(connection, inode.id)?;
+        }
+        Mutation::Rmdir { path } => {
+            let inode = resolve_path(connection, workspace, path)?
+                .ok_or_else(|| WorkspaceError::Missing(path.clone()))?;
+            if inode.kind != KIND_DIRECTORY {
+                return Err(WorkspaceError::NotADirectory(path.clone()));
+            }
+            let children: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM dirents WHERE parent_inode = ?1",
+                params![inode.id],
+                |row| row.get(0),
+            )?;
+            if children != 0 {
+                return Err(WorkspaceError::NotEmpty(path.clone()));
+            }
+            let (parent, name) = split_parent(path);
+            let parent_inode = match parent {
+                None => workspace.root_inode,
+                Some(parent_path) => {
+                    resolve_path(connection, workspace, parent_path)?
+                        .expect("the parent resolved during path lookup")
+                        .id
+                }
+            };
+            connection.execute(
+                "DELETE FROM dirents WHERE parent_inode = ?1 AND name = ?2",
+                params![parent_inode, name],
+            )?;
+            drop_inode_if_orphaned(connection, inode.id)?;
+        }
+        Mutation::Symlink { path, target } => {
+            validate_symlink_target(target)?;
+            let (parent, name) = resolve_new_leaf(connection, workspace, path)?;
+            connection.execute(
+                "INSERT INTO inodes (workspace_id, kind, symlink_target) VALUES (?1, ?2, ?3)",
+                params![workspace.id, KIND_SYMLINK, target],
+            )?;
+            let inode = connection.last_insert_rowid();
+            connection.execute(
+                "INSERT INTO dirents (parent_inode, name, child_inode) VALUES (?1, ?2, ?3)",
+                params![parent, name, inode],
+            )?;
+        }
+        Mutation::Hardlink { path, target } => {
+            let target_inode = resolve_path(connection, workspace, target)?
+                .ok_or_else(|| WorkspaceError::Missing(target.clone()))?;
+            if target_inode.kind != KIND_FILE {
+                return Err(WorkspaceError::NotAFile(target.clone()));
+            }
+            let (parent, name) = resolve_new_leaf(connection, workspace, path)?;
+            connection.execute(
+                "INSERT INTO dirents (parent_inode, name, child_inode) VALUES (?1, ?2, ?3)",
+                params![parent, name, target_inode.id],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Cuts a record run at `length`. Boundary cuts drop whole records, a cut
+/// inside a hole shrinks it, extension appends or grows a trailing hole, and
+/// a cut inside a data record is refused as `None`.
+fn truncate_records(records: Vec<FileRecord>, length: u64) -> Option<Vec<FileRecord>> {
+    let mut kept = Vec::new();
+    let mut position = 0_u64;
+    for record in records {
+        if position >= length {
+            break;
+        }
+        let record_length = match &record {
+            FileRecord::Data { length, .. } | FileRecord::Hole { length } => *length,
+        };
+        let end = position.checked_add(record_length)?;
+        if end <= length {
+            kept.push(record);
+            position = end;
+            continue;
+        }
+        match record {
+            FileRecord::Hole { .. } => {
+                kept.push(FileRecord::Hole {
+                    length: length - position,
+                });
+                position = length;
+            }
+            FileRecord::Data { .. } => return None,
+        }
+        break;
+    }
+    if position < length {
+        match kept.last_mut() {
+            Some(FileRecord::Hole {
+                length: hole_length,
+            }) => *hole_length += length - position,
+            _ => kept.push(FileRecord::Hole {
+                length: length - position,
+            }),
+        }
+    }
+    Some(kept)
+}
+
+/// Builds the canonical TFM1 snapshot for the committed tree by walking the
+/// dirent graph. Hardlink groups pass one carrier file body and point every
+/// other path at it; the builder re-roots by sorted order itself.
+fn build_snapshot(
+    connection: &Connection,
+    workspace: &WorkspaceRow,
+    parent: Option<SnapshotId>,
+) -> Result<Snapshot, WorkspaceError> {
+    let mut paths_by_inode: BTreeMap<i64, Vec<String>> = BTreeMap::new();
+    let mut directories = Vec::new();
+    let mut symlinks: Vec<(String, String)> = Vec::new();
+    let mut stack = vec![(workspace.root_inode, String::new())];
+    while let Some((inode, prefix)) = stack.pop() {
+        let mut children = connection.prepare(
+            "SELECT dirents.name, inodes.id, inodes.kind, inodes.symlink_target
+                 FROM dirents JOIN inodes ON inodes.id = dirents.child_inode
+                 WHERE dirents.parent_inode = ?1",
+        )?;
+        let mut rows = children.query(params![inode])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(0)?;
+            let child: i64 = row.get(1)?;
+            let kind: i64 = row.get(2)?;
+            let path = if prefix.is_empty() {
+                name
+            } else {
+                format!("{prefix}/{name}")
+            };
+            match kind {
+                KIND_DIRECTORY => {
+                    directories.push(path.clone());
+                    stack.push((child, path));
+                }
+                KIND_FILE => paths_by_inode.entry(child).or_default().push(path),
+                _ => {
+                    let target: String = row.get(3)?;
+                    symlinks.push((path, target));
+                }
+            }
+        }
+    }
+
+    let mut builder = SnapshotBuilder::new(parent);
+    for path in directories {
+        builder.directory(path);
+    }
+    for (path, target) in symlinks {
+        builder.symlink(path, target);
+    }
+    for (inode, mut paths) in paths_by_inode {
+        paths.sort();
+        let (executable, planner): (i64, i64) = connection.query_row(
+            "SELECT executable, planner FROM inodes WHERE id = ?1",
+            params![inode],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let records = read_records(connection, inode)?;
+        let carrier = paths[0].clone();
+        builder.file(
+            carrier.clone(),
+            executable == 1,
+            planner_from_row(planner),
+            records,
+        );
+        for path in paths.into_iter().skip(1) {
+            builder.hardlink(path, carrier.clone());
+        }
+    }
+    Ok(builder.finish()?)
+}

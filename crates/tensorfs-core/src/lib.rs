@@ -9,3 +9,7 @@ pub mod source;
 pub mod store;
 pub mod tfm1;
 pub mod tfp1;
+/// Workspace metadata rides SQLite beside the object store, so it shares the
+/// store's real-filesystem platform gate.
+#[cfg(any(unix, windows))]
+pub mod workspace;
