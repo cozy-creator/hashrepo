@@ -1,0 +1,39 @@
+{
+  "hub": "http://127.0.0.1:31550",
+  "phases": {
+    "A": {
+      "declared_bytes": 220213784,
+      "distinct_objects": 9,
+      "granted": 9,
+      "uploaded_objects": 9,
+      "uploaded_bytes": 220213784,
+      "wall_s": 47.88
+    },
+    "B": {
+      "declared_bytes": 220213784,
+      "distinct_objects": 9,
+      "resident_objects": 8,
+      "delta_objects": 1,
+      "delta_bytes": 37748736,
+      "dedup_ratio": 0.828581
+    },
+    "C": {
+      "objects": 9,
+      "first_fetch_bytes": 220213784,
+      "second_fetch_bytes": 0
+    },
+    "D": {
+      "delta_objects": 1,
+      "delta_bytes": 8192
+    },
+    "E": {
+      "upload_staged_after_kill": 1,
+      "upload_resumed_objects": 4,
+      "upload_resumed_bytes": 138412032,
+      "download_resident_after_kill": 2,
+      "download_resumed_fetched": 12,
+      "download_resumed_skipped": 2
+    }
+  },
+  "repo": "cozy/tensorfs-e2e-1786765378"
+}
