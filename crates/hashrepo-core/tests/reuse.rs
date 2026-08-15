@@ -86,6 +86,15 @@ fn tensor_digest_set(hashed: &HashedPlan) -> HashSet<String> {
     tensor_digests(hashed).into_iter().collect()
 }
 
+fn header_digests(hashed: &HashedPlan) -> Vec<String> {
+    hashed
+        .objects()
+        .iter()
+        .filter(|object| object.kind() == RegionKind::Header)
+        .map(|object| object.digest().to_string())
+        .collect()
+}
+
 fn changed_object_indexes(before: &HashedPlan, after: &HashedPlan) -> HashSet<usize> {
     assert_eq!(before.objects().len(), after.objects().len());
     before
@@ -523,4 +532,70 @@ fn minimax_h3_adaln_accounting_matches_the_pinned_launch_shape() {
     assert_eq!(FULL_TENSORS - ADALN_WEIGHTS - ADALN_BIASES, 538);
     assert_eq!(FULL_BYTES - adaln_bytes, 40_259_514_880);
     assert_eq!(FULL_REFS - removed_refs, 1_058);
+}
+
+/// The negative control for every reuse arm above. Full dense fine-tuning
+/// changes essentially every parameter tensor, so the honest answer is zero
+/// tensor-object reuse. An unchanged architecture — identical tensor names,
+/// order and shapes, hence a byte-identical header — must not be able to
+/// manufacture a reuse claim.
+#[test]
+fn full_dense_fine_tuning_reuses_no_tensor_object_despite_an_identical_architecture() {
+    let names = [
+        "blk.0.attn_q.weight",
+        "blk.0.attn_k.weight",
+        "blk.0.ffn_up.weight",
+        "blk.0.ffn_down.weight",
+        "output_norm.weight",
+    ];
+    let lengths = [4_096_usize, 4_096, 8_192, 8_192, 256];
+
+    let base_bytes: Vec<Vec<u8>> = lengths
+        .iter()
+        .enumerate()
+        .map(|(index, length)| vec![0x10 + index as u8; *length])
+        .collect();
+    let tuned_bytes: Vec<Vec<u8>> = lengths
+        .iter()
+        .enumerate()
+        .map(|(index, length)| vec![0xA0 + index as u8; *length])
+        .collect();
+
+    let base_rows: Vec<(&str, &[u8])> = names
+        .iter()
+        .zip(&base_bytes)
+        .map(|(name, bytes)| (*name, bytes.as_slice()))
+        .collect();
+    let tuned_rows: Vec<(&str, &[u8])> = names
+        .iter()
+        .zip(&tuned_bytes)
+        .map(|(name, bytes)| (*name, bytes.as_slice()))
+        .collect();
+
+    let base = safetensors(&base_rows);
+    let tuned = safetensors(&tuned_rows);
+
+    let before = hashed(&base);
+    let after = hashed(&tuned);
+
+    // Same names, same order, same shapes: the architecture is byte-identical.
+    assert_eq!(header_digests(&before), header_digests(&after));
+
+    // Every serialized tensor byte changed, so nothing may be reused. Matching
+    // names, shapes and architecture cannot rescue a single object.
+    assert_eq!(tensor_digests(&before).len(), names.len());
+    assert_eq!(tensor_digests(&after).len(), names.len());
+    assert!(tensor_digest_set(&before).is_disjoint(&tensor_digest_set(&after)));
+    assert_eq!(
+        changed_object_indexes(&before, &after).len(),
+        names.len(),
+        "every tensor object must differ under a full dense update"
+    );
+
+    // The control proves the assertion above is not vacuous: this harness does
+    // observe reuse when the serialized bytes genuinely repeat.
+    assert_eq!(
+        tensor_digest_set(&before),
+        tensor_digest_set(&hashed(&base))
+    );
 }

@@ -389,3 +389,122 @@ fn only_structurally_requested_reads_can_surface_io_errors() {
         vec![(0, 4), (0, 8), (8, b"not-json".len())]
     );
 }
+
+#[test]
+fn the_minimal_two_byte_unpadded_header_is_valid_safetensors() {
+    let header = br#"{}"#;
+    let plan = try_plan(&HeaderSource::new(header, 0)).unwrap().unwrap();
+
+    assert_eq!(plan.planner(), PlannerId::SafetensorsV1);
+    assert_eq!(region_rows(&plan), vec![(0, 10, RegionKind::Header)]);
+}
+
+#[test]
+fn sub_byte_dtypes_fall_back_unless_the_element_count_is_byte_aligned() {
+    // 4- and 6-bit elements only have byte geometry at whole-byte multiples.
+    // A misaligned count is a structural refusal, not a rounded object length.
+    //
+    // Every row below declares the byte length that a *truncating* bit-to-byte
+    // conversion would produce, so the only thing standing between these
+    // headers and a plan is the alignment guard itself.
+    let misaligned: &[(&[u8], u64)] = &[
+        (
+            br#"{"x":{"dtype":"F4","shape":[1],"data_offsets":[0,0]}}"#,
+            0,
+        ),
+        (
+            br#"{"x":{"dtype":"F4","shape":[3],"data_offsets":[0,1]}}"#,
+            1,
+        ),
+        (
+            br#"{"x":{"dtype":"F6_E2M3","shape":[1],"data_offsets":[0,0]}}"#,
+            0,
+        ),
+        (
+            br#"{"x":{"dtype":"F6_E3M2","shape":[2],"data_offsets":[0,1]}}"#,
+            1,
+        ),
+    ];
+    for (header, data_size) in misaligned {
+        assert!(
+            try_plan(&HeaderSource::new(*header, *data_size))
+                .unwrap()
+                .is_none(),
+            "misaligned sub-byte tensor should fall back: {}",
+            String::from_utf8_lossy(header)
+        );
+    }
+
+    let aligned: &[(&[u8], u64)] = &[
+        (
+            br#"{"x":{"dtype":"F4","shape":[2],"data_offsets":[0,1]}}"#,
+            1,
+        ),
+        (
+            br#"{"x":{"dtype":"F4","shape":[4],"data_offsets":[0,2]}}"#,
+            2,
+        ),
+        (
+            br#"{"x":{"dtype":"F6_E2M3","shape":[4],"data_offsets":[0,3]}}"#,
+            3,
+        ),
+        (
+            br#"{"x":{"dtype":"F6_E3M2","shape":[4],"data_offsets":[0,3]}}"#,
+            3,
+        ),
+    ];
+    for (header, data_size) in aligned {
+        assert!(
+            try_plan(&HeaderSource::new(*header, *data_size))
+                .unwrap()
+                .is_some(),
+            "byte-aligned sub-byte tensor should plan: {}",
+            String::from_utf8_lossy(header)
+        );
+    }
+}
+
+#[test]
+fn a_pathologically_nested_header_falls_back_instead_of_escaping_the_parser() {
+    const DEPTH: usize = 10_000;
+    let mut header = Vec::from(br#"{"x":{"dtype":"U8","shape":"#.as_slice());
+    header.extend(std::iter::repeat_n(b'[', DEPTH));
+    header.push(b'0');
+    header.extend(std::iter::repeat_n(b']', DEPTH));
+    header.extend_from_slice(br#","data_offsets":[0,0]}}"#);
+
+    // The refusal must be an ordinary whole-file fallback that returns cleanly.
+    // A parser without a depth bound would abort the process here instead.
+    let source = HeaderSource::new(header, 0);
+    assert!(try_plan(&source).unwrap().is_none());
+    assert_eq!(plan(&source).unwrap().planner(), PlannerId::RawFixed64mV1);
+
+    // Contrast: the identical header with an unnested shape plans normally, so
+    // the fallback above is caused by the nesting and not by the surrounding
+    // fixture.
+    let flat = br#"{"x":{"dtype":"U8","shape":[0],"data_offsets":[0,0]}}"#;
+    assert!(try_plan(&HeaderSource::new(flat, 0)).unwrap().is_some());
+}
+
+#[test]
+fn an_enormous_shape_declaration_is_refused_before_any_shape_arithmetic() {
+    // 2,000 dimensions of 1,000 digits each. The refusal is structural rather
+    // than timed: `shape` decodes as `u64`, so the first out-of-range dimension
+    // ends the parse without the planner ever folding a product.
+    let dimension = "9".repeat(1_000);
+    let shape = vec![dimension.as_str(); 2_000].join(",");
+    let header =
+        format!(r#"{{"x":{{"dtype":"U8","shape":[{shape}],"data_offsets":[0,1]}}}}"#).into_bytes();
+
+    let source = HeaderSource::new(header, 1);
+    assert!(try_plan(&source).unwrap().is_none());
+    assert_eq!(plan(&source).unwrap().planner(), PlannerId::RawFixed64mV1);
+
+    // Contrast: the same 2,000-dimension shape made of in-range dimensions
+    // whose product still matches the declared bytes plans normally, so the
+    // refusal above is the out-of-range dimension rather than the arity.
+    let ones = vec!["1"; 2_000].join(",");
+    let valid =
+        format!(r#"{{"x":{{"dtype":"U8","shape":[{ones}],"data_offsets":[0,1]}}}}"#).into_bytes();
+    assert!(try_plan(&HeaderSource::new(valid, 1)).unwrap().is_some());
+}
