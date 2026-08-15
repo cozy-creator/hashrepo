@@ -1159,3 +1159,349 @@ fn write_reply(stream: &mut std::net::TcpStream, answer: &Reply) {
 fn find_blank_line(buffer: &[u8]) -> Option<usize> {
     buffer.windows(4).position(|window| window == b"\r\n\r\n")
 }
+
+// ---------------------------------------------------------------------------
+// A directory-backed hub
+// ---------------------------------------------------------------------------
+
+/// A [`SyncTransport`] whose entire state is a directory tree, so a SEPARATE
+/// PROCESS can push or pull against it and be SIGKILLed mid-transfer.
+///
+/// The in-memory [`FaultHub`] cannot do that — its state dies with the
+/// process — which would leave the restart-convergence family testing
+/// simulated interruptions instead of real ones. This models the same wire
+/// rules: session-scoped staging, grants bound to a claimed checksum,
+/// promotion at `complete` with the manifest admitted strictly before the
+/// head moves.
+///
+/// Layout:
+/// ```text
+///   objects/<hex>              promoted objects
+///   staged/<session>/<sha>     staged TFP1 packs
+///   sessions/<session>.json    session state
+///   sessions/<session>.tfm1    the declared manifest bytes
+///   head                       current head, hex
+/// ```
+pub struct DirTransport {
+    root: PathBuf,
+}
+
+impl DirTransport {
+    pub fn new(root: impl AsRef<Path>) -> Self {
+        let root = root.as_ref().to_path_buf();
+        for directory in ["objects", "staged", "sessions"] {
+            std::fs::create_dir_all(root.join(directory)).expect("hub layout creates");
+        }
+        Self { root }
+    }
+
+    fn object_file(&self, digest: &ObjectDigest) -> PathBuf {
+        self.root.join("objects").join(digest_hex(digest))
+    }
+
+    fn session_file(&self, session: &str) -> PathBuf {
+        self.root.join("sessions").join(format!("{session}.json"))
+    }
+
+    fn manifest_file(&self, session: &str) -> PathBuf {
+        self.root.join("sessions").join(format!("{session}.tfm1"))
+    }
+
+    fn read_head(&self) -> Option<SnapshotId> {
+        std::fs::read_to_string(self.root.join("head"))
+            .ok()
+            .and_then(|raw| SnapshotId::parse_hex(raw.trim()))
+    }
+
+    fn load_session(&self, session: &str) -> Result<serde_json::Value, TransportError> {
+        let raw = std::fs::read_to_string(self.session_file(session)).map_err(|_| {
+            TransportError::Refused {
+                code: "unknown-session".to_owned(),
+                detail: session.to_owned(),
+            }
+        })?;
+        serde_json::from_str(&raw).map_err(|error| TransportError::Io(error.to_string()))
+    }
+
+    fn store_session(&self, session: &str, value: &serde_json::Value) {
+        std::fs::write(
+            self.session_file(session),
+            serde_json::to_vec(value).expect("session serialises"),
+        )
+        .expect("session persists");
+    }
+
+    /// Objects of the closure that are neither promoted nor covered by a
+    /// staged pack of this session.
+    fn missing_view(&self, session: &serde_json::Value) -> Vec<(ObjectDigest, u64)> {
+        let mut staged: HashSet<String> = HashSet::new();
+        if let Some(packs) = session["packs"].as_object() {
+            for pack in packs.values() {
+                let key = pack["staging_key"].as_str().unwrap_or_default();
+                if self.root.join(key).is_file() {
+                    for member in pack["objects"].as_array().into_iter().flatten() {
+                        staged.insert(member.as_str().unwrap_or_default().to_owned());
+                    }
+                }
+            }
+        }
+        session["closure"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| {
+                let hex = row[0].as_str()?;
+                let length = row[1].as_u64()?;
+                if staged.contains(hex) || self.root.join("objects").join(hex).is_file() {
+                    return None;
+                }
+                Some((parse_hex_digest(hex)?, length))
+            })
+            .collect()
+    }
+}
+
+fn digest_hex(digest: &ObjectDigest) -> String {
+    let text = digest.to_string();
+    text.strip_prefix("sha256:").unwrap_or(&text).to_owned()
+}
+
+fn parse_hex_digest(hex: &str) -> Option<ObjectDigest> {
+    SnapshotId::parse_hex(hex).map(|id| ObjectDigest::from_bytes(*id.as_bytes()))
+}
+
+impl SyncTransport for DirTransport {
+    fn declare(
+        &self,
+        tfm1_bytes: &[u8],
+        expected_head: Option<&SnapshotId>,
+    ) -> Result<SyncPlan, TransportError> {
+        let snapshot = decode(tfm1_bytes).map_err(|error| TransportError::Refused {
+            code: "declaration_invalid".to_owned(),
+            detail: error.to_string(),
+        })?;
+        if self.read_head().as_ref() != expected_head {
+            return Err(TransportError::Refused {
+                code: "head_conflict".to_owned(),
+                detail: "expected head does not match".to_owned(),
+            });
+        }
+        let id = snapshot.snapshot_id();
+        let mut closure = Vec::new();
+        let mut seen = HashSet::new();
+        for (_path, entry) in snapshot.entries() {
+            if let Entry::File { records, .. } = entry {
+                for record in records {
+                    if let FileRecord::Data { digest, length } = record
+                        && seen.insert(*digest.as_bytes())
+                    {
+                        closure.push(serde_json::json!([digest_hex(digest), *length]));
+                    }
+                }
+            }
+        }
+        // A content-derived session name keeps restarts deterministic, so a
+        // killed-and-restarted push resumes the SAME session rather than
+        // silently starting a fresh one and re-uploading everything.
+        let session = format!("s-{}", &sha256_hex(tfm1_bytes)[..16]);
+        // Resuming keeps only the staged-pack record; the declared facts are
+        // refreshed every time. Carrying a stale `expected_head` forward
+        // would make a later push against a moved head fail as a spurious
+        // conflict — the head assertion above has already validated this
+        // declare against the live head.
+        let mut value = self.load_session(&session).unwrap_or_else(|_| {
+            serde_json::json!({ "packs": {} })
+        });
+        value["snapshot_id"] = serde_json::json!(digest_hex(&manifest_object_digest(&id)));
+        value["expected_head"] =
+            serde_json::json!(expected_head.map(std::string::ToString::to_string));
+        value["closure"] = serde_json::json!(closure);
+        std::fs::create_dir_all(self.root.join("staged").join(&session))
+            .expect("session staging creates");
+        std::fs::write(self.manifest_file(&session), tfm1_bytes).expect("manifest persists");
+        self.store_session(&session, &value);
+
+        let have = value["closure"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| {
+                let hex = row[0].as_str()?;
+                self.root
+                    .join("objects")
+                    .join(hex)
+                    .is_file()
+                    .then(|| parse_hex_digest(hex))
+                    .flatten()
+            })
+            .collect();
+        Ok(SyncPlan {
+            snapshot_id: id,
+            session,
+            have,
+            staged_packs: Vec::new(),
+            missing: self.missing_view(&value),
+            max_pack_payload: tfp1::MAX_PACK_PAYLOAD,
+            max_packs_per_request: MAX_PACKS_PER_REQUEST,
+        })
+    }
+
+    fn pack_grants(
+        &self,
+        session: &str,
+        claims: &[PackClaim],
+    ) -> Result<GrantsPlan, TransportError> {
+        let mut value = self.load_session(session)?;
+        let missing: HashMap<String, u64> = self
+            .missing_view(&value)
+            .into_iter()
+            .map(|(digest, length)| (digest_hex(&digest), length))
+            .collect();
+
+        let mut grants = Vec::new();
+        for claim in claims {
+            let mut payload = 0_u64;
+            for digest in &claim.objects {
+                let Some(size) = missing.get(&digest_hex(digest)) else {
+                    return Err(TransportError::Refused {
+                        code: "bad_request".to_owned(),
+                        detail: format!("{digest} is not missing"),
+                    });
+                };
+                payload += size;
+            }
+            let expected = 12 + 48 * claim.objects.len() as u64 + payload;
+            if claim.size_bytes != expected {
+                return Err(TransportError::Refused {
+                    code: "bad_request".to_owned(),
+                    detail: "claimed size disagrees with members".to_owned(),
+                });
+            }
+            let staging_key = format!("staged/{session}/{}", claim.sha256);
+            grants.push(PackGrant {
+                pack_sha256: claim.sha256.clone(),
+                staging_key: staging_key.clone(),
+                url: self.root.join(&staging_key).to_string_lossy().into_owned(),
+                headers: Vec::new(),
+            });
+            value["packs"][&claim.sha256] = serde_json::json!({
+                "staging_key": staging_key,
+                "objects": claim.objects.iter().map(digest_hex).collect::<Vec<_>>(),
+            });
+        }
+        self.store_session(session, &value);
+
+        let staged_packs = value["packs"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(sha, pack)| StagedPack {
+                sha256: sha.clone(),
+                staged: self
+                    .root
+                    .join(pack["staging_key"].as_str().unwrap_or_default())
+                    .is_file(),
+            })
+            .collect();
+        Ok(GrantsPlan {
+            grants,
+            staged_packs,
+            missing: self.missing_view(&value),
+        })
+    }
+
+    fn upload_pack(&self, grant: &PackGrant, pack: &[u8]) -> Result<(), TransportError> {
+        if sha256_hex(pack) != grant.pack_sha256 {
+            return Err(TransportError::Refused {
+                code: "checksum-mismatch".to_owned(),
+                detail: "pack bytes do not hash to the granted checksum".to_owned(),
+            });
+        }
+        tfp1::decode(pack).map_err(|error| TransportError::Refused {
+            code: "pack-invalid".to_owned(),
+            detail: error.to_string(),
+        })?;
+        let path = self.root.join(&grant.staging_key);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("staging directory creates");
+        }
+        // Atomic publish, so a kill mid-write never leaves a half pack that
+        // a resumed run would count as staged.
+        let temp = path.with_extension("part");
+        std::fs::write(&temp, pack).map_err(|error| TransportError::Io(error.to_string()))?;
+        std::fs::rename(&temp, &path).map_err(|error| TransportError::Io(error.to_string()))?;
+        Ok(())
+    }
+
+    fn complete(&self, session: &str) -> Result<CompleteStatus, TransportError> {
+        let value = self.load_session(session)?;
+        for pack in value["packs"].as_object().into_iter().flatten().map(|(_, p)| p) {
+            let key = pack["staging_key"].as_str().unwrap_or_default();
+            let Ok(bytes) = std::fs::read(self.root.join(key)) else {
+                continue;
+            };
+            let parsed = tfp1::decode(&bytes).expect("staged packs re-verify");
+            for object in parsed.objects() {
+                let path = self.object_file(&object.digest());
+                if !path.is_file() {
+                    let temp = path.with_extension("part");
+                    std::fs::write(&temp, object.bytes()).expect("promotion writes");
+                    std::fs::rename(&temp, &path).expect("promotion publishes");
+                }
+            }
+        }
+        for row in value["closure"].as_array().into_iter().flatten() {
+            let hex = row[0].as_str().unwrap_or_default();
+            if !self.root.join("objects").join(hex).is_file() {
+                return Ok(CompleteStatus::Incomplete {
+                    code: "upload_incomplete".to_owned(),
+                });
+            }
+        }
+        let expected = value["expected_head"]
+            .as_str()
+            .and_then(SnapshotId::parse_hex);
+        if self.read_head() != expected {
+            return Ok(CompleteStatus::Failed {
+                code: "head_conflict".to_owned(),
+            });
+        }
+        // The manifest blob becomes the snapshot-id object strictly before
+        // the head moves, exactly as the landed wire orders it.
+        let manifest = std::fs::read(self.manifest_file(session))
+            .map_err(|error| TransportError::Io(error.to_string()))?;
+        let id = SnapshotId::of(&manifest);
+        let path = self.object_file(&manifest_object_digest(&id));
+        if !path.is_file() {
+            std::fs::write(&path, &manifest).expect("manifest promotes");
+        }
+        std::fs::write(self.root.join("head"), id.to_string()).expect("head advances");
+        Ok(CompleteStatus::Promoted)
+    }
+
+    fn head(&self) -> Result<Option<SnapshotId>, TransportError> {
+        Ok(self.read_head())
+    }
+
+    fn download_grants(
+        &self,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<DownloadGrant>, TransportError> {
+        Ok(digests
+            .iter()
+            .filter_map(|digest| {
+                let path = self.object_file(digest);
+                let length = std::fs::metadata(&path).ok()?.len();
+                Some(DownloadGrant {
+                    digest: *digest,
+                    length,
+                    url: path.to_string_lossy().into_owned(),
+                })
+            })
+            .collect())
+    }
+
+    fn download(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError> {
+        std::fs::read(&grant.url).map_err(|error| TransportError::Io(error.to_string()))
+    }
+}
