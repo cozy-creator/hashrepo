@@ -19,6 +19,11 @@ mod workspace_fs;
 #[cfg(target_os = "linux")]
 pub mod rpc;
 
+/// Row schema and folds for the pgw#1256 measured matrix; the
+/// `tensorfs-bench` bin is the sole producer and CI never runs it.
+#[cfg(target_os = "linux")]
+pub mod bench;
+
 #[cfg(target_os = "linux")]
 pub use snapshot_fs::{MountError, SnapshotMount, mount_snapshot};
 #[cfg(target_os = "linux")]
