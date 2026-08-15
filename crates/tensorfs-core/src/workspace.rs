@@ -343,6 +343,16 @@ impl WorkspaceStore {
 
         let mut connection = self.connection.lock().expect("metadata mutex is healthy");
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Re-check presence inside the metadata transaction: `verify` above
+        // ran outside it, and a GC pass that marked these still-unreferenced
+        // objects epochs ago must not be able to delete them between the
+        // rehash and this commit. The transaction serializes against
+        // `collect`, so a stat here closes that window completely.
+        for digest in &referenced {
+            if !self.store.exists(digest) {
+                return Err(WorkspaceError::MissingObject { digest: *digest });
+            }
+        }
         let workspace = workspace_row(&tx, name)?;
         for mutation in mutations {
             apply_mutation(&tx, &workspace, mutation)?;

@@ -310,6 +310,12 @@ impl ObjectStore {
     /// Unlinks one object the caller has proven unreferenced. The quarantine
     /// protocol owns that proof; this helper only re-checks the path still
     /// names a regular file so nothing else is ever removed.
+    /// A cheap resident-existence stat for callers that already verified the
+    /// bytes and only need to re-check presence inside a metadata transaction.
+    pub(crate) fn exists(&self, digest: &ObjectDigest) -> bool {
+        self.object_path(digest).is_file()
+    }
+
     pub(crate) fn remove_object(&self, digest: &ObjectDigest) -> Result<bool, StoreError> {
         let path = self.object_path(digest);
         match fs::symlink_metadata(&path) {
