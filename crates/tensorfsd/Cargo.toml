@@ -13,9 +13,12 @@ tensorfs-core = { path = "../tensorfs-core" }
 thiserror.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-fuser = { version = "0.15", default-features = false }
+# abi-7-31 unlocks FUSE_MAX_PAGES (1 MiB requests) and FUSE_WRITEBACK_CACHE
+# while keeping default-features off, so the mount path stays pure-Rust
+# (fusermount3) with no libfuse/pkg-config build dependency.
+fuser = { version = "0.15", default-features = false, features = ["abi-7-31"] }
 libc = "0.2"
-nix = { version = "0.30", default-features = false, features = ["socket", "user", "signal"] }
+nix = { version = "0.30", default-features = false, features = ["socket", "user", "signal", "fs"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

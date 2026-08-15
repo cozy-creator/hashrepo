@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use fuser::{
-    BackgroundSession, FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData,
-    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, Request,
+    BackgroundSession, FileAttr, FileType, Filesystem, KernelConfig, MountOption, ReplyAttr,
+    ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, Request,
 };
 use thiserror::Error;
 
@@ -253,6 +253,18 @@ impl SnapshotFs {
 }
 
 impl Filesystem for SnapshotFs {
+    fn init(&mut self, _req: &Request<'_>, config: &mut KernelConfig) -> Result<(), libc::c_int> {
+        // Read-side performance negotiation (measured in the pgw#1256
+        // matrix): FUSE_MAX_PAGES lifts requests past the 32-page default and
+        // a 1 MiB readahead lets the kernel pipeline sequential reads; the
+        // kernel clamps both to its own ceiling. max_write only feeds the
+        // max_pages computation on this read-only mount.
+        let _ = config.add_capabilities(fuser::consts::FUSE_MAX_PAGES);
+        let _ = config.set_max_write(1024 * 1024);
+        let _ = config.set_max_readahead(1024 * 1024);
+        Ok(())
+    }
+
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let Some(Node::Directory { children }) = self.node(parent) else {
             reply.error(libc::ENOENT);
