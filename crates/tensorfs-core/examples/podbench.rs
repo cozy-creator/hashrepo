@@ -12,18 +12,31 @@
 //!       throughput and this process's own read/write byte counters.
 //!
 //! The read arms live in bench.py; only the write arms need library access.
+//!
+//! The benchmark drives `store` and `workspace`, which `lib.rs` gates to
+//! `any(unix, windows)`. The same gate rides every item here so the CI-exact
+//! `--all-targets` wasm32 check still sees a target that compiles.
 
+#[cfg(any(unix, windows))]
 use std::env;
+#[cfg(any(unix, windows))]
 use std::path::{Path, PathBuf};
+#[cfg(any(unix, windows))]
 use std::time::Instant;
 
+#[cfg(any(unix, windows))]
 use tensorfs_core::object::plan_and_hash;
+#[cfg(any(unix, windows))]
 use tensorfs_core::planner::{ByteSource, PlannerId};
+#[cfg(any(unix, windows))]
 use tensorfs_core::tfm1::FileRecord;
+#[cfg(any(unix, windows))]
 use tensorfs_core::workspace::{Mutation, WorkspaceStore};
 
+#[cfg(any(unix, windows))]
 struct Slice<'a>(&'a [u8]);
 
+#[cfg(any(unix, windows))]
 impl ByteSource for Slice<'_> {
     fn len(&self) -> u64 {
         self.0.len() as u64
@@ -42,6 +55,7 @@ impl ByteSource for Slice<'_> {
 
 /// This process's cumulative bytes actually read from / written to storage.
 /// The amplification claim is a ratio of counters, not of stopwatches.
+#[cfg(any(unix, windows))]
 fn io_counters() -> (u64, u64) {
     let text = std::fs::read_to_string("/proc/self/io").unwrap_or_default();
     let mut read = 0;
@@ -58,6 +72,7 @@ fn io_counters() -> (u64, u64) {
 
 /// Deterministic, poorly-compressible payload so no layer can cheat by
 /// collapsing runs of identical bytes.
+#[cfg(any(unix, windows))]
 fn payload(size_mib: usize) -> Vec<u8> {
     let block: Vec<u8> = (0..(1usize << 20))
         .map(|i| ((i * 2_654_435_761) >> 13) as u8)
@@ -71,6 +86,7 @@ fn payload(size_mib: usize) -> Vec<u8> {
     out
 }
 
+#[cfg(any(unix, windows))]
 fn object_path(store_root: &Path, digest: &str) -> PathBuf {
     let hex = digest.strip_prefix("sha256:").unwrap_or(digest);
     store_root
@@ -80,6 +96,7 @@ fn object_path(store_root: &Path, digest: &str) -> PathBuf {
         .join(hex)
 }
 
+#[cfg(any(unix, windows))]
 fn setup(store_root: &Path, native: &Path, size_mib: usize) {
     let bytes = payload(size_mib);
     std::fs::write(native, &bytes).expect("native fixture written");
@@ -126,6 +143,7 @@ fn setup(store_root: &Path, native: &Path, size_mib: usize) {
     }
 }
 
+#[cfg(any(unix, windows))]
 fn direct_ingest(store_root: &Path, native: &Path) {
     let meta = WorkspaceStore::open(store_root).expect("store opens");
     let (read0, write0) = io_counters();
@@ -153,6 +171,7 @@ fn direct_ingest(store_root: &Path, native: &Path) {
     println!("PROC_WRITE_BYTES={}", write1.saturating_sub(write0));
 }
 
+#[cfg(any(unix, windows))]
 fn main() {
     let args: Vec<String> = env::args().collect();
     match args.get(1).map(String::as_str) {
@@ -168,4 +187,9 @@ fn main() {
             std::process::exit(2);
         }
     }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn main() {
+    eprintln!("podbench: the write arms need a filesystem target");
 }
