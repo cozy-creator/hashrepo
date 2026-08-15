@@ -40,6 +40,26 @@ using the **debug profile**. It exists to prove the harness runs end to end
 and to freeze the row schema — the numbers themselves decide nothing, and
 several rows carry `load_caveat: true`. Do not quote them as performance.
 
+## Design notes from the field
+
+Two failures during the harness's own bring-up are load-bearing design rules:
+
+1. **Never serve a bench mount in-process.** The first draft mounted via
+   in-process fuser sessions and wrote multi-hundred-MiB files through them
+   from the same process; it deadlocked in kernel FUSE wait
+   (`request_wait_answer`) exactly as FUSE warns — dirty-page writeback from
+   the writing process blocked against the filesystem that the same starved
+   process had to serve. Every mount is served by a spawned `tensorfsd` child
+   (also the production shape, so the numbers are honest), and teardown is
+   bounded on every path: SIGTERM, ten-second grace, SIGKILL, lazy unmount.
+2. **A stall watchdog must watch both sides of the mount.** Bounding arms on
+   driver-side progress alone false-killed a healthy 2 GiB import: a large
+   file's `fsync` composes for minutes with zero driver progress while the
+   child reads, hashes, and admits objects the whole time. The watchdog folds
+   the child's `/proc/<pid>/io` counters into its progress signal and fires
+   only when both are flat for two minutes; kills are recorded as
+   `failed: timeout` rows and the run continues.
+
 ## The real-scale run (the actual release gate)
 
 On a quiet, owned Linux host with ~120 GiB disposable disk and nothing else
