@@ -51,10 +51,10 @@ jobs:
         run: |
           set -euo pipefail
           uv build --wheel
-          uv venv --python 3.12 /tmp/hashrepo-wheel
-          uv pip install --python /tmp/hashrepo-wheel/bin/python dist/hashrepo-*.whl mypy
+          uv venv --python 3.12 /tmp/tensorfs-wheel
+          uv pip install --python /tmp/tensorfs-wheel/bin/python dist/tensorfs-*.whl mypy
           cd /tmp
-          /tmp/hashrepo-wheel/bin/mypy --strict -c 'from hashrepo import LocalCAS'
+          /tmp/tensorfs-wheel/bin/mypy --strict -c 'from tensorfs import LocalCAS'
 
   go:
     runs-on: ubuntu-latest

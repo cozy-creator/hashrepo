@@ -1,4 +1,4 @@
-package hashrepo
+package tensorfs
 
 import (
 	"context"
@@ -208,7 +208,7 @@ func (p Promoter) promoteOne(ctx context.Context, planned promotionObject) promo
 // checksum-confirms every destination. Per-object failures remain retryable.
 func (p Promoter) Promote(ctx context.Context, plan Plan) (PromotionReport, error) {
 	if p.Store == nil {
-		return PromotionReport{}, errors.New("hashrepo: promotion store is required")
+		return PromotionReport{}, errors.New("tensorfs: promotion store is required")
 	}
 	objects, err := validatePromotionPlan(plan)
 	if err != nil {

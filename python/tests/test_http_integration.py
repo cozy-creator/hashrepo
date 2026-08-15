@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import ClassVar
 
-from hashrepo import (
+from tensorfs import (
     MAX_CHUNK_SIZE,
     CASRef,
     Chunk,

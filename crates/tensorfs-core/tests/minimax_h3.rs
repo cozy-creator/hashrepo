@@ -18,9 +18,9 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use hashrepo_core::object::plan_and_hash;
-use hashrepo_core::planner::{ByteSource, MAX_OBJECT_SIZE, PlannerId, RegionKind};
-use hashrepo_core::source::FileByteSource;
+use tensorfs_core::object::plan_and_hash;
+use tensorfs_core::planner::{ByteSource, MAX_OBJECT_SIZE, PlannerId, RegionKind};
+use tensorfs_core::source::FileByteSource;
 
 const ENV_DIR: &str = "TENSORFS_MINIMAX_H3_DIR";
 const SHARD_COUNT: usize = 14;
@@ -238,7 +238,7 @@ impl ByteSource for ReducedShard {
 /// tensors in ascending start order, so the mapping is exact rather than
 /// inferred from digests.
 fn digests_by_tensor(
-    plan: &hashrepo_core::object::HashedPlan,
+    plan: &tensorfs_core::object::HashedPlan,
     tensors: &[Tensor],
 ) -> BTreeMap<String, Vec<String>> {
     let mut objects = plan

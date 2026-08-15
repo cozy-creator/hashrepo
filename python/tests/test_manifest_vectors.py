@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from hashrepo import CASRef, RepositoryManifest
+from tensorfs import CASRef, RepositoryManifest
 
 ROOT = Path(__file__).parents[2]
 VECTORS = ROOT / "spec" / "v1" / "vectors"

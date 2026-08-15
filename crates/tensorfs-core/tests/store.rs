@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
-use hashrepo_core::object::ObjectDigest;
-use hashrepo_core::store::{ObjectStore, StoreError, TempCollection};
+use tensorfs_core::object::ObjectDigest;
+use tensorfs_core::store::{ObjectStore, StoreError, TempCollection};
 
 fn digest_of(bytes: &[u8]) -> ObjectDigest {
     ObjectDigest::from_bytes(Sha256::digest(bytes).into())
@@ -32,7 +32,7 @@ struct TempRoot(PathBuf);
 impl TempRoot {
     fn new(name: &str) -> Self {
         let path =
-            std::env::temp_dir().join(format!("hashrepo-store-{name}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("tensorfs-store-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         Self(path)
     }

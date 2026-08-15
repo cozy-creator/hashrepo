@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from hashrepo import MAX_CHUNK_SIZE, FileEntry, LocalCAS, RefConflict, RepositoryManifest
+from tensorfs import MAX_CHUNK_SIZE, FileEntry, LocalCAS, RefConflict, RepositoryManifest
 
 
 def test_local_cas_survives_restart_and_materializes_atomically(tmp_path: Path) -> None:
@@ -34,7 +34,7 @@ def test_local_cas_survives_restart_and_materializes_atomically(tmp_path: Path) 
 def test_fresh_process_reuses_local_cas_without_loading_network_stack(tmp_path: Path) -> None:
     root = tmp_path / "cas"
     create = """
-from hashrepo import LocalCAS
+from tensorfs import LocalCAS
 from pathlib import Path
 cas = LocalCAS(Path(__import__('sys').argv[1]))
 ref = cas.put_bytes(b'fresh-process')
@@ -42,7 +42,7 @@ cas.compare_and_swap_ref('graph', ref, expected=None)
 """
     reuse = """
 import sys
-from hashrepo import LocalCAS
+from tensorfs import LocalCAS
 assert 'urllib.request' not in sys.modules
 cas = LocalCAS(__import__('pathlib').Path(sys.argv[1]))
 ref = cas.read_ref('graph')
@@ -81,7 +81,7 @@ def test_resident_put_bytes_never_creates_a_temporary_file(
 def test_same_object_is_idempotent_across_processes(tmp_path: Path) -> None:
     root = tmp_path / "cas"
     script = """
-from hashrepo import LocalCAS
+from tensorfs import LocalCAS
 from pathlib import Path
 import sys
 cas = LocalCAS(Path(sys.argv[1]))
@@ -109,7 +109,7 @@ def test_killed_writer_cannot_damage_a_committed_ref(tmp_path: Path) -> None:
     replacement = LocalCAS(root).put_bytes(b"replacement")
     LocalCAS(root).object_path(replacement).unlink()
     script = """
-from hashrepo import CASRef, LocalCAS
+from tensorfs import CASRef, LocalCAS
 from pathlib import Path
 import os, sys
 cas = LocalCAS(Path(sys.argv[1]))
@@ -287,7 +287,7 @@ def test_concurrent_adoptions_are_idempotent_and_consume_every_temp(tmp_path: Pa
 
 def test_file_above_chunk_boundary_round_trips(tmp_path: Path) -> None:
     source = tmp_path / "large.bin"
-    block = b"hashrepo" * 95325
+    block = b"tensorfs" * 95325
     with source.open("wb") as handle:
         remaining = MAX_CHUNK_SIZE + 3
         while remaining:

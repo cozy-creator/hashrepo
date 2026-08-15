@@ -32,7 +32,7 @@ class TransferSession:
 class TransferJournal:
     """A process-safe durable map from caller operation names to sessions.
 
-    The caller owns the meaning of ``name`` and obtains grants. HashRepo stores
+    The caller owns the meaning of ``name`` and obtains grants. TensorFS stores
     only the remote session and manifest identity needed to ask that service for
     a resumed plan after a restart.
     """

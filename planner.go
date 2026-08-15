@@ -1,4 +1,4 @@
-package hashrepo
+package tensorfs
 
 import (
 	"bytes"
@@ -276,7 +276,7 @@ func StagedKey(sessionID string, ref Ref) (string, error) {
 // grants for objects that are neither claimable-resident nor already staged.
 func (p Planner) Plan(ctx context.Context, sessionID string, manifest Manifest) (Plan, error) {
 	if p.Store == nil {
-		return Plan{}, errors.New("hashrepo: store is required")
+		return Plan{}, errors.New("tensorfs: store is required")
 	}
 	manifest, err := ValidateManifest(manifest, p.Limits)
 	if err != nil {

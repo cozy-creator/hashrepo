@@ -1,4 +1,4 @@
-package hashrepo
+package tensorfs
 
 import (
 	"bytes"

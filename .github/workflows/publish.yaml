@@ -76,24 +76,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv venv --python 3.12 /tmp/hashrepo-wheel
-          uv pip install --python /tmp/hashrepo-wheel/bin/python dist/hashrepo-*.whl mypy
+          uv venv --python 3.12 /tmp/tensorfs-wheel
+          uv pip install --python /tmp/tensorfs-wheel/bin/python dist/tensorfs-*.whl mypy
           cd /tmp
-          /tmp/hashrepo-wheel/bin/python - <<'PY'
+          /tmp/tensorfs-wheel/bin/python - <<'PY'
           from importlib.resources import files
           from pathlib import Path
           from tempfile import TemporaryDirectory
 
-          from hashrepo import LocalCAS
+          from tensorfs import LocalCAS
 
-          assert files("hashrepo").joinpath("py.typed").is_file()
+          assert files("tensorfs").joinpath("py.typed").is_file()
 
           with TemporaryDirectory() as root:
               cas = LocalCAS(Path(root))
               ref = cas.put_bytes(b"release-smoke")
               assert cas.verify_object(ref).read_bytes() == b"release-smoke"
           PY
-          /tmp/hashrepo-wheel/bin/mypy --strict -c 'from hashrepo import LocalCAS'
+          /tmp/tensorfs-wheel/bin/mypy --strict -c 'from tensorfs import LocalCAS'
 
       - name: Preserve exact distributions for publishing
         uses: actions/upload-artifact@v4
@@ -133,7 +133,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          url="https://pypi.org/pypi/hashrepo/${version}/json"
+          url="https://pypi.org/pypi/tensorfs/${version}/json"
           for attempt in {1..12}; do
             if curl --fail --silent --show-error "${url}" > release.json; then
               python3 - <<'PY'
@@ -149,5 +149,5 @@ jobs:
             fi
             sleep 5
           done
-          echo "PyPI did not expose hashrepo ${version} within 60 seconds" >&2
+          echo "PyPI did not expose tensorfs ${version} within 60 seconds" >&2
           exit 1

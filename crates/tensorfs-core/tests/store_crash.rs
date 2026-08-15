@@ -11,10 +11,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
-use hashrepo_core::store::{ObjectStore, TempCollection};
+use tensorfs_core::store::{ObjectStore, TempCollection};
 
-const ROLE_ENV: &str = "HASHREPO_CRASH_ROLE";
-const ROOT_ENV: &str = "HASHREPO_CRASH_ROOT";
+const ROLE_ENV: &str = "TENSORFS_CRASH_ROLE";
+const ROOT_ENV: &str = "TENSORFS_CRASH_ROOT";
 
 /// Child dispatch: a no-op pass unless the parent set the role env.
 #[test]
@@ -41,7 +41,7 @@ struct TempRoot(PathBuf);
 impl TempRoot {
     fn new(name: &str) -> Self {
         let path =
-            std::env::temp_dir().join(format!("hashrepo-crash-{name}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("tensorfs-crash-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         Self(path)

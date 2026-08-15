@@ -1,4 +1,4 @@
-module github.com/cozy-creator/hashrepo
+module github.com/cozy-creator/tensorfs
 
 go 1.24.0
 

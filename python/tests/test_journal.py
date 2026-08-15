@@ -4,14 +4,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-from hashrepo import CASRef, TransferJournal, TransferSession
+from tensorfs import CASRef, TransferJournal, TransferSession
 
 
 def test_transfer_session_survives_process_exit_and_matches_manifest(tmp_path: Path) -> None:
     path = tmp_path / "journal.json"
     manifest = CASRef.digest_bytes(b"manifest")
     script = """
-from hashrepo import CASRef, TransferJournal, TransferSession
+from tensorfs import CASRef, TransferJournal, TransferSession
 from pathlib import Path
 import sys
 journal = TransferJournal(Path(sys.argv[1]))

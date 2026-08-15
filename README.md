@@ -1,6 +1,6 @@
-# hashrepo
+# tensorfs
 
-`hashrepo` is a content-addressed storage and snapshot engine for ordinary
+`tensorfs` is a content-addressed storage and snapshot engine for ordinary
 files and repositories. It provides:
 
 - a canonical SHA-256 manifest with explicit bounded chunk lengths;
@@ -39,8 +39,8 @@ The supported v1 shape is intentionally narrow:
 
 ```text
 spec/v1/                 format documentation, JSON Schema, golden vectors
-crates/hashrepo-core/     Rust canonical formats, planners and storage engine
-python/src/hashrepo/     Python local CAS and grant-transfer data plane
+crates/tensorfs-core/     Rust canonical formats, planners and storage engine
+python/src/tensorfs/     Python local CAS and grant-transfer data plane
 *.go                     Go manifest, planning, and promotion engine
 ```
 
@@ -98,7 +98,7 @@ This improves reuse for unchanged or frozen tensors, duplicate uploads,
 partial-fine-tune and LoRA checkpoint series, and structurally identical model
 variants with the same ordered tensor names and sizes. It does not help a full
 fine-tune where every tensor changes, and it does not reduce the first cold
-download; binding and file selection are outside HashRepo chunking. Adding,
+download; binding and file selection are outside TensorFS chunking. Adding,
 removing, or resizing a small tensor can repack the remainder of its consecutive
 small-tensor run up to the next large-tensor boundary. This deterministic greedy
 policy is not content-defined chunking and has no rolling-hash resynchronization.

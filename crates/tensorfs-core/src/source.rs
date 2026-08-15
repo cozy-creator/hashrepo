@@ -312,7 +312,7 @@ mod tests {
             loop {
                 let nonce = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
                 let path = std::env::temp_dir().join(format!(
-                    "hashrepo-file-byte-source-{}-{nonce}",
+                    "tensorfs-file-byte-source-{}-{nonce}",
                     std::process::id()
                 ));
                 match fs::create_dir(&path) {
@@ -572,7 +572,7 @@ mod tests {
             .write(true)
             .open(path)?;
         file.seek(SeekFrom::Start(OFFSET))?;
-        file.write_all(b"hashrepo")?;
+        file.write_all(b"tensorfs")?;
         let metadata = file.metadata()?;
         assert_eq!(metadata.len(), OFFSET + 8);
         assert!(metadata.blocks() * 512 < 1024 * 1024);
@@ -581,7 +581,7 @@ mod tests {
         let mut bytes = [0_u8; 8];
         source.read_exact_at(OFFSET, &mut bytes)?;
 
-        assert_eq!(&bytes, b"hashrepo");
+        assert_eq!(&bytes, b"tensorfs");
         assert_eq!(source.stream_position_for_test()?, OFFSET + 8);
         Ok(())
     }

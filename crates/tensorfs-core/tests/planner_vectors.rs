@@ -4,10 +4,10 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path};
 
-use hashrepo_core::object::plan_and_hash;
-use hashrepo_core::planner::{ByteSource, MAX_OBJECT_SIZE, PlannerId, RegionKind, plan};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use tensorfs_core::object::plan_and_hash;
+use tensorfs_core::planner::{ByteSource, MAX_OBJECT_SIZE, PlannerId, RegionKind, plan};
 
 const CORPUS_PATH: &str = "../../spec/v1/planner-vectors/planner-vectors.json";
 

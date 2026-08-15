@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::io;
 
-use hashrepo_core::object::{HashedPlan, plan_and_hash};
-use hashrepo_core::planner::{ByteSource, MAX_OBJECT_SIZE, PlannerId, RegionKind, plan};
+use tensorfs_core::object::{HashedPlan, plan_and_hash};
+use tensorfs_core::planner::{ByteSource, MAX_OBJECT_SIZE, PlannerId, RegionKind, plan};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -229,7 +229,7 @@ fn standalone_composite_and_merged_lora_follow_serialized_tensor_semantics() {
     // A composite file stores the adapter tensors verbatim, so it reuses the
     // standalone adapter objects even though the file header is different.
     assert_eq!(standalone_tensors, composite_tensors[2..]);
-    // Merging changes the serialized base weight. HashRepo does not infer that
+    // Merging changes the serialized base weight. TensorFS does not infer that
     // the new weight was produced from the LoRA delta, but still reuses norm.
     assert_ne!(merged_tensors[0], composite_tensors[0]);
     assert_eq!(merged_tensors[1], composite_tensors[1]);

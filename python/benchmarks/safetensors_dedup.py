@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import BinaryIO
 
-from hashrepo import FileEntry, LocalCAS, RepositoryManifest
+from tensorfs import FileEntry, LocalCAS, RepositoryManifest
 
 _MIB = 1 << 20
 _COPY_BUFFER = 8 << 20
@@ -162,7 +162,7 @@ def _run(body_mib: int, tensor_count: int, changed_tensor: int) -> dict[str, obj
     tensor_bytes, remainder = divmod(body_bytes, tensor_count)
     if remainder:
         raise ValueError("body MiB must divide evenly across the tensor count")
-    with tempfile.TemporaryDirectory(prefix="hashrepo-dedup-") as raw_root:
+    with tempfile.TemporaryDirectory(prefix="tensorfs-dedup-") as raw_root:
         root = Path(raw_root)
         parent = root / "parent.safetensors"
         child = root / "child.safetensors"
@@ -174,7 +174,7 @@ def _run(body_mib: int, tensor_count: int, changed_tensor: int) -> dict[str, obj
         child_entry, child_metrics = _ingest(cas, child)
         return {
             "environment": {
-                "hashrepo": importlib.metadata.version("hashrepo"),
+                "tensorfs": importlib.metadata.version("tensorfs"),
                 "python": sys.version.split()[0],
                 "platform": platform.platform(),
             },
