@@ -10,6 +10,8 @@
 
 /// The FUSE adapters need a kernel, so they exist only on Linux in this slice.
 #[cfg(target_os = "linux")]
+mod locks;
+#[cfg(target_os = "linux")]
 mod snapshot_fs;
 #[cfg(target_os = "linux")]
 mod workspace_fs;
