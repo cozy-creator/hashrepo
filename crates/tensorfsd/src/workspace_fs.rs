@@ -1184,13 +1184,20 @@ impl Filesystem for WorkspaceFs {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        let Some(WNode::Directory { children, .. }) = self.nodes.get(&ino) else {
+        let Some(WNode::Directory {
+            children, parent, ..
+        }) = self.nodes.get(&ino)
+        else {
             reply.error(libc::ENOTDIR);
             return;
         };
+        // `..` carries the PARENT's inode. Reporting the directory's own
+        // number there is what a filesystem root looks like, and tools that
+        // walk upwards by comparing that number against `.` read every
+        // directory as a mount root.
         let mut entries: Vec<(u64, FileType, String)> = vec![
             (ino, FileType::Directory, ".".to_owned()),
-            (ino, FileType::Directory, "..".to_owned()),
+            (*parent, FileType::Directory, "..".to_owned()),
         ];
         for (name, child) in children {
             let kind = match self.nodes.get(child) {
