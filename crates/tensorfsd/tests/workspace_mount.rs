@@ -125,6 +125,40 @@ fn proc_io(pid: u32) -> (u64, u64) {
     (field("read_bytes:"), field("write_bytes:"))
 }
 
+/// The daemon's cumulative major faults — page faults that had to go to the
+/// storage layer. Executable text paging lands here, and `read_bytes` counts
+/// those same bytes, so this separates "the workload read the file" from "the
+/// process read itself".
+fn proc_majflt(pid: u32) -> u64 {
+    let raw = fs::read_to_string(format!("/proc/{pid}/stat")).expect("daemon stat reads");
+    // Field 12 (1-based) is majflt. The comm field is parenthesised and may
+    // contain spaces, so split after the closing paren rather than on it.
+    let tail = raw.rsplit_once(')').expect("stat has a comm field").1;
+    tail.split_whitespace()
+        .nth(9)
+        .and_then(|value| value.parse::<u64>().ok())
+        .expect("majflt parses")
+}
+
+/// Pull the daemon's executable into the page cache before a measured window.
+///
+/// `read_bytes` counts bytes fetched from the storage layer, and the daemon
+/// demand-pages its own text: `BinMount::spawn` returns as soon as the mount
+/// appears, so the compose path has never executed and none of its pages are
+/// resident. Those faults would otherwise land inside the measurement and are
+/// indistinguishable from the workload's own reads. Reading the file populates
+/// the shared per-inode page cache, so the daemon's later text faults are
+/// minor and cost no block I/O.
+///
+/// This does not weaken the bound — it removes a term that was never part of
+/// what the bound is about.
+fn prefault_daemon_image() {
+    let image = Path::new(env!("CARGO_BIN_EXE_tensorfsd"));
+    let bytes = fs::read(image).expect("daemon image reads");
+    // Defeat any optimisation that would elide the read entirely.
+    assert!(!bytes.is_empty(), "the daemon image is not empty");
+}
+
 struct BinMount {
     child: process::Child,
     mountpoint: PathBuf,
@@ -365,6 +399,10 @@ fn an_8_kib_overwrite_recomposes_exactly_the_touched_object() {
     // Phase 2: an 8 KiB overwrite inside the second object, with the daemon's
     // real I/O accounted, so a whole-file recompose cannot hide.
     let daemon = BinMount::spawn(&root, "main", &mountpoint);
+    // The daemon has only run the mount path so far; its compose text is not
+    // resident and would fault in on the storage layer inside the window below.
+    prefault_daemon_image();
+    let majflt_before = proc_majflt(daemon.pid());
     let (read_before, write_before) = proc_io(daemon.pid());
     let big = OpenOptions::new()
         .write(true)
@@ -375,14 +413,33 @@ fn an_8_kib_overwrite_recomposes_exactly_the_touched_object() {
     big.sync_all().expect("overwrite fsync works");
     drop(big);
     let (read_after, write_after) = proc_io(daemon.pid());
+    let majflt_delta = proc_majflt(daemon.pid()) - majflt_before;
     daemon.sigterm_and_wait();
 
     let read_delta = read_after - read_before;
     let write_delta = write_after - write_before;
+    println!(
+        "8 KiB overwrite: read {} KiB, wrote {} KiB, {majflt_delta} major faults",
+        read_delta / 1024,
+        write_delta / 1024,
+    );
+    // A gross ceiling on block reads, and deliberately NOT the proof that only
+    // one slot was composed. Measured 2026-08-15, both with a warm cache and
+    // with every object evicted first: a single-slot compose and a forced
+    // whole-file recompose read the SAME volume (0 KiB warm, 96 MiB cold in
+    // both cases). Read volume here is invariant under the regression, so it
+    // cannot discriminate it — the write bound below is what does, and it was
+    // red-proved against exactly that mutation. The exact composition of the
+    // cold-cache 96 MiB was not run to ground; see the PR body.
     assert!(
         read_delta < 96 * MIB,
-        "composing one 64 MiB slot reads one slot, not the file (read {read_delta} bytes)"
+        "the overwrite path must not explode block reads \
+         (read {read_delta} bytes across {majflt_delta} major faults; a non-zero fault \
+          count means the daemon paged itself in and the prefault did not hold)"
     );
+    // THE discriminating assertion: a whole-file recompose writes 160 MiB here
+    // against one object's 64 MiB, and forcing every slot to compose fails
+    // exactly this line.
     assert!(
         write_delta < 112 * MIB,
         "composing one 64 MiB slot writes one object, not the file (wrote {write_delta} bytes)"
