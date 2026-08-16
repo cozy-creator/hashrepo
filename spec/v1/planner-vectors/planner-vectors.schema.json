@@ -70,7 +70,7 @@
       "required": ["planner", "file_size", "objects"],
       "properties": {
         "planner": {
-          "enum": ["safetensors-v1", "gguf-v1", "raw-fixed-64m-v1"]
+          "enum": ["safetensors-v1", "gguf-v1", "blob-v1"]
         },
         "file_size": {
           "type": "integer",
