@@ -187,7 +187,18 @@ fn structural_attacks_are_refused_on_every_read() {
         ));
     }
 
-    // A directory where an object belongs.
+    // A directory where an object belongs. The REFUSAL is universal; its typed
+    // SHAPE is not. Unix reaches the store's own file-type check and answers
+    // `NotARegularFile`. Windows refuses inside `open` itself — `PermissionDenied`,
+    // OS code 5 — before any check of ours can run, so it surfaces as `Io`.
+    //
+    // The property this arm exists to prove is that a directory never opens as
+    // an object and no bytes are produced, and that holds on both. Unix keeps
+    // the exact variant asserted; Windows asserts the refusal without dictating
+    // whose refusal it is. Normalising the variant would mean stat-ing before
+    // every open, and `open_object` is the hot read path — paying a syscall on
+    // every legitimate read to tidy an error that only arises under deliberate
+    // tampering is the wrong trade, and the same one rejected for re-hashing.
     let (scratch, meta, _id, digest) = built("dir");
     let path = object_path(scratch.path(), &digest);
     fs::remove_file(&path).expect("victim removes");
@@ -197,8 +208,17 @@ fn structural_attacks_are_refused_on_every_read() {
         .store()
         .open_object(&digest)
         .expect_err("a directory is not an object");
+    #[cfg(unix)]
     assert!(
         matches!(error, StoreError::NotARegularFile { .. }),
+        "directory produced {error:?}"
+    );
+    #[cfg(not(unix))]
+    assert!(
+        matches!(
+            error,
+            StoreError::NotARegularFile { .. } | StoreError::Io(_)
+        ),
         "directory produced {error:?}"
     );
 }
