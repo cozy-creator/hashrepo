@@ -187,7 +187,11 @@ fn assert_recovered(
 
     // An independent on-disk rehash: nothing at a digest path may disagree
     // with its name, and nothing malformed may appear under objects/.
-    Consistency::scan(root).assert_intact(&context);
+    // `assert_examined`, not `assert_intact`: this is the matrix's primary
+    // independent oracle after every round, so it must prove it actually
+    // rehashed something. `calibrate` runs one uninterrupted cycle before the
+    // first round, so the store is never legitimately empty here.
+    Consistency::scan(root).assert_examined(1, &context);
 
     let meta = WorkspaceStore::open(root)
         .unwrap_or_else(|error| panic!("{context}: the store did not reopen: {error}"));
@@ -380,5 +384,5 @@ fn a_kill_at_any_point_in_the_cycle_leaves_a_consistent_store() {
         .seal_snapshot("main", None)
         .expect("a final seal works");
     harness::assert_snapshot_fully_backed(&meta, &id, "after the whole matrix");
-    Consistency::scan(root).assert_intact("after the whole matrix");
+    Consistency::scan(root).assert_examined(1, "after the whole matrix");
 }

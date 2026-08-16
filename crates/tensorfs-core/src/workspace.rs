@@ -364,6 +364,8 @@ impl WorkspaceStore {
                 .verify(digest)
                 .map_err(|_| WorkspaceError::MissingObject { digest: *digest })?;
         }
+        #[cfg(test)]
+        fire_after_verify_seam();
 
         let mut connection = self.connection.lock().expect("metadata mutex is healthy");
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1350,4 +1352,113 @@ fn build_snapshot(
         }
     }
     Ok(builder.finish()?)
+}
+
+/// Test-only seam, fired between the out-of-transaction `verify` sweep and the
+/// in-transaction presence recheck in [`WorkspaceStore::commit_generation`].
+///
+/// That window is the entire reason the recheck exists: a GC pass may delete
+/// the objects after they have been rehashed and before the head advances.
+/// It is not otherwise reachable from a test, because `verify` is strictly
+/// stronger than `exists` — no static on-disk state makes one pass while the
+/// other fails, so the race can only be constructed temporally.
+///
+/// `#[cfg(test)]` keeps every line of this out of shipped binaries. The hook
+/// is ONE-SHOT: it is taken as it fires, so an installed hook cannot leak into
+/// another test sharing this binary.
+#[cfg(test)]
+static AFTER_VERIFY_SEAM: Mutex<Option<Box<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+
+#[cfg(test)]
+fn fire_after_verify_seam() {
+    let hook = AFTER_VERIFY_SEAM
+        .lock()
+        .expect("seam mutex is healthy")
+        .take();
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "tensorfs-workspace-unit-{name}-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    /// The GC race the in-transaction recheck exists to close.
+    ///
+    /// `commit_generation` verifies every referenced object OUTSIDE the
+    /// metadata transaction, then rechecks presence INSIDE it. Deleting the
+    /// objects before the call proves nothing — the outer `verify` refuses
+    /// first, and the test would still pass with the recheck removed. The
+    /// seam deletes them in the window between the two, which is exactly what
+    /// a GC pass does to a writer stalled across two collection epochs.
+    #[test]
+    fn a_delete_between_verify_and_commit_cannot_land_a_head_naming_deleted_bytes() {
+        let root = scratch("gc-race");
+        let store = WorkspaceStore::open(&root).expect("store opens");
+        store.create_workspace("main").expect("workspace created");
+
+        let bytes = b"bytes a stalled writer already verified".to_vec();
+        let admitted = store.store().put_bytes(&bytes).expect("object admits");
+        let digest = admitted.digest();
+
+        let before = store
+            .head_generation("main")
+            .expect("head readable before the race");
+
+        // Fires after `verify` has passed and before the transaction opens.
+        let victim = root.clone();
+        *AFTER_VERIFY_SEAM.lock().expect("seam mutex is healthy") = Some(Box::new(move || {
+            let store = ObjectStore::open(&victim).expect("collector opens the store");
+            assert!(
+                store.remove_object(&digest).expect("collector deletes"),
+                "the seam must actually remove the object it is simulating a GC for"
+            );
+        }));
+
+        let result = store.commit_generation(
+            "main",
+            &[Mutation::CreateFile {
+                path: "model.bin".to_owned(),
+                executable: false,
+                planner: PlannerId::RawFixed64mV1,
+                records: vec![FileRecord::Data {
+                    digest,
+                    length: admitted.length(),
+                }],
+            }],
+        );
+
+        match result {
+            Err(WorkspaceError::MissingObject { digest: refused }) => {
+                assert_eq!(refused, digest, "the refusal must name the deleted object");
+            }
+            Err(other) => panic!("expected MissingObject, got {other:?}"),
+            Ok(generation) => panic!(
+                "the commit landed generation {generation} while naming bytes \
+                 that no longer exist — the in-transaction recheck is gone"
+            ),
+        }
+
+        let after = store
+            .head_generation("main")
+            .expect("head readable after the race");
+        assert_eq!(
+            after, before,
+            "a refused commit must not advance the workspace head"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

@@ -136,6 +136,10 @@ impl Drop for Scratch {
 /// never from the library's own bookkeeping.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Consistency {
+    /// Whether `objects/sha256` existed at the scanned root at all. `walk`
+    /// returns silently when `read_dir` fails, so without this an unreadable
+    /// or non-existent namespace is indistinguishable from a clean one.
+    pub namespace_present: bool,
     pub objects: u64,
     pub temps: u64,
     /// Digest paths whose resident bytes hash to something else. Must always
@@ -152,6 +156,7 @@ impl Consistency {
     pub fn scan(root: &Path) -> Self {
         let mut report = Self::default();
         let namespace = root.join("objects").join("sha256");
+        report.namespace_present = namespace.is_dir();
         walk(&namespace, &mut report);
         report.temps = std::fs::read_dir(root.join("tmp"))
             .map(|entries| entries.filter_map(Result::ok).count() as u64)
@@ -159,8 +164,23 @@ impl Consistency {
         report
     }
 
-    /// The store is intact: nothing corrupt, nothing malformed.
+    /// The store is intact: nothing corrupt, nothing malformed — and the
+    /// namespace was actually there to examine.
+    ///
+    /// The last clause is not pedantry. `walk` returns silently when
+    /// `read_dir` fails, so without it a scan of a wrong path, or of a root
+    /// that was never opened as a store, reports a perfectly intact store and
+    /// passes. `ObjectStore::open` always `create_dir_all`s `objects/sha256`,
+    /// so an absent namespace means the scan looked somewhere no store lives —
+    /// never a legitimately empty one. `kill_matrix` leans on this as its
+    /// primary independent oracle after every round, so it must not be able to
+    /// pass by having examined nothing.
     pub fn assert_intact(&self, context: &str) {
+        assert!(
+            self.namespace_present,
+            "{context}: no objects/sha256 namespace at the scanned root — this \
+             scan examined nothing, so it cannot vouch for anything"
+        );
         assert!(
             self.corrupt.is_empty(),
             "{context}: resident objects whose bytes do not hash to their name: {:?}",
@@ -171,6 +191,20 @@ impl Consistency {
             "{context}: malformed entries under objects/: {:?}",
             self.malformed
         );
+    }
+
+    /// [`Self::assert_intact`], plus proof that at least `minimum` objects
+    /// were rehashed. Use where the caller knows the store cannot be empty, so
+    /// that "verified 40 objects, all good" can never be confused with "found
+    /// nothing to verify".
+    pub fn assert_examined(&self, minimum: u64, context: &str) {
+        assert!(
+            self.objects >= minimum,
+            "{context}: the scan rehashed {} objects, expected at least {minimum} \
+             — an oracle that examined nothing proves nothing",
+            self.objects
+        );
+        self.assert_intact(context);
     }
 }
 
