@@ -18,7 +18,9 @@
 //!  * the local store is intact under an independent on-disk rehash;
 //!  * no snapshot is adopted whose objects are not all resident and verified;
 //!  * the operation eventually converges;
-//!  * once converged, repeating it transfers nothing.
+//!  * once converged, repeating it transfers nothing;
+//!  * a killed push strands no temp at all (it never writes locally), and a
+//!    killed pull strands only reclaimable ones (it does).
 //!
 //! Default run: 12 interruptions per direction. `TENSORFS_HEAVY=1` runs 60.
 
@@ -33,7 +35,7 @@ use std::time::{Duration, Instant};
 
 use harness::{
     Consistency, DirTransport, Rng, Scratch, assert_snapshot_fully_backed, data_digests,
-    iterations, reconstruct, sealed_workspace, seed_from_env,
+    is_library_temp, iterations, reconstruct, sealed_workspace, seed_from_env,
 };
 use tensorfs_core::sync::{PushOptions, pull_snapshot, push_snapshot};
 use tensorfs_core::tfm1::SnapshotId;
@@ -180,9 +182,19 @@ impl KillWindow {
     }
 }
 
-/// A push interrupted at randomised points, restarted until it converges.
+/// A push interrupted at randomised points, restarted until it converges, then
+/// pushed once more to prove the settled state moves nothing.
+///
+/// The name stops short of "never re-uploads" on purpose, because that is not
+/// achievable and asserting it would be asserting a falsehood. A SIGKILL during
+/// `upload_pack` discards bytes that were genuinely in flight, and the landed
+/// wire resumes at PROMOTION level across sessions — see
+/// `resumption_is_promotion_level_across_sessions_and_exact_within_one` in
+/// `sync.rs` — so staged-but-unpromoted objects legitimately retransmit after a
+/// restart. What is guaranteed, and what this asserts, is convergence plus a
+/// settled re-push that transfers nothing.
 #[test]
-fn a_push_killed_repeatedly_still_converges_and_never_re_uploads() {
+fn a_push_killed_repeatedly_converges_and_a_settled_re_push_moves_nothing() {
     let source = Scratch::new("push-kill-src");
     let hub = Scratch::new("push-kill-hub");
     let id = {
@@ -225,9 +237,14 @@ fn a_push_killed_repeatedly_still_converges_and_never_re_uploads() {
         }
 
         // The publisher's own store must be untouched by an interrupted
-        // push: push reads locally and writes remotely.
-        Consistency::scan(source.path())
-            .assert_intact(&format!("seed {seed:#x}, push attempt {attempt}"));
+        // push: push reads locally and writes remotely. "Untouched" includes
+        // `tmp/`. The child is dead by now, so no live writer can legitimately
+        // hold a lease here — a stranded temp would mean the push admitted
+        // objects into the publisher's own store and was killed mid-write.
+        let context = format!("seed {seed:#x}, push attempt {attempt}");
+        let scan = Consistency::scan(source.path());
+        scan.assert_intact(&context);
+        scan.assert_no_temps(&context);
         {
             let meta = WorkspaceStore::open(source.path()).expect("publisher reopens");
             assert_snapshot_fully_backed(&meta, &id, "publisher after an interrupted push");
@@ -352,5 +369,41 @@ fn a_pull_killed_repeatedly_converges_byte_exactly_without_re_downloading() {
         "a settled pull re-downloaded objects it already held (seed {seed:#x})"
     );
     assert_eq!(report.skipped_local_resident as usize, expected_objects);
-    Consistency::scan(sink.path()).assert_intact("after a repeatedly-killed pull");
+    let scan = Consistency::scan(sink.path());
+    scan.assert_intact("after a repeatedly-killed pull");
+
+    // Temps, on the side that actually writes. Unlike the push above, the sink
+    // IS the writer, so a kill between leasing a temp and installing the object
+    // strands one — that is normal and unavoidable, and
+    // `collect_abandoned_temps` exists because of it. `temps.is_empty()` here
+    // would be a false failure, so the assertion is the property that does
+    // hold: every stranded temp carries the library shape, therefore the
+    // reclaimer will pick it up and it is not a permanent leak.
+    let alien: Vec<&String> = scan
+        .temps
+        .iter()
+        .filter(|name| !is_library_temp(name))
+        .collect();
+    assert!(
+        alien.is_empty(),
+        "a killed pull stranded entries under tmp/ that no reclaimer will ever \
+         collect: {alien:?} (seed {seed:#x})"
+    );
+    let collected = meta
+        .store()
+        .collect_abandoned_temps(Duration::from_nanos(1))
+        .expect("temp reclamation runs");
+    eprintln!(
+        "pull: {} temp(s) stranded by the kills, {} reclaimed",
+        scan.temps.len(),
+        collected.deleted
+    );
+    assert_eq!(
+        collected.deleted as usize,
+        scan.temps.len(),
+        "the reclaimer left temps behind that the kills stranded (seed {seed:#x})"
+    );
+    Consistency::scan(sink.path()).assert_no_temps(&format!(
+        "after reclaiming abandoned temps (seed {seed:#x})"
+    ));
 }

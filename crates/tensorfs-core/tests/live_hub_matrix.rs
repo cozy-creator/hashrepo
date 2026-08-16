@@ -430,12 +430,27 @@ fn a_large_round_trip_is_measured_end_to_end() {
         "a cold pull must fetch the declared payload exactly once"
     );
 
-    // Grant batching: the hub advertises a per-request pack bound, so a push
-    // must not spend a whole round trip per pack. This is the assertion that
-    // catches the batching regression described in the PR body.
+    // Grant round trips, as a COUNT gate — this lane never gates on wall-clock.
+    //
+    // The client claims exactly one pack per `pack_grants` call, deliberately:
+    // a claim carries the encoded pack's checksum, so batching claims would
+    // mean holding N encoded packs resident at once, and push bounds peak
+    // transfer memory to one payload plus its encoding. The hub's advertised
+    // `max_packs_per_request` is headroom the client does not spend. So the
+    // honest bound is one round trip per pack plus the single closing resume
+    // probe that re-derives `missing`; anything above that is replan churn
+    // re-walking the session, which is the regression worth catching.
     println!(
-        "NOTE grant round trips: {} pack-grant calls for {} packs",
+        "grant round trips: {} pack-grant calls for {} packs",
         push_counts.pack_grants, report.packs
+    );
+    assert!(
+        push_counts.pack_grants <= report.packs + 1,
+        "the push spent {} pack-grant round trips for {} packs; the bound is one \
+         claim per pack plus one closing resume probe, i.e. {}",
+        push_counts.pack_grants,
+        report.packs,
+        report.packs + 1
     );
 }
 

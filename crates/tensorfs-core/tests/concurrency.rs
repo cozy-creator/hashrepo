@@ -231,7 +231,7 @@ fn concurrent_admissions_of_identical_bytes_converge_on_one_object() {
     );
     // Abandoned temps are permitted (a losing racer's lease), but nothing may
     // be left mid-write once every writer has exited.
-    assert_eq!(scan.temps, 0, "the race leaked temp files");
+    scan.assert_no_temps("after a four-way admission race");
 }
 
 fn digest_of(meta: &WorkspaceStore, bytes: &[u8]) -> ObjectDigest {
