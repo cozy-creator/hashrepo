@@ -142,6 +142,57 @@ def test_progress_runs_once_on_the_caller_thread_after_success(tmp_path: Path) -
     assert callbacks == [caller]
 
 
+def test_progress_reports_a_landed_object_before_the_batch_finishes(tmp_path: Path) -> None:
+    """A live transfer must be visible WHILE it is live, not only once it ends.
+
+    pgw#1287: `progress` used to be called from the report-assembly loop, which
+    runs after every future has drained. A 31.6 GB snapshot therefore reported
+    `0 / total` for its entire duration, and the hub — whose transfer freshness
+    window is six minutes — condemned the pod while the download was proceeding
+    correctly. A test that only checks the final callback set cannot see this:
+    the totals were always right, only their timing was wrong.
+
+    So this asserts the timing directly. The second object refuses to finish
+    until the first object's callback has been observed, which is impossible if
+    callbacks wait for the batch. If the emission regresses, the second worker
+    times out and the report carries its failure instead of hanging the suite.
+    """
+
+    first = CASRef.digest_bytes(b"first")
+    second = CASRef.digest_bytes(b"second")
+    first_reported = threading.Event()
+
+    class GatedTransport(MemoryTransport):
+        def download(self, grant: TransferGrant, destination: Path) -> None:
+            if grant.digest == second and not first_reported.wait(timeout=10):
+                raise AssertionError(
+                    "no progress was reported for the first object while the "
+                    "second was still in flight — the whole transfer is "
+                    "invisible until it ends"
+                )
+            super().download(grant, destination)
+
+    transport = GatedTransport({first: b"first", second: b"second"})
+    beats: list[CASRef] = []
+
+    def progress(ref: CASRef, _size: int) -> None:
+        beats.append(ref)
+        if ref == first:
+            first_reported.set()
+
+    report = _download(
+        [grant(first, 5), grant(second, 6)],
+        LocalCAS(tmp_path / "destination"),
+        transport=transport,
+        parallel=2,
+        progress=progress,
+    )
+
+    assert report.failures == []
+    assert report.ok
+    assert set(beats) == {first, second}
+
+
 def test_python_consumes_and_reproduces_shared_go_grant_vector() -> None:
     path = Path("spec/v1/vectors/upload_grant.json")
     raw = path.read_bytes().strip()
