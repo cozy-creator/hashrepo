@@ -141,7 +141,10 @@ pub struct Consistency {
     /// or non-existent namespace is indistinguishable from a clean one.
     pub namespace_present: bool,
     pub objects: u64,
-    pub temps: u64,
+    /// Every entry name found under `tmp/`. Names, not a count, because the
+    /// only useful questions about a leftover temp are "how many" AND "is it
+    /// a library temp the reclaimer will ever pick up".
+    pub temps: Vec<String>,
     /// Digest paths whose resident bytes hash to something else. Must always
     /// be empty: an object is installed only after its bytes verified, and
     /// nothing ever rewrites one in place.
@@ -159,13 +162,26 @@ impl Consistency {
         report.namespace_present = namespace.is_dir();
         walk(&namespace, &mut report);
         report.temps = std::fs::read_dir(root.join("tmp"))
-            .map(|entries| entries.filter_map(Result::ok).count() as u64)
-            .unwrap_or(0);
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        report.temps.sort();
         report
     }
 
     /// The store is intact: nothing corrupt, nothing malformed — and the
     /// namespace was actually there to examine.
+    ///
+    /// Deliberately says NOTHING about [`Self::temps`]. A temp is the normal
+    /// mid-write state of a live admission, and this runs against stores that
+    /// other processes and other threads are still writing, so folding
+    /// `temps.is_empty()` in here would make every concurrent caller flaky for
+    /// a reason unrelated to intactness. Callers that KNOW no writer can be
+    /// live say so with [`Self::assert_no_temps`].
     ///
     /// The last clause is not pedantry. `walk` returns silently when
     /// `read_dir` fails, so without it a scan of a wrong path, or of a root
@@ -190,6 +206,19 @@ impl Consistency {
             self.malformed.is_empty(),
             "{context}: malformed entries under objects/: {:?}",
             self.malformed
+        );
+    }
+
+    /// No temp survives at all. Only sound where the caller knows every writer
+    /// against this root has exited AND that the operation under test does not
+    /// write objects locally at all — a SIGKILLed admission legitimately
+    /// strands a temp, which is why [`Self::assert_intact`] cannot say this.
+    pub fn assert_no_temps(&self, context: &str) {
+        assert!(
+            self.temps.is_empty(),
+            "{context}: {} temp(s) left under tmp/: {:?}",
+            self.temps.len(),
+            self.temps
         );
     }
 
@@ -243,6 +272,17 @@ fn walk(dir: &Path, report: &mut Consistency) {
             report.corrupt.push(name);
         }
     }
+}
+
+/// The on-disk shape `ObjectStore::collect_abandoned_temps` will consider.
+///
+/// Spelled out here rather than imported, because the point is to check the
+/// bytes on disk against the shape independently of whatever the library
+/// currently believes it writes. A stranded temp outside this shape is a
+/// PERMANENT leak: no reclaimer will ever look at it.
+#[must_use]
+pub fn is_library_temp(name: &str) -> bool {
+    name.starts_with("obj-") && name.ends_with(".tmp")
 }
 
 #[must_use]
