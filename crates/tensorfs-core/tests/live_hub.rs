@@ -23,7 +23,7 @@ use tensorfs_core::object::plan_and_hash;
 use tensorfs_core::planner::ByteSource;
 use tensorfs_core::store::ObjectStore;
 use tensorfs_core::sync::http::{HttpTransport, TokenSource};
-use tensorfs_core::sync::{SyncTransport, pull_snapshot, push_snapshot};
+use tensorfs_core::sync::{ProgressSink, SyncTransport, pull_snapshot, push_snapshot};
 use tensorfs_core::tfm1::{Entry, FileRecord, SnapshotId};
 use tensorfs_core::workspace::{Mutation, WorkspaceStore};
 
@@ -202,6 +202,7 @@ fn a_real_hub_round_trips_snapshots_with_dedup_and_verified_pulls() {
         &snapshot,
         base.as_ref(),
         Default::default(),
+        ProgressSink::silent(),
     )
     .expect("push succeeds");
     println!("push: {report:?}");
@@ -237,6 +238,7 @@ fn a_real_hub_round_trips_snapshots_with_dedup_and_verified_pulls() {
         &edited_snapshot,
         Some(&head),
         Default::default(),
+        ProgressSink::silent(),
     )
     .expect("delta push succeeds");
     println!("delta push: {delta:?}");
@@ -259,7 +261,8 @@ fn a_real_hub_round_trips_snapshots_with_dedup_and_verified_pulls() {
     let remote_head = client.head().expect("head reads").expect("head is set");
     assert_eq!(remote_head, edited_snapshot, "head advanced to the edit");
 
-    let pulled = pull_snapshot(&consumer, &client, &remote_head).expect("pull succeeds");
+    let pulled = pull_snapshot(&consumer, &client, &remote_head, ProgressSink::silent())
+        .expect("pull succeeds");
     println!("pull: {pulled:?}");
     assert!(pulled.fetched_objects > 0, "an empty store fetches");
     assert_eq!(
@@ -283,7 +286,8 @@ fn a_real_hub_round_trips_snapshots_with_dedup_and_verified_pulls() {
     );
 
     // ---- resume: a second pull must move nothing ------------------------
-    let again = pull_snapshot(&consumer, &client, &remote_head).expect("second pull succeeds");
+    let again = pull_snapshot(&consumer, &client, &remote_head, ProgressSink::silent())
+        .expect("second pull succeeds");
     println!("second pull: {again:?}");
     assert_eq!(again.fetched_bytes, 0, "verified residency short-circuits");
     assert_eq!(
@@ -298,6 +302,7 @@ fn a_real_hub_round_trips_snapshots_with_dedup_and_verified_pulls() {
         &edited_snapshot,
         Some(&remote_head),
         Default::default(),
+        ProgressSink::silent(),
     )
     .expect("idempotent re-push succeeds");
     println!("re-push: {noop:?}");

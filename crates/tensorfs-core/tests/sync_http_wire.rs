@@ -16,7 +16,8 @@ use base64::Engine as _;
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::sync::http::{HttpTransport, TokenSource};
 use tensorfs_core::sync::{
-    CompleteStatus, DownloadGrant, PackClaim, PackGrant, SyncTransport, TransportError,
+    CompleteStatus, DownloadGrant, PackClaim, PackGrant, Progress, ProgressSink, SyncTransport,
+    TransportError,
 };
 use tensorfs_core::tfm1::SnapshotId;
 
@@ -210,7 +211,11 @@ fn uploads_replay_grant_headers_and_map_403_to_expired() {
     let client = transport(&base);
 
     client
-        .upload_pack(&grant(&format!("{base}/put-1")), b"PACKBYTES")
+        .upload_pack(
+            &grant(&format!("{base}/put-1")),
+            b"PACKBYTES",
+            ProgressSink::silent(),
+        )
         .expect("upload succeeds");
     let request = recorded.recv().expect("request recorded");
     assert_eq!(request.method, "PUT");
@@ -228,7 +233,11 @@ fn uploads_replay_grant_headers_and_map_403_to_expired() {
     );
 
     let expired = client
-        .upload_pack(&grant(&format!("{base}/put-2")), b"PACKBYTES")
+        .upload_pack(
+            &grant(&format!("{base}/put-2")),
+            b"PACKBYTES",
+            ProgressSink::silent(),
+        )
         .expect_err("403 maps to expiry");
     assert!(matches!(expired, TransportError::Expired(_)));
 }
@@ -338,17 +347,17 @@ fn downloads_enforce_the_granted_length_and_map_403_to_expired() {
     };
 
     let bytes = client
-        .download(&grant(&format!("{base}/get-1")))
+        .download(&grant(&format!("{base}/get-1")), ProgressSink::silent())
         .expect("exact length succeeds");
     assert_eq!(bytes, b"NINEBYTES");
 
     let short = client
-        .download(&grant(&format!("{base}/get-2")))
+        .download(&grant(&format!("{base}/get-2")), ProgressSink::silent())
         .expect_err("length lies refuse");
     assert!(matches!(short, TransportError::Io(_)));
 
     let expired = client
-        .download(&grant(&format!("{base}/get-3")))
+        .download(&grant(&format!("{base}/get-3")), ProgressSink::silent())
         .expect_err("403 maps to expiry");
     assert!(matches!(expired, TransportError::Expired(_)));
 }
@@ -372,4 +381,146 @@ fn error_envelopes_map_to_refusals_and_expiry() {
         .declare(b"m", None)
         .expect_err("expired envelope replans");
     assert!(matches!(lease, TransportError::Expired(_)));
+}
+
+/// A download must be visible WHILE it is in flight, not only when it returns.
+///
+/// pgw#1287: a 31.6 GB pull that reports nothing until its last byte lands is
+/// indistinguishable from a dead one, and a consumer watching for liveness
+/// condemns a pod that is downloading correctly. So this asserts the timing
+/// directly rather than the totals: the server refuses to write the rest of
+/// the body until the client has REPORTED the first piece, which a transport
+/// that reports only on return can never do. The bounded wait exists so a
+/// regression fails the test instead of hanging the suite — a test bailout,
+/// not a health judgement.
+#[test]
+fn a_download_reports_bytes_while_the_object_is_still_arriving() {
+    const PIECE: usize = 256 * 1024;
+    let body = vec![0x5A_u8; 4 * PIECE];
+    let served = body.clone();
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback binds");
+    let address = listener.local_addr().expect("bound address");
+    let (reported, first_report) = mpsc::channel::<()>();
+    let (stalled, saw_stall) = mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("the client connects");
+        let mut chunk = [0_u8; 4096];
+        let mut head = Vec::new();
+        while find_blank_line(&head).is_none() {
+            let read = stream.read(&mut chunk).expect("request reads");
+            if read == 0 {
+                return;
+            }
+            head.extend_from_slice(&chunk[..read]);
+        }
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            served.len()
+        );
+        stream.write_all(response.as_bytes()).expect("head writes");
+        stream
+            .write_all(&served[..PIECE])
+            .expect("first piece writes");
+        stream.flush().expect("first piece flushes");
+        // The whole point: nothing more moves until the client has reported
+        // what already arrived.
+        if first_report
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .is_err()
+        {
+            stalled.send(()).ok();
+            return;
+        }
+        stream.write_all(&served[PIECE..]).expect("the rest writes");
+    });
+
+    let client = transport(&format!("http://{address}"));
+    let grant = DownloadGrant {
+        digest: digest_of(b"streamed"),
+        length: body.len() as u64,
+        url: format!("http://{address}/objects/streamed"),
+    };
+    let beats = std::cell::RefCell::new(Vec::new());
+    let sink = |event: Progress| {
+        if let Progress::Bytes(moved) = event {
+            beats.borrow_mut().push(moved);
+            reported.send(()).ok();
+        }
+    };
+
+    let fetched = client.download(&grant, ProgressSink::new(&sink));
+    server.join().expect("the server thread finishes");
+    assert!(
+        saw_stall.try_recv().is_err(),
+        "the download reported nothing while the object was still arriving — \
+         the whole transfer is invisible until it ends"
+    );
+    let fetched = fetched.expect("the download completes");
+    assert_eq!(fetched, body);
+
+    let beats = beats.borrow().clone();
+    assert!(
+        beats.len() >= 2,
+        "a {}-byte object reported {} time(s); sub-object progress is what \
+         makes a long transfer observable",
+        body.len(),
+        beats.len()
+    );
+    assert_eq!(
+        beats.iter().sum::<u64>(),
+        body.len() as u64,
+        "every byte that moved must be reported exactly once"
+    );
+}
+
+/// The upload reports its bytes as they leave, and the wire framing is
+/// unchanged by that: a presigned signature covers a `content-length` body,
+/// never a chunked one.
+#[test]
+fn an_upload_reports_its_bytes_without_changing_the_framing() {
+    let (base, recorded) = loopback(vec![(200, String::new())]);
+    let pack = vec![0xC3_u8; 40_000];
+    let grant = PackGrant {
+        pack_sha256: "ab".repeat(32),
+        staging_key: "snapshots/staging/s/p.tfp1".to_owned(),
+        url: format!("{base}/put-streamed"),
+        headers: vec![("x-amz-checksum-sha256".to_owned(), "ab".repeat(32))],
+    };
+    let moved = std::cell::Cell::new(0_u64);
+    let beats = std::cell::Cell::new(0_usize);
+    let sink = |event: Progress| {
+        if let Progress::Bytes(bytes) = event {
+            moved.set(moved.get() + bytes);
+            beats.set(beats.get() + 1);
+        }
+    };
+
+    transport(&base)
+        .upload_pack(&grant, &pack, ProgressSink::new(&sink))
+        .expect("upload succeeds");
+
+    let request = recorded.recv().expect("request recorded");
+    assert_eq!(request.body, pack, "the exact pack bytes reach the store");
+    assert!(
+        request
+            .headers
+            .iter()
+            .any(|(name, value)| name == "content-length" && value == "40000"),
+        "a presigned PUT states its length"
+    );
+    assert!(
+        !request
+            .headers
+            .iter()
+            .any(|(name, value)| name == "transfer-encoding" && value.contains("chunked")),
+        "chunked framing would break the presigned signature"
+    );
+    assert_eq!(moved.get(), pack.len() as u64);
+    assert!(
+        beats.get() >= 2,
+        "a streamed upload reports as it goes; {} report(s) is a single \
+         end-of-transfer beat",
+        beats.get()
+    );
 }

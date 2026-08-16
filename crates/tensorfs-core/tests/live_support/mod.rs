@@ -17,8 +17,8 @@ use tensorfs_core::planner::{ByteSource, PlannerId};
 use tensorfs_core::store::ObjectStore;
 use tensorfs_core::sync::http::{HttpTransport, TokenSource};
 use tensorfs_core::sync::{
-    CompleteStatus, DownloadGrant, GrantsPlan, PackClaim, PackGrant, SyncPlan, SyncTransport,
-    TransportError,
+    CompleteStatus, DownloadGrant, GrantsPlan, PackClaim, PackGrant, ProgressSink, SyncPlan,
+    SyncTransport, TransportError,
 };
 use tensorfs_core::tfm1::{Entry, FileRecord, SnapshotId};
 use tensorfs_core::workspace::{Mutation, WorkspaceStore};
@@ -335,12 +335,17 @@ impl<T: SyncTransport> SyncTransport for Counting<'_, T> {
         self.inner.pack_grants(session, claims)
     }
 
-    fn upload_pack(&self, grant: &PackGrant, pack: &[u8]) -> Result<(), TransportError> {
+    fn upload_pack(
+        &self,
+        grant: &PackGrant,
+        pack: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<(), TransportError> {
         self.bump(|counts| {
             counts.upload_pack += 1;
             counts.uploaded_bytes += pack.len() as u64;
         });
-        self.record(|| self.inner.upload_pack(grant, pack))
+        self.record(|| self.inner.upload_pack(grant, pack, progress))
     }
 
     fn complete(&self, session: &str) -> Result<CompleteStatus, TransportError> {
@@ -361,8 +366,12 @@ impl<T: SyncTransport> SyncTransport for Counting<'_, T> {
         self.inner.download_grants(digests)
     }
 
-    fn download(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError> {
-        let bytes = self.record(|| self.inner.download(grant));
+    fn download(
+        &self,
+        grant: &DownloadGrant,
+        progress: ProgressSink<'_>,
+    ) -> Result<Vec<u8>, TransportError> {
+        let bytes = self.record(|| self.inner.download(grant, progress));
         if let Ok(bytes) = &bytes {
             self.bump(|counts| {
                 counts.download += 1;
@@ -415,7 +424,12 @@ impl<T: SyncTransport> SyncTransport for FailUploadAfter<'_, T> {
         self.inner.pack_grants(session, claims)
     }
 
-    fn upload_pack(&self, grant: &PackGrant, pack: &[u8]) -> Result<(), TransportError> {
+    fn upload_pack(
+        &self,
+        grant: &PackGrant,
+        pack: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<(), TransportError> {
         {
             let mut budget = self.budget.lock().expect("budget lock");
             if *budget == 0 {
@@ -425,7 +439,7 @@ impl<T: SyncTransport> SyncTransport for FailUploadAfter<'_, T> {
             }
             *budget -= 1;
         }
-        let outcome = self.inner.upload_pack(grant, pack);
+        let outcome = self.inner.upload_pack(grant, pack, progress);
         if outcome.is_ok() {
             *self.survived.lock().expect("survived lock") += 1;
         }
@@ -447,7 +461,11 @@ impl<T: SyncTransport> SyncTransport for FailUploadAfter<'_, T> {
         self.inner.download_grants(digests)
     }
 
-    fn download(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError> {
-        self.inner.download(grant)
+    fn download(
+        &self,
+        grant: &DownloadGrant,
+        progress: ProgressSink<'_>,
+    ) -> Result<Vec<u8>, TransportError> {
+        self.inner.download(grant, progress)
     }
 }

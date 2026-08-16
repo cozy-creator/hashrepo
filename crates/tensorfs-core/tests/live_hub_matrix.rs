@@ -24,8 +24,8 @@ use live_support::{
 };
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::sync::{
-    CompleteStatus, DownloadGrant, GrantsPlan, PackClaim, PackGrant, SyncError, SyncPlan,
-    SyncTransport, TransportError, pull_snapshot, push_snapshot,
+    CompleteStatus, DownloadGrant, GrantsPlan, PackClaim, PackGrant, ProgressSink, SyncError,
+    SyncPlan, SyncTransport, TransportError, pull_snapshot, push_snapshot,
 };
 use tensorfs_core::tfm1::SnapshotId;
 use tensorfs_core::workspace::WorkspaceStore;
@@ -90,6 +90,7 @@ fn repeated_round_trips_hold_their_invariants() {
             &snapshot,
             head.as_ref(),
             Default::default(),
+            ProgressSink::silent(),
         )
         .unwrap_or_else(|error| panic!("round {round} push failed: {error}"));
 
@@ -111,7 +112,7 @@ fn repeated_round_trips_hold_their_invariants() {
         // Pull it back into a store that has never seen these bytes.
         let consumer_root = scratch(&format!("round-{round}-consumer"));
         let consumer = WorkspaceStore::open(&consumer_root).expect("consumer opens");
-        pull_snapshot(&consumer, &client, &live).expect("pull succeeds");
+        pull_snapshot(&consumer, &client, &live, ProgressSink::silent()).expect("pull succeeds");
         let got = live_support::file_bytes(&consumer, &live, "model.safetensors");
         assert!(
             got == bytes,
@@ -150,6 +151,7 @@ fn racing_producers_resolve_to_exactly_one_head() {
         &base_snapshot,
         prior.as_ref(),
         Default::default(),
+        ProgressSink::silent(),
     )
     .expect("base push succeeds");
     let base_head = client.head().expect("head reads").expect("head is set");
@@ -174,6 +176,7 @@ fn racing_producers_resolve_to_exactly_one_head() {
                         &snapshot,
                         Some(&base_head),
                         Default::default(),
+                        ProgressSink::silent(),
                     )
                     .map(|_| ());
                     (snapshot, outcome)
@@ -217,7 +220,8 @@ fn racing_producers_resolve_to_exactly_one_head() {
 
     let consumer_root = scratch("race-consumer");
     let consumer = WorkspaceStore::open(&consumer_root).expect("consumer opens");
-    pull_snapshot(&consumer, &client, &live).expect("the winning head pulls cleanly");
+    pull_snapshot(&consumer, &client, &live, ProgressSink::silent())
+        .expect("the winning head pulls cleanly");
     println!("RACE PASSED: winner={live}, loser refused with: {loser}");
 }
 
@@ -250,8 +254,15 @@ fn an_interrupted_push_reports_exactly_what_it_kept() {
         max_upload_attempts: 1,
         ..Default::default()
     };
-    let failure = push_snapshot(&producer, &interrupted, &snapshot, head.as_ref(), options)
-        .expect_err("the injected carrier failure must surface");
+    let failure = push_snapshot(
+        &producer,
+        &interrupted,
+        &snapshot,
+        head.as_ref(),
+        options,
+        ProgressSink::silent(),
+    )
+    .expect_err("the injected carrier failure must surface");
     let survived = interrupted.survived();
     println!("interrupted after {survived} pack(s): {failure}");
     assert!(
@@ -274,6 +285,7 @@ fn an_interrupted_push_reports_exactly_what_it_kept() {
         &snapshot,
         head.as_ref(),
         Default::default(),
+        ProgressSink::silent(),
     )
     .expect("the retry completes");
     let live = client.head().expect("head reads").expect("head is set");
@@ -293,7 +305,7 @@ fn an_interrupted_push_reports_exactly_what_it_kept() {
     );
     let consumer_root = scratch("interrupt-consumer");
     let consumer = WorkspaceStore::open(&consumer_root).expect("consumer opens");
-    pull_snapshot(&consumer, &client, &live).expect("pull succeeds");
+    pull_snapshot(&consumer, &client, &live, ProgressSink::silent()).expect("pull succeeds");
     let got = live_support::file_bytes(&consumer, &live, "big.safetensors");
     assert!(got == bytes, "the resumed snapshot is byte-exact");
 }
@@ -343,6 +355,7 @@ fn a_large_round_trip_is_measured_end_to_end() {
         &snapshot,
         head.as_ref(),
         Default::default(),
+        ProgressSink::silent(),
     ) {
         Ok(report) => report,
         // The hub admits objects to Cloudflare R2 over whatever uplink it
@@ -374,7 +387,8 @@ fn a_large_round_trip_is_measured_end_to_end() {
     let consumer = WorkspaceStore::open(&consumer_root).expect("consumer opens");
     let pull_meter = Counting::new(&client);
     let started = std::time::Instant::now();
-    let pulled = pull_snapshot(&consumer, &pull_meter, &live).expect("scale pull succeeds");
+    let pulled = pull_snapshot(&consumer, &pull_meter, &live, ProgressSink::silent())
+        .expect("scale pull succeeds");
     let pull_seconds = started.elapsed().as_secs_f64();
     let pull_counts = pull_meter.counts();
     let pull_peak = pull_meter.peak_concurrency();
@@ -472,6 +486,7 @@ fn a_single_byte_edit_moves_exactly_one_object() {
         &snapshot,
         head.as_ref(),
         Default::default(),
+        ProgressSink::silent(),
     )
     .expect("origin push succeeds");
     let base = client.head().expect("head reads").expect("head is set");
@@ -492,6 +507,7 @@ fn a_single_byte_edit_moves_exactly_one_object() {
         &edited_snapshot,
         Some(&base),
         Default::default(),
+        ProgressSink::silent(),
     )
     .expect("delta push succeeds");
 
@@ -546,6 +562,7 @@ fn the_hub_refuses_a_stale_base() {
         &snapshot,
         Some(&bogus),
         Default::default(),
+        ProgressSink::silent(),
     )
     .expect_err("a stale base must be refused");
 
@@ -583,6 +600,7 @@ fn the_hub_refuses_a_pack_that_lies_about_its_members() {
         &snapshot,
         head.as_ref(),
         Default::default(),
+        ProgressSink::silent(),
     );
 
     match outcome {
@@ -728,8 +746,13 @@ impl<T: SyncTransport> SyncTransport for DropsAClaimedMember<'_, T> {
         self.inner.pack_grants(session, &doctored)
     }
 
-    fn upload_pack(&self, grant: &PackGrant, pack: &[u8]) -> Result<(), TransportError> {
-        self.inner.upload_pack(grant, pack)
+    fn upload_pack(
+        &self,
+        grant: &PackGrant,
+        pack: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<(), TransportError> {
+        self.inner.upload_pack(grant, pack, progress)
     }
 
     fn complete(&self, session: &str) -> Result<CompleteStatus, TransportError> {
@@ -747,7 +770,11 @@ impl<T: SyncTransport> SyncTransport for DropsAClaimedMember<'_, T> {
         self.inner.download_grants(digests)
     }
 
-    fn download(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError> {
-        self.inner.download(grant)
+    fn download(
+        &self,
+        grant: &DownloadGrant,
+        progress: ProgressSink<'_>,
+    ) -> Result<Vec<u8>, TransportError> {
+        self.inner.download(grant, progress)
     }
 }

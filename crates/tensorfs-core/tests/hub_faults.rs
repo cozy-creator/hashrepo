@@ -39,8 +39,8 @@ use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::store::StoreError;
 use tensorfs_core::sync::http::{HttpTransport, TokenSource};
 use tensorfs_core::sync::{
-    PushOptions, SyncError, SyncTransport, TransportError, manifest_object_digest, pull_snapshot,
-    push_snapshot,
+    ProgressSink, PushOptions, SyncError, SyncTransport, TransportError, manifest_object_digest,
+    pull_snapshot, push_snapshot,
 };
 use tensorfs_core::tfm1::SnapshotId;
 use tensorfs_core::workspace::WorkspaceStore;
@@ -129,7 +129,7 @@ fn a_dead_download_grant_is_typed_not_silent() {
         url: format!("{}/object", server.base),
     };
     let error = transport(&server.base)
-        .download(&grant)
+        .download(&grant, ProgressSink::silent())
         .expect_err("404 must not read as bytes");
     assert!(matches!(error, TransportError::Refused { .. }));
 
@@ -140,7 +140,7 @@ fn a_dead_download_grant_is_typed_not_silent() {
         url: format!("{}/object", server.base),
     };
     let error = transport(&server.base)
-        .download(&grant)
+        .download(&grant, ProgressSink::silent())
         .expect_err("403 must not read as bytes");
     assert!(
         matches!(error, TransportError::Expired(_)),
@@ -196,7 +196,7 @@ fn broken_response_framing_never_yields_bytes() {
             length: payload.len() as u64,
             url: format!("{}/object", server.base),
         };
-        match transport(&server.base).download(&grant) {
+        match transport(&server.base).download(&grant, ProgressSink::silent()) {
             Err(error) => {
                 assert!(
                     matches!(
@@ -260,7 +260,7 @@ fn a_partial_answer_to_a_whole_object_request_is_refused() {
         url: format!("{}/object", server.base),
     };
     let error = transport(&server.base)
-        .download(&grant)
+        .download(&grant, ProgressSink::silent())
         .expect_err("a short 206 must refuse");
     assert!(
         matches!(error, TransportError::Io(_)),
@@ -340,7 +340,15 @@ fn publisher(scratch: &Scratch) -> (WorkspaceStore, SnapshotId) {
 fn published(scratch: &Scratch) -> (FaultHub, SnapshotId, Vec<(String, Vec<u8>)>) {
     let (meta, id) = publisher(scratch);
     let hub = FaultHub::new();
-    push_snapshot(&meta, &hub, &id, None, PushOptions::default()).expect("healthy push");
+    push_snapshot(
+        &meta,
+        &hub,
+        &id,
+        None,
+        PushOptions::default(),
+        ProgressSink::silent(),
+    )
+    .expect("healthy push");
     let originals = vec![
         ("model.bin".to_owned(), reconstruct(&meta, &id, "model.bin")),
         (
@@ -383,7 +391,7 @@ fn no_content_adversarial_download_can_place_wrong_bytes_locally() {
 
         let sink = Scratch::new("adv-sink");
         let meta = WorkspaceStore::open(sink.path()).expect("sink store opens");
-        let error = pull_snapshot(&meta, &hub, &id)
+        let error = pull_snapshot(&meta, &hub, &id, ProgressSink::silent())
             .expect_err(&format!("{fault:?} must refuse, never adopt"));
 
         // The refusal must come from the ADMISSION boundary specifically:
@@ -442,8 +450,8 @@ fn a_corrupt_or_truncated_manifest_is_refused_before_any_object_moves() {
 
         let sink = Scratch::new("man-sink");
         let meta = WorkspaceStore::open(sink.path()).expect("sink store opens");
-        let error =
-            pull_snapshot(&meta, &hub, &id).expect_err(&format!("{name} manifest must refuse"));
+        let error = pull_snapshot(&meta, &hub, &id, ProgressSink::silent())
+            .expect_err(&format!("{name} manifest must refuse"));
         assert!(
             matches!(error, SyncError::RemoteManifestCorrupt(_)),
             "{name} manifest produced {error:?}"
@@ -475,7 +483,8 @@ fn an_omitted_download_grant_is_detected() {
 
     let sink = Scratch::new("omit-sink");
     let meta = WorkspaceStore::open(sink.path()).expect("sink store opens");
-    let error = pull_snapshot(&meta, &hub, &id).expect_err("an omitted grant must refuse");
+    let error = pull_snapshot(&meta, &hub, &id, ProgressSink::silent())
+        .expect_err("an omitted grant must refuse");
     assert!(
         matches!(error, SyncError::GrantOmitted(digest) if digest == missing),
         "omission produced {error:?}"
@@ -496,7 +505,8 @@ fn an_unrequested_grant_is_never_fetched() {
 
     let sink = Scratch::new("extra-sink");
     let meta = WorkspaceStore::open(sink.path()).expect("sink store opens");
-    pull_snapshot(&meta, &hub, &id).expect("an extra grant does not break a pull");
+    pull_snapshot(&meta, &hub, &id, ProgressSink::silent())
+        .expect("an extra grant does not break a pull");
 
     let wanted: Vec<[u8; 32]> = data_digests(&meta, &id)
         .iter()
@@ -525,8 +535,15 @@ fn a_head_advancing_mid_push_is_refused_terminally() {
         ..Faults::default()
     });
 
-    let error = push_snapshot(&meta, &hub, &id, None, PushOptions::default())
-        .expect_err("a lost head race must refuse");
+    let error = push_snapshot(
+        &meta,
+        &hub,
+        &id,
+        None,
+        PushOptions::default(),
+        ProgressSink::silent(),
+    )
+    .expect_err("a lost head race must refuse");
     assert!(
         matches!(error, SyncError::HeadRefused { .. }),
         "head race produced {error:?}"
@@ -549,8 +566,15 @@ fn a_forgotten_session_refuses_rather_than_promoting() {
         ..Faults::default()
     });
 
-    let error = push_snapshot(&meta, &hub, &id, None, PushOptions::default())
-        .expect_err("an unknown session must refuse");
+    let error = push_snapshot(
+        &meta,
+        &hub,
+        &id,
+        None,
+        PushOptions::default(),
+        ProgressSink::silent(),
+    )
+    .expect_err("an unknown session must refuse");
     assert!(
         matches!(error, SyncError::Transport(TransportError::Refused { .. })),
         "forgotten session produced {error:?}"
@@ -569,8 +593,15 @@ fn a_terminal_completion_is_not_retried_into_success() {
         ..Faults::default()
     });
 
-    let error = push_snapshot(&meta, &hub, &id, None, PushOptions::default())
-        .expect_err("a terminal completion must refuse");
+    let error = push_snapshot(
+        &meta,
+        &hub,
+        &id,
+        None,
+        PushOptions::default(),
+        ProgressSink::silent(),
+    )
+    .expect_err("a terminal completion must refuse");
     assert!(matches!(error, SyncError::HeadRefused { code } if code == "verification_failed"));
     assert_eq!(
         hub.state.borrow().complete_calls,
@@ -588,11 +619,26 @@ fn completing_twice_is_idempotent_and_moves_no_bytes() {
     let (meta, id) = publisher(&scratch);
     let hub = FaultHub::new();
 
-    let first = push_snapshot(&meta, &hub, &id, None, PushOptions::default()).expect("first push");
+    let first = push_snapshot(
+        &meta,
+        &hub,
+        &id,
+        None,
+        PushOptions::default(),
+        ProgressSink::silent(),
+    )
+    .expect("first push");
     assert!(first.uploaded_objects > 0);
 
-    let second = push_snapshot(&meta, &hub, &id, Some(&id), PushOptions::default())
-        .expect("re-pushing a promoted snapshot succeeds");
+    let second = push_snapshot(
+        &meta,
+        &hub,
+        &id,
+        Some(&id),
+        PushOptions::default(),
+        ProgressSink::silent(),
+    )
+    .expect("re-pushing a promoted snapshot succeeds");
     assert_eq!(
         second.uploaded_objects, 0,
         "a second push retransmitted objects the hub already holds"
@@ -615,8 +661,15 @@ fn transient_upload_faults_converge_without_duplicating_work() {
         ..Faults::default()
     });
 
-    let report = push_snapshot(&meta, &hub, &id, None, PushOptions::default())
-        .expect("bounded transients must converge");
+    let report = push_snapshot(
+        &meta,
+        &hub,
+        &id,
+        None,
+        PushOptions::default(),
+        ProgressSink::silent(),
+    )
+    .expect("bounded transients must converge");
     assert_eq!(hub.state.borrow().head, Some(id));
     assert!(
         report.replans > 0,
@@ -647,11 +700,12 @@ fn transient_download_faults_surface_typed_then_converge_on_retry() {
 
     let sink = Scratch::new("flap-down-sink");
     let meta = WorkspaceStore::open(sink.path()).expect("sink store opens");
-    let error = pull_snapshot(&meta, &hub, &id).expect_err("the injected fault must surface");
+    let error = pull_snapshot(&meta, &hub, &id, ProgressSink::silent())
+        .expect_err("the injected fault must surface");
     assert!(matches!(error, SyncError::Transport(TransportError::Io(_))));
 
     hub.heal();
-    pull_snapshot(&meta, &hub, &id).expect("the retry converges");
+    pull_snapshot(&meta, &hub, &id, ProgressSink::silent()).expect("the retry converges");
     assert_snapshot_fully_backed(&meta, &id, "after a transient download outage");
     for (path, bytes) in &originals {
         assert_eq!(
@@ -693,7 +747,8 @@ fn a_store_survives_the_full_gauntlet_and_still_reconstructs_byte_exactly() {
                 .collect(),
             ..Faults::default()
         });
-        let error = pull_snapshot(&meta, &hub, &id).expect_err("each gauntlet leg refuses");
+        let error = pull_snapshot(&meta, &hub, &id, ProgressSink::silent())
+            .expect_err("each gauntlet leg refuses");
         assert!(
             !matches!(error, SyncError::Workspace(_) if meta.load_snapshot(&id).is_ok()),
             "{fault:?} adopted a snapshot it should not have"
@@ -705,11 +760,12 @@ fn a_store_survives_the_full_gauntlet_and_still_reconstructs_byte_exactly() {
         fail_downloads: 2,
         ..Faults::default()
     });
-    let _ = pull_snapshot(&meta, &hub, &id);
-    let _ = pull_snapshot(&meta, &hub, &id);
+    let _ = pull_snapshot(&meta, &hub, &id, ProgressSink::silent());
+    let _ = pull_snapshot(&meta, &hub, &id, ProgressSink::silent());
 
     hub.heal();
-    pull_snapshot(&meta, &hub, &id).expect("an honest hub after the storm converges");
+    pull_snapshot(&meta, &hub, &id, ProgressSink::silent())
+        .expect("an honest hub after the storm converges");
 
     assert_snapshot_fully_backed(&meta, &id, "after the full gauntlet");
     for (path, bytes) in &originals {
@@ -724,7 +780,8 @@ fn a_store_survives_the_full_gauntlet_and_still_reconstructs_byte_exactly() {
     // Nothing already verified was re-fetched by the final converging pull:
     // a second pull moves zero objects.
     let before = hub.state.borrow().downloads_by_digest.len();
-    let report = pull_snapshot(&meta, &hub, &id).expect("a settled pull is a no-op");
+    let report =
+        pull_snapshot(&meta, &hub, &id, ProgressSink::silent()).expect("a settled pull is a no-op");
     assert_eq!(
         report.fetched_objects, 0,
         "a settled store re-fetched objects it already held"

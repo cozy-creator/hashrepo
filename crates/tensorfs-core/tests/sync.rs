@@ -17,9 +17,9 @@ use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::PlannerId;
 use tensorfs_core::store::StoreError;
 use tensorfs_core::sync::{
-    CompleteStatus, DownloadGrant, GrantsPlan, PackClaim, PackGrant, PullReport, PushOptions,
-    PushReport, StagedPack, SyncError, SyncPlan, SyncTransport, TransportError,
-    manifest_object_digest, pull_snapshot, push_snapshot,
+    CompleteStatus, DownloadGrant, GrantsPlan, PackClaim, PackGrant, Progress, ProgressSink,
+    PullReport, PushOptions, PushReport, StagedPack, SyncError, SyncPlan, SyncTransport,
+    TransportError, manifest_object_digest, pull_snapshot, push_snapshot,
 };
 use tensorfs_core::tfm1::{FileRecord, SnapshotId, decode};
 use tensorfs_core::tfp1;
@@ -120,6 +120,9 @@ struct HubState {
     /// Objects promoted per `complete` call; 0 means unlimited. Models the
     /// hub's 64-object promote budget at test scale.
     promote_budget: usize,
+    /// The payload cap this hub advertises; 0 means the protocol maximum.
+    /// A small cap makes a fixture push several packs at test scale.
+    pack_payload_cap: u64,
 }
 
 /// An in-memory hub whose admission and verification run the real decoders
@@ -219,7 +222,11 @@ impl SyncTransport for FakeHub {
             have,
             staged_packs: Vec::new(),
             missing,
-            max_pack_payload: tfp1::MAX_PACK_PAYLOAD,
+            max_pack_payload: if state.pack_payload_cap == 0 {
+                tfp1::MAX_PACK_PAYLOAD
+            } else {
+                state.pack_payload_cap
+            },
             max_packs_per_request: MAX_PACKS_PER_REQUEST,
         };
         state.sessions.insert(key, session);
@@ -326,7 +333,12 @@ impl SyncTransport for FakeHub {
         })
     }
 
-    fn upload_pack(&self, grant: &PackGrant, pack: &[u8]) -> Result<(), TransportError> {
+    fn upload_pack(
+        &self,
+        grant: &PackGrant,
+        pack: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<(), TransportError> {
         let mut state = self.state.borrow_mut();
         if state.fail_uploads > 0 {
             state.fail_uploads -= 1;
@@ -372,6 +384,9 @@ impl SyncTransport for FakeHub {
         state
             .staged
             .insert(grant.staging_key.clone(), pack.to_vec());
+        // An in-memory carrier moves its bytes in one go; reporting them is
+        // still what a transport owes the engine.
+        progress.bytes(pack.len() as u64);
         Ok(())
     }
 
@@ -473,12 +488,17 @@ impl SyncTransport for FakeHub {
             .collect())
     }
 
-    fn download(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError> {
+    fn download(
+        &self,
+        grant: &DownloadGrant,
+        progress: ProgressSink<'_>,
+    ) -> Result<Vec<u8>, TransportError> {
         let state = self.state.borrow();
         let mut bytes = state.objects[grant.digest.as_bytes()].clone();
         if state.corrupt_download_of == Some(*grant.digest.as_bytes()) {
             bytes[0] ^= 0xFF;
         }
+        progress.bytes(bytes.len() as u64);
         Ok(bytes)
     }
 }
@@ -489,7 +509,14 @@ fn push(
     id: &SnapshotId,
     expected: Option<&SnapshotId>,
 ) -> Result<PushReport, SyncError> {
-    push_snapshot(meta, hub, id, expected, PushOptions::default())
+    push_snapshot(
+        meta,
+        hub,
+        id,
+        expected,
+        PushOptions::default(),
+        ProgressSink::silent(),
+    )
 }
 
 #[test]
@@ -526,7 +553,8 @@ fn push_then_pull_round_trips_a_sealed_snapshot_byte_exactly() {
 
     let root_b = scratch("pull-b");
     let meta_b = WorkspaceStore::open(&root_b).expect("puller opens");
-    let report: PullReport = pull_snapshot(&meta_b, &hub, &id).expect("pull succeeds");
+    let report: PullReport =
+        pull_snapshot(&meta_b, &hub, &id, ProgressSink::silent()).expect("pull succeeds");
     assert_eq!(report.fetched_objects, 3);
     assert_eq!(report.skipped_local_resident, 0);
 
@@ -545,7 +573,8 @@ fn push_then_pull_round_trips_a_sealed_snapshot_byte_exactly() {
         }
     }
 
-    let again = pull_snapshot(&meta_b, &hub, &id).expect("second pull succeeds");
+    let again =
+        pull_snapshot(&meta_b, &hub, &id, ProgressSink::silent()).expect("second pull succeeds");
     assert_eq!(again.fetched_objects, 0);
     assert_eq!(again.fetched_bytes, 0);
     assert_eq!(again.skipped_local_resident, 3);
@@ -628,8 +657,8 @@ fn resumption_is_promotion_level_across_sessions_and_exact_within_one() {
         max_complete_attempts: 1,
         ..PushOptions::default()
     };
-    let error =
-        push_snapshot(&meta, &hub, &id, None, stingy).expect_err("first push dies mid-promotion");
+    let error = push_snapshot(&meta, &hub, &id, None, stingy, ProgressSink::silent())
+        .expect_err("first push dies mid-promotion");
     assert!(matches!(error, SyncError::CompletionExhausted { .. }));
     assert_eq!(
         hub.state.borrow().objects.len(),
@@ -682,7 +711,8 @@ fn a_lying_hub_cannot_place_wrong_bytes_in_the_local_store() {
 
     let root_b = scratch("liar-dst");
     let meta_b = WorkspaceStore::open(&root_b).expect("puller opens");
-    let error = pull_snapshot(&meta_b, &hub, &id).expect_err("corrupt bytes refuse");
+    let error = pull_snapshot(&meta_b, &hub, &id, ProgressSink::silent())
+        .expect_err("corrupt bytes refuse");
     assert!(
         matches!(
             &error,
@@ -792,8 +822,13 @@ impl SyncTransport for SaboteurHub<'_> {
         self.inner.pack_grants(session, claims)
     }
 
-    fn upload_pack(&self, grant: &PackGrant, pack: &[u8]) -> Result<(), TransportError> {
-        self.inner.upload_pack(grant, pack)
+    fn upload_pack(
+        &self,
+        grant: &PackGrant,
+        pack: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<(), TransportError> {
+        self.inner.upload_pack(grant, pack, progress)
     }
 
     fn complete(&self, session: &str) -> Result<CompleteStatus, TransportError> {
@@ -811,8 +846,12 @@ impl SyncTransport for SaboteurHub<'_> {
         self.inner.download_grants(digests)
     }
 
-    fn download(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError> {
-        self.inner.download(grant)
+    fn download(
+        &self,
+        grant: &DownloadGrant,
+        progress: ProgressSink<'_>,
+    ) -> Result<Vec<u8>, TransportError> {
+        self.inner.download(grant, progress)
     }
 }
 
@@ -848,8 +887,15 @@ fn a_snapshot_deleted_mid_push_keeps_its_objects_until_the_push_ends() {
     assert_eq!(closure.len(), 2, "the fixture must have objects to lose");
 
     let hub = SaboteurHub::new(&meta, id);
-    let report = push_snapshot(&meta, &hub, &id, None, PushOptions::default())
-        .expect("a push whose snapshot is deleted mid-flight still finishes");
+    let report = push_snapshot(
+        &meta,
+        &hub,
+        &id,
+        None,
+        PushOptions::default(),
+        ProgressSink::silent(),
+    )
+    .expect("a push whose snapshot is deleted mid-flight still finishes");
     assert_eq!(report.uploaded_objects, closure.len() as u64);
     assert_eq!(hub.inner.state.borrow().head, Some(id));
     for digest in &closure {
@@ -870,6 +916,316 @@ fn a_snapshot_deleted_mid_push_keeps_its_objects_until_the_push_ends() {
             "{digest} outlived the push that pinned it"
         );
     }
+}
+
+/// Records what a transfer reported, in order, and where from.
+#[derive(Default)]
+struct Beats {
+    objects: RefCell<Vec<ObjectDigest>>,
+    bytes: RefCell<Vec<u64>>,
+    threads: RefCell<Vec<std::thread::ThreadId>>,
+}
+
+impl Beats {
+    fn sink(&self) -> impl Fn(Progress) + '_ {
+        move |event| {
+            self.threads.borrow_mut().push(std::thread::current().id());
+            match event {
+                Progress::Object { digest, .. } => self.objects.borrow_mut().push(digest),
+                Progress::Bytes(moved) => self.bytes.borrow_mut().push(moved),
+            }
+        }
+    }
+
+    fn objects(&self) -> usize {
+        self.objects.borrow().len()
+    }
+
+    fn moved(&self) -> u64 {
+        self.bytes.borrow().iter().sum()
+    }
+}
+
+/// Refuses to serve any object after the first until an earlier one has been
+/// REPORTED. A pull that reports only once every object has landed can never
+/// get past the second object, so the timing is asserted rather than the
+/// totals — which were always right, and always too late.
+struct GatedPull<'hub> {
+    inner: &'hub FakeHub,
+    beats: &'hub Beats,
+    manifest: ObjectDigest,
+    served: std::cell::Cell<usize>,
+}
+
+impl SyncTransport for GatedPull<'_> {
+    fn declare(
+        &self,
+        tfm1_bytes: &[u8],
+        expected_head: Option<&SnapshotId>,
+    ) -> Result<SyncPlan, TransportError> {
+        self.inner.declare(tfm1_bytes, expected_head)
+    }
+
+    fn pack_grants(
+        &self,
+        session: &str,
+        claims: &[PackClaim],
+    ) -> Result<GrantsPlan, TransportError> {
+        self.inner.pack_grants(session, claims)
+    }
+
+    fn upload_pack(
+        &self,
+        grant: &PackGrant,
+        pack: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<(), TransportError> {
+        self.inner.upload_pack(grant, pack, progress)
+    }
+
+    fn complete(&self, session: &str) -> Result<CompleteStatus, TransportError> {
+        self.inner.complete(session)
+    }
+
+    fn head(&self) -> Result<Option<SnapshotId>, TransportError> {
+        self.inner.head()
+    }
+
+    fn download_grants(
+        &self,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<DownloadGrant>, TransportError> {
+        self.inner.download_grants(digests)
+    }
+
+    fn download(
+        &self,
+        grant: &DownloadGrant,
+        progress: ProgressSink<'_>,
+    ) -> Result<Vec<u8>, TransportError> {
+        if grant.digest != self.manifest {
+            if self.served.get() > 0 && self.beats.objects() == 0 {
+                return Err(TransportError::Refused {
+                    code: "no-progress-yet".to_owned(),
+                    detail: "the pull fetched a second object without reporting \
+                             the first — the transfer is invisible while it runs"
+                        .to_owned(),
+                });
+            }
+            self.served.set(self.served.get() + 1);
+        }
+        self.inner.download(grant, progress)
+    }
+}
+
+/// The push-side twin of [`GatedPull`]: the second pack cannot be uploaded
+/// until the first pack's objects have been reported.
+struct GatedPush<'hub> {
+    inner: &'hub FakeHub,
+    beats: &'hub Beats,
+    sent: std::cell::Cell<usize>,
+}
+
+impl SyncTransport for GatedPush<'_> {
+    fn declare(
+        &self,
+        tfm1_bytes: &[u8],
+        expected_head: Option<&SnapshotId>,
+    ) -> Result<SyncPlan, TransportError> {
+        self.inner.declare(tfm1_bytes, expected_head)
+    }
+
+    fn pack_grants(
+        &self,
+        session: &str,
+        claims: &[PackClaim],
+    ) -> Result<GrantsPlan, TransportError> {
+        self.inner.pack_grants(session, claims)
+    }
+
+    fn upload_pack(
+        &self,
+        grant: &PackGrant,
+        pack: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<(), TransportError> {
+        if self.sent.get() > 0 && self.beats.objects() == 0 {
+            return Err(TransportError::Refused {
+                code: "no-progress-yet".to_owned(),
+                detail: "the push uploaded a second pack without reporting the \
+                         first pack's objects"
+                    .to_owned(),
+            });
+        }
+        self.sent.set(self.sent.get() + 1);
+        self.inner.upload_pack(grant, pack, progress)
+    }
+
+    fn complete(&self, session: &str) -> Result<CompleteStatus, TransportError> {
+        self.inner.complete(session)
+    }
+
+    fn head(&self) -> Result<Option<SnapshotId>, TransportError> {
+        self.inner.head()
+    }
+
+    fn download_grants(
+        &self,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<DownloadGrant>, TransportError> {
+        self.inner.download_grants(digests)
+    }
+
+    fn download(
+        &self,
+        grant: &DownloadGrant,
+        progress: ProgressSink<'_>,
+    ) -> Result<Vec<u8>, TransportError> {
+        self.inner.download(grant, progress)
+    }
+}
+
+/// pgw#1287: a 31.6 GB pull reported `0` for its entire duration because the
+/// only signal came after every transfer had drained, and the hub condemned a
+/// pod that was downloading correctly. The totals were never the problem —
+/// their timing was. So the gate here makes a late report impossible to pass
+/// rather than merely visible after the fact.
+#[test]
+fn a_pull_reports_every_object_before_it_fetches_the_next() {
+    let root_a = scratch("progress-pull-source");
+    let (meta_a, id) = sealed_workspace(
+        &root_a,
+        "publisher",
+        &[
+            ("model.bin", vec![vec![1_u8; 4096], vec![2_u8; 4096]]),
+            ("weights/extra.bin", vec![vec![3_u8; 4096]]),
+        ],
+    );
+    let hub = FakeHub::new();
+    push(&meta_a, &hub, &id, None).expect("push succeeds");
+
+    let root_b = scratch("progress-pull-destination");
+    let meta_b = WorkspaceStore::open(&root_b).expect("puller opens");
+    let beats = Beats::default();
+    let gated = GatedPull {
+        inner: &hub,
+        beats: &beats,
+        manifest: manifest_object_digest(&id),
+        served: std::cell::Cell::new(0),
+    };
+    let sink = beats.sink();
+
+    let report = pull_snapshot(&meta_b, &gated, &id, ProgressSink::new(&sink))
+        .expect("the pull reports each object before fetching the next");
+
+    assert_eq!(report.fetched_objects, 3);
+    assert_eq!(beats.objects(), 3, "every landed object is reported once");
+    // The sink also sees the bytes the transport moved — the manifest blob on
+    // top of the data closure — so a consumer can watch either counter.
+    assert!(beats.moved() > report.fetched_bytes);
+    let caller = std::thread::current().id();
+    assert!(
+        beats.threads.borrow().iter().all(|id| *id == caller),
+        "the sink must run on the thread driving the transfer; callers hand it \
+         state that is not theirs to lock"
+    );
+}
+
+/// A push is just as invisible when it reports only at the end, and a pack is
+/// the largest thing it moves in one call.
+#[test]
+fn a_push_reports_every_pack_as_it_lands() {
+    let root = scratch("progress-push");
+    let (meta, id) = sealed_workspace(
+        &root,
+        "publisher",
+        &[
+            ("model.bin", vec![vec![1_u8; 4096], vec![2_u8; 4096]]),
+            ("weights/extra.bin", vec![vec![3_u8; 4096]]),
+        ],
+    );
+    let hub = FakeHub::new();
+    // One object per pack, so "reports as each pack lands" is a claim with
+    // more than one pack behind it.
+    hub.state.borrow_mut().pack_payload_cap = 4096;
+
+    let beats = Beats::default();
+    let gated = GatedPush {
+        inner: &hub,
+        beats: &beats,
+        sent: std::cell::Cell::new(0),
+    };
+    let sink = beats.sink();
+
+    let report = push_snapshot(
+        &meta,
+        &gated,
+        &id,
+        None,
+        PushOptions::default(),
+        ProgressSink::new(&sink),
+    )
+    .expect("the push reports each pack before sending the next");
+
+    assert_eq!(report.packs, 3, "the fixture must push more than one pack");
+    assert_eq!(report.uploaded_objects, 3);
+    assert_eq!(beats.objects(), 3);
+    assert!(
+        beats.moved() >= report.uploaded_bytes,
+        "the pack envelopes carry at least the payload they were built from"
+    );
+}
+
+/// A resumed transfer must look alive, not dead. Objects the far side already
+/// holds are completed work toward readiness: a resume that finds most of its
+/// closure in place and reports nothing is indistinguishable from a transfer
+/// making no headway — which is how the healthiest possible pod gets recycled.
+#[test]
+fn a_settled_transfer_still_reports_the_work_that_is_already_done() {
+    let root_a = scratch("progress-resume-source");
+    let (meta_a, id) = sealed_workspace(
+        &root_a,
+        "publisher",
+        &[("model.bin", vec![vec![7_u8; 4096], vec![8_u8; 4096]])],
+    );
+    let hub = FakeHub::new();
+    push(&meta_a, &hub, &id, None).expect("first push succeeds");
+
+    // Every object is already promoted, so this push moves nothing at all —
+    // and must still report that its closure is accounted for.
+    let pushed = Beats::default();
+    let sink = pushed.sink();
+    let report = push_snapshot(
+        &meta_a,
+        &hub,
+        &id,
+        Some(&id),
+        PushOptions::default(),
+        ProgressSink::new(&sink),
+    )
+    .expect("a settled push succeeds");
+    assert_eq!(report.uploaded_objects, 0);
+    assert_eq!(
+        pushed.objects(),
+        2,
+        "a push whose objects the remote already holds reported nothing"
+    );
+
+    let root_b = scratch("progress-resume-destination");
+    let meta_b = WorkspaceStore::open(&root_b).expect("puller opens");
+    pull_snapshot(&meta_b, &hub, &id, ProgressSink::silent()).expect("first pull succeeds");
+
+    let pulled = Beats::default();
+    let sink = pulled.sink();
+    let report = pull_snapshot(&meta_b, &hub, &id, ProgressSink::new(&sink))
+        .expect("a settled pull succeeds");
+    assert_eq!(report.fetched_objects, 0);
+    assert_eq!(report.skipped_local_resident, 2);
+    assert_eq!(
+        pulled.objects(),
+        2,
+        "a pull whose objects are all resident reported nothing"
+    );
 }
 
 fn data_digests(meta: &WorkspaceStore, id: &SnapshotId) -> Vec<ObjectDigest> {
