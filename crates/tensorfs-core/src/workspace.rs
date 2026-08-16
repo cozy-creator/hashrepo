@@ -223,7 +223,6 @@ impl WorkspaceStore {
         })
     }
 
-    #[must_use]
     /// Whether this store root can be opened by several processes at once.
     ///
     /// True everywhere production runs (Linux, ext4/xfs/btrfs/overlayfs). False
@@ -239,6 +238,7 @@ impl WorkspaceStore {
             .is_multiprocess()
     }
 
+    #[must_use]
     pub const fn store(&self) -> &ObjectStore {
         &self.store
     }
