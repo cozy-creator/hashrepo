@@ -4,7 +4,6 @@ import fcntl
 import hashlib
 import json
 import os
-import shutil
 import tempfile
 import time
 from collections.abc import Iterable, Iterator
@@ -433,76 +432,6 @@ class LocalCAS:
                 )
             )
         return RepositoryManifest(tuple(entries))
-
-    def materialize(self, entry: FileEntry, destination: str | Path) -> Path:
-        with self._store_lock():
-            return self._materialize_unlocked(entry, Path(destination))
-
-    def _materialize_unlocked(self, entry: FileEntry, target: Path) -> Path:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        fd, raw_path = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
-        temporary = Path(raw_path)
-        whole = hashlib.sha256()
-        total = 0
-        try:
-            with os.fdopen(fd, "wb") as writer:
-                for ref, size in entry.objects():
-                    with self._object_lock(ref):
-                        source = self._verify_object_unlocked(ref, size)
-                    with source.open("rb") as reader:
-                        object_hash = hashlib.sha256()
-                        remaining = size
-                        while remaining:
-                            data = reader.read(min(_COPY_BUFFER, remaining))
-                            if not data:
-                                raise DigestMismatch(f"{ref}: object ended before {size} bytes")
-                            writer.write(data)
-                            object_hash.update(data)
-                            whole.update(data)
-                            total += len(data)
-                            remaining -= len(data)
-                        if reader.read(1):
-                            raise DigestMismatch(f"{ref}: object exceeds {size} bytes")
-                    if object_hash.hexdigest() != ref.digest:
-                        raise DigestMismatch(f"{ref}: object changed while materializing")
-                writer.flush()
-                os.fsync(writer.fileno())
-            if total != entry.size_bytes or whole.hexdigest() != entry.digest.digest:
-                raise DigestMismatch(
-                    f"{entry.path}: reconstructed bytes do not match the file manifest"
-                )
-            os.replace(temporary, target)
-            _fsync_dir(target.parent)
-            return target
-        except BaseException:
-            temporary.unlink(missing_ok=True)
-            raise
-
-    def materialize_repository(
-        self, manifest: RepositoryManifest, destination: str | Path
-    ) -> Path:
-        """Atomically publish a complete repository tree at an absent path."""
-
-        target = Path(destination)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            raise FileExistsError(target)
-        with self._store_lock():
-            stage = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=target.parent))
-            try:
-                for entry in manifest.files:
-                    self._materialize_unlocked(entry, stage / entry.path)
-                directories = [stage, *(path for path in stage.rglob("*") if path.is_dir())]
-                for directory in sorted(
-                    directories, key=lambda item: len(item.parts), reverse=True
-                ):
-                    _fsync_dir(directory)
-                os.rename(stage, target)
-                _fsync_dir(target.parent)
-                return target
-            except BaseException:
-                shutil.rmtree(stage, ignore_errors=True)
-                raise
 
     def store_manifest(self, manifest: RepositoryManifest) -> CASRef:
         return self.put_bytes(manifest.canonical_bytes())

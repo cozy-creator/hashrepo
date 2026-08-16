@@ -10,7 +10,7 @@ from typing import TypedDict, cast
 
 import pytest
 import tensorfs
-from tensorfs import FileEntry, LocalCAS, RepositoryManifest
+from tensorfs import FileEntry, LocalCAS, RepositoryManifest, read_entry
 from tensorfs import chunking as chunking_policy
 
 HEADER_SAMPLES = Path(__file__).parent / "testdata" / "safetensors_header_samples.json"
@@ -129,8 +129,7 @@ def test_header_only_safetensors_uses_one_explicit_chunk(tmp_path: Path) -> None
     entry = cas.ingest_file(source)
 
     assert [chunk.length for chunk in entry.chunks] == [len(expected)]
-    destination = cas.materialize(entry, tmp_path / "rebuilt.safetensors")
-    assert destination.read_bytes() == expected
+    assert read_entry(cas, entry) == expected
 
 
 def test_unpadded_two_byte_empty_header_is_valid_safetensors(tmp_path: Path) -> None:
@@ -163,15 +162,14 @@ def test_valid_oversized_header_region_is_split_before_tensor_body(
     entry = cas.ingest_file(source)
 
     assert [chunk.length for chunk in entry.chunks] == [object_ceiling, 16, 1]
-    restored = cas.materialize(entry, tmp_path / "restored.safetensors")
-    assert restored.stat().st_size == source.stat().st_size
+    assert len(read_entry(cas, entry)) == source.stat().st_size
 
 
 @pytest.mark.parametrize(("dtype", "bits"), _OFFICIAL_DTYPE_BITS.items())
 def test_every_current_safetensors_dtype_uses_tensor_aligned_chunks(
     tmp_path: Path, dtype: str, bits: int
 ) -> None:
-    assert chunking_policy._DTYPE_BITS == _OFFICIAL_DTYPE_BITS
+    assert chunking_policy.DTYPE_BITS == _OFFICIAL_DTYPE_BITS
     elements = 4 if bits == 6 else 2 if bits == 4 else 1
     body = bytes(range(elements * bits // 8))
     source = tmp_path / f"{dtype}.safetensors"
@@ -182,7 +180,7 @@ def test_every_current_safetensors_dtype_uses_tensor_aligned_chunks(
 
     header_end = len(expected) - len(body)
     assert [chunk.length for chunk in entry.chunks] == [header_end, len(body)]
-    assert cas.materialize(entry, tmp_path / f"{dtype}.rebuilt").read_bytes() == expected
+    assert read_entry(cas, entry) == expected
 
 
 def test_misaligned_sub_byte_tensor_uses_bounded_fallback(tmp_path: Path) -> None:
@@ -421,7 +419,7 @@ def test_scaled_50_plus_1_publish_adds_only_changed_tensor_and_manifest(
     assert delta == 1024 + len(child_manifest.canonical_bytes())
 
 
-def test_automatic_fixed_and_tensor_layouts_materialize_and_collect_byte_exact(
+def test_automatic_fixed_and_tensor_layouts_read_and_collect_byte_exact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(chunking_policy, "_FIXED_CHUNK_BYTES", 64)
@@ -445,9 +443,8 @@ def test_automatic_fixed_and_tensor_layouts_materialize_and_collect_byte_exact(
     assert [chunk.length for chunk in aligned.chunks] != [64, 64, 52]
 
     manifest = RepositoryManifest((fixed, aligned))
-    cas.materialize_repository(manifest, tmp_path / "rebuilt")
-    assert (tmp_path / "rebuilt" / "opaque.bin").read_bytes() == opaque_bytes
-    assert (tmp_path / "rebuilt" / "model.safetensors").read_bytes() == tensor_bytes
+    assert read_entry(cas, fixed) == opaque_bytes
+    assert read_entry(cas, aligned) == tensor_bytes
 
     orphan = cas.put_bytes(b"orphan")
     old = time.time() - 3600

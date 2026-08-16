@@ -17,6 +17,7 @@ from tensorfs import (
     LocalCAS,
     TransferGrant,
     download,
+    read_entry,
     upload,
 )
 
@@ -101,9 +102,8 @@ def test_real_http_partial_resume_and_repository_materialization(tmp_path: Path)
         fetched = download(grants, destination, parallel=2)
         assert fetched.ok
         assert fetched.skipped_resident == 1
-        output = destination.materialize_repository(manifest, tmp_path / "output")
-        assert (output / "first").read_bytes() == b"first"
-        assert (output / "second").read_bytes() == b"second"
+        restored = {entry.path: read_entry(destination, entry) for entry in manifest.files}
+        assert restored == {"first": b"first", "second": b"second"}
         assert GrantHandler.requests.count(("GET", first.digest.digest)) == 0
     finally:
         server.shutdown()
@@ -157,22 +157,18 @@ def test_real_http_out_of_order_chunks_reassemble_and_check_whole_digest(
         assert report.ok
         assert server.completed == [last.digest, first.digest]
 
-        output = cas.materialize(entry, tmp_path / "large.bin")
-        assert output.stat().st_size == MAX_CHUNK_SIZE + len(last_bytes)
-        with output.open("rb") as handle:
-            assert handle.read(1) == b"x"
-            handle.seek(-3, 2)
-            assert handle.read() == b"end"
+        restored = read_entry(cas, entry)
+        assert len(restored) == MAX_CHUNK_SIZE + len(last_bytes)
+        assert restored[:1] == b"x"
+        assert restored[-3:] == b"end"
 
         wrong = FileEntry(entry.path, entry.size_bytes, CASRef.digest_bytes(b"wrong"), entry.chunks)
-        refused = tmp_path / "refused.bin"
         try:
-            cas.materialize(wrong, refused)
+            read_entry(cas, wrong)
         except ValueError as exc:
             assert "whole" in str(exc) or "reconstructed" in str(exc)
         else:
             raise AssertionError("wrong whole-file digest was accepted")
-        assert not refused.exists()
     finally:
         server.shutdown()
         thread.join()

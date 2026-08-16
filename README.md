@@ -5,7 +5,9 @@ files and repositories. It provides:
 
 - a canonical SHA-256 manifest with explicit bounded chunk lengths;
 - an authoritative local CAS that works without a network or hub;
-- atomic file/tree materialization and compare-and-swap logical refs;
+- direct per-tensor reads and writes over safetensors and GGUF, with no file
+  built at any point (`docs/direct-tensor-reads.md`);
+- compare-and-swap logical refs;
 - durable transfer-session journals and reachability-driven local collection;
 - opaque grant-driven Python upload/download with verified restart resume;
 - Go missing-object planning and staged verification/promotion; and
@@ -120,6 +122,26 @@ drives the real built extension.
 
 The two test suites both read `spec/v1/vectors/manifest.json` and require their
 canonical encoders to reproduce it byte-for-byte.
+
+## Reading tensors without a file
+
+Whole-file materialization is gone: `LocalCAS.materialize` and
+`materialize_repository` are deleted, with no fallback. A consumer reads the
+tensors it wants straight out of the CAS objects the seal planner already
+created for them, and writes converted tensors back the same way.
+
+```python
+from tensorfs import TensorWriter, open_tensors
+
+with open_tensors(cas, snapshot_ref) as tensors:
+    view = tensors["denoiser.blocks.0.attn.weight"]
+    view.dtype, view.shape, view.block      # safetensors and GGUF alike
+    for piece in view.pieces():             # zero-copy, one object at a time
+        ...
+```
+
+No daemon, no mount, no `/dev/fuse`. See `docs/direct-tensor-reads.md` for the
+API, the torch boundary, the measurements and what remains unproven.
 
 ## Semantic writer profiles
 

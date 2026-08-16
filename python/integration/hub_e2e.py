@@ -11,7 +11,7 @@ Phases, each independently asserted:
 
   A  first publish: ingest -> declare -> granted uploads -> complete -> promoted
   B  dedup republish: 8 changed bytes re-upload only the intersected chunks
-  C  fetch: fresh empty CAS -> resolve -> download -> byte-exact materialize;
+  C  fetch: fresh empty CAS -> resolve -> download -> byte-exact reconstruction;
      a second download transfers zero bytes (resident objects short-circuit)
   D  local read/write: verified reads, a local edit, and a third publish
      reusing every unchanged chunk
@@ -38,7 +38,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tensorfs import LocalCAS, RepositoryManifest, TransferGrant, download, upload
+from tensorfs import LocalCAS, RepositoryManifest, TransferGrant, download, read_entry, upload
 
 HUB = os.environ.get("TENSORFS_HUB_URL", "http://127.0.0.1:31550").rstrip("/")
 LOGIN = os.environ.get("TENSORFS_HUB_LOGIN", "")
@@ -153,6 +153,33 @@ def tree_digests(root: Path) -> dict[str, str]:
         for item in sorted(root.rglob("*"))
         if item.is_file()
     }
+
+
+def manifest_digests(cas: LocalCAS, manifest: RepositoryManifest) -> dict[str, str]:
+    """Every file's digest reconstructed from CAS objects, with no tree on disk."""
+
+    return {
+        entry.path: hashlib.sha256(read_entry(cas, entry)).hexdigest()
+        for entry in manifest.files
+    }
+
+
+def write_tree(cas: LocalCAS, manifest: RepositoryManifest, root: Path) -> Path:
+    """Write a working tree this script intends to edit in place.
+
+    TensorFS deliberately owns no materializer any more: a consumer that wants
+    bytes on disk asks for the bytes and writes them. Phase D needs a real
+    editable directory, so it does exactly that -- and nothing in the read path
+    depends on it.
+    """
+
+    if root.exists():
+        shutil.rmtree(root)
+    for entry in manifest.files:
+        target = root / entry.path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(read_entry(cas, entry))
+    return root
 
 
 def upload_grants(need: list[dict[str, Any]]) -> list[TransferGrant]:
@@ -390,12 +417,11 @@ def main() -> None:
     report_c = download(grants_c, cas_c)
     check(report_c.ok, f"download clean: {report_c}")
     check(report_c.succeeded == len(grants_c), "empty CAS fetched every object")
-    fetched = base / "fetched"
-    if fetched.exists():
-        shutil.rmtree(fetched)
     remote_manifest = manifest_from_resolve(resolved)
-    cas_c.materialize_repository(remote_manifest, fetched)
-    check(tree_digests(fetched) == source_digests, "materialized tree is byte-exact")
+    check(
+        manifest_digests(cas_c, remote_manifest) == source_digests,
+        "every fetched file reconstructs byte-exactly from CAS objects",
+    )
     report_c2 = download(grants_c, cas_c)
     check(
         report_c2.succeeded == 0 and report_c2.bytes_transferred == 0,
@@ -413,6 +439,7 @@ def main() -> None:
     for ref, size in sample.objects()[:3]:
         path = cas_c.verify_object(ref, size=size)
         check(path.is_file(), f"verified local read of {str(ref)[:23]}...")
+    fetched = write_tree(cas_c, remote_manifest, base / "fetched")
     edited = fetched / "model-00002.safetensors"
     with edited.open("r+b") as handle:
         handle.seek(-16, os.SEEK_END)  # inside blk.1.norm.weight (small tensor)
@@ -516,12 +543,10 @@ def main() -> None:
         and report_e2.succeeded == len(grants_e2) - partial,
         f"resume skipped exactly the {partial} resident objects and fetched the rest",
     )
-    fetched_e = base / "fetched-resume"
     remote_manifest_e = manifest_from_resolve(resolved_e)
-    cas_e.materialize_repository(remote_manifest_e, fetched_e)
     check(
-        tree_digests(fetched_e) == tree_digests(source),
-        "post-resume materialization is byte-exact",
+        manifest_digests(cas_e, remote_manifest_e) == tree_digests(source),
+        "post-resume reconstruction is byte-exact",
     )
     EVIDENCE["phases"]["E"] = {
         "upload_staged_after_kill": staged_after_kill,

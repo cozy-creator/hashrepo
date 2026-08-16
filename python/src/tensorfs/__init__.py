@@ -6,6 +6,19 @@ from .journal import TransferJournal, TransferSession
 from .local import DigestMismatch, LocalCAS, RefConflict
 from .manifest import MAX_CHUNK_SIZE, Chunk, FileEntry, RepositoryManifest
 from .refs import CASRef
+from .tensors import (
+    DTYPE_BITS,
+    EXTRACT_SIZE_LIMIT,
+    BlockLayout,
+    FileTooLarge,
+    TensorError,
+    TensorReader,
+    TensorView,
+    dtype_itemsize,
+    open_tensors,
+    read_entry,
+)
+from .writer import TensorWriter
 
 if TYPE_CHECKING:
     from .daemon import (
@@ -60,6 +73,10 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "DTYPE_BITS",
+    "EXTRACT_SIZE_LIMIT",
+    "BlockLayout",
+    "FileTooLarge",
     "CASRef",
     "Chunk",
     "DaemonClient",
@@ -74,10 +91,17 @@ __all__ = [
     "MountedPath",
     "RefConflict",
     "RepositoryManifest",
+    "TensorError",
+    "TensorReader",
+    "TensorView",
+    "TensorWriter",
     "TransferGrant",
     "TransferJournal",
     "TransferReport",
     "TransferSession",
     "download",
+    "dtype_itemsize",
+    "open_tensors",
+    "read_entry",
     "upload",
 ]

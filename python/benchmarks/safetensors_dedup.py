@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import BinaryIO
 
-from tensorfs import FileEntry, LocalCAS, RepositoryManifest
+from tensorfs import FileEntry, LocalCAS, RepositoryManifest, read_entry
 
 _MIB = 1 << 20
 _COPY_BUFFER = 8 << 20
@@ -136,17 +136,16 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _verify_materialization(
-    cas: LocalCAS, source: Path, entry: FileEntry, destination: Path
-) -> dict[str, object]:
+def _verify_reconstruction(cas: LocalCAS, source: Path, entry: FileEntry) -> dict[str, object]:
     started = time.perf_counter()
-    cas.materialize(entry, destination)
+    rebuilt = read_entry(cas, entry)
     wall = time.perf_counter() - started
     source_digest = _sha256(source)
-    rebuilt_digest = _sha256(destination)
-    destination.unlink()
-    if source_digest != rebuilt_digest or f"sha256:{source_digest}" != str(entry.digest):
-        raise RuntimeError("materialized bytes do not match the source and manifest")
+    if (
+        hashlib.sha256(rebuilt).hexdigest() != source_digest
+        or f"sha256:{source_digest}" != str(entry.digest)
+    ):
+        raise RuntimeError("reconstructed bytes do not match the source and manifest")
     return {
         "wall_seconds": wall,
         "throughput_mib_s": entry.size_bytes / _MIB / wall,
@@ -189,12 +188,8 @@ def _run(body_mib: int, tensor_count: int, changed_tensor: int) -> dict[str, obj
             },
             "parent": parent_metrics,
             "child": child_metrics,
-            "materialize_parent": _verify_materialization(
-                cas, parent, parent_entry, root / "rebuilt.safetensors"
-            ),
-            "materialize_child": _verify_materialization(
-                cas, child, child_entry, root / "rebuilt.safetensors"
-            ),
+            "reconstruct_parent": _verify_reconstruction(cas, parent, parent_entry),
+            "reconstruct_child": _verify_reconstruction(cas, child, child_entry),
         }
 
 
