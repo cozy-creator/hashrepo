@@ -6,20 +6,23 @@
 //! 8 KiB-overwrite arm in `workspace_mount.rs` uses, so the numbers are
 //! comparable across the change that introduced in-memory slot assembly.
 //!
-//! Four arms:
+//! Three arms:
 //!
 //! * A sequential writer fills each 64 MiB grid slot in order, so every slot
 //!   completes in RAM and is admitted exactly once. It must approach 1×.
-//! * A sparse writer touches the far end of many slots and completes none of
-//!   them, so the overlay degrades to the spill file. Its amplification is
-//!   high and that is correct: a 64 MiB grid object costs 64 MiB to admit no
-//!   matter how few of its bytes changed. What is under test is that it stays
-//!   byte-exact and holds those slots on disk rather than in the daemon.
 //! * A post-fsync SIGKILL, because slots admitted straight out of RAM are the
 //!   surface this change adds and durability across a crash is the claim that
 //!   matters most.
-//! * The budget itself: a writer whose resident slots would exceed the ceiling
-//!   must spill rather than grow, and the daemon's peak RSS is the evidence.
+//! * A sparse writer touches the far end of many slots and completes none of
+//!   them, so the overlay must degrade to the spill file rather than grow. Its
+//!   amplification is high and that is correct: a 64 MiB grid object costs
+//!   64 MiB to admit no matter how few of its bytes changed. What is under test
+//!   is that it stays byte-exact and that both the pre-flush and post-flush
+//!   resident set stay bounded — the budget is load-bearing, not decorative.
+//!
+//! The spill arm was two until this file was trimmed for wall-clock; they drove
+//! the identical access pattern and differed only in slot count and in which
+//! RSS sample they asserted, so one arm now carries every assertion from both.
 
 #![cfg(target_os = "linux")]
 
@@ -222,7 +225,12 @@ fn a_sequential_write_moves_each_byte_to_disk_about_once() {
     let (root, mountpoint) = fresh_workspace("amp-seq");
     let daemon = BinMount::spawn(&root, "main", &mountpoint, None);
 
-    let logical = 192 * MIB;
+    // Exactly two grid slots. What this arm proves is that a slot which
+    // completes in RAM is admitted once and never staged; two completions
+    // demonstrate that as well as three, and the payload is the arm's whole
+    // cost. Deliberately a whole number of slots: a partial tail would add the
+    // compose path and blur the one-write-per-byte claim.
+    let logical = 128 * MIB;
     let block = pattern(11, MIB as usize);
     let path = mountpoint.join("model.bin");
     let file = OpenOptions::new()
@@ -242,8 +250,9 @@ fn a_sequential_write_moves_each_byte_to_disk_about_once() {
     let (read_after, write_after) = proc_io(daemon.pid());
 
     // Byte-exactness first: a cheap write that loses bytes is worthless.
+    // One probe at each end of both slots, including the last full block.
     let mut sample = vec![0_u8; block.len()];
-    for at in [0_u64, 64 * MIB, 128 * MIB, logical - MIB] {
+    for at in [0_u64, 63 * MIB, 64 * MIB, logical - MIB] {
         file.read_exact_at(&mut sample, at)
             .expect("read back works");
         assert_eq!(sample, block, "bytes at {at} survive assembly");
@@ -271,89 +280,6 @@ fn a_sequential_write_moves_each_byte_to_disk_about_once() {
     assert!(
         peak_rss < 200 * MIB,
         "in-memory assembly must stay bounded (peak RSS {} MiB)",
-        peak_rss / MIB
-    );
-}
-
-/// The degradation arm. A sparse writer touches the far end of many slots and
-/// completes none of them, so the overlay falls back to the spill file. High
-/// amplification here is correct — the grid object is 64 MiB regardless — and
-/// the claim under test is that it stays correct and bounded, not that it is
-/// cheap.
-#[test]
-fn an_out_of_order_writer_degrades_to_the_spill_and_stays_exact() {
-    let _serial = serial();
-    if !fuse_available() {
-        return;
-    }
-    let (root, mountpoint) = fresh_workspace("amp-sparse");
-    // A one-slot ceiling so this arm genuinely exercises the overflow path.
-    // Left at the 512 MiB default these six incomplete slots would all fit in
-    // RAM, and the arm would silently stop testing the spill it is named for.
-    let daemon = BinMount::spawn(&root, "main", &mountpoint, Some(64 * MIB));
-
-    let slots = 3_u64;
-    let size = slots * 64 * MIB;
-    let stamp = pattern(23, 8192);
-    let path = mountpoint.join("sparse.bin");
-    let file = OpenOptions::new()
-        .create_new(true)
-        .read(true)
-        .write(true)
-        .open(&path)
-        .expect("create works");
-    file.set_len(size).expect("truncate works");
-
-    let (read_before, write_before) = proc_io(daemon.pid());
-    // Descending slot order, each write landing near the far end of its slot:
-    // nothing completes, and nothing arrives where the next byte is expected.
-    for slot in (0..slots).rev() {
-        let at = slot * 64 * MIB + 60 * MIB;
-        file.write_all_at(&stamp, at).expect("sparse write works");
-    }
-    file.sync_all().expect("fsync works");
-    let (read_after, write_after) = proc_io(daemon.pid());
-
-    let mut sample = vec![0_u8; stamp.len()];
-    for slot in 0..slots {
-        let at = slot * 64 * MIB + 60 * MIB;
-        file.read_exact_at(&mut sample, at)
-            .expect("sparse read back works");
-        assert_eq!(sample, stamp, "the stamp at {at} survives the spill path");
-    }
-    // The untouched bytes of a sparse file are still holes reading as zero.
-    let mut gap = vec![0xAA_u8; 4096];
-    file.read_exact_at(&mut gap, 8 * MIB).expect("gap reads");
-    assert!(
-        gap.iter().all(|byte| *byte == 0),
-        "untouched bytes are zero"
-    );
-    drop(file);
-
-    let peak_rss = proc_vmhwm(daemon.pid());
-    daemon.sigterm_and_wait();
-
-    let logical = slots * stamp.len() as u64;
-    report(
-        "sparse/out-of-order",
-        logical,
-        write_after - write_before,
-        read_after - read_before,
-    );
-    println!(
-        "sparse/out-of-order: daemon peak RSS {} MiB",
-        peak_rss / MIB
-    );
-
-    // No amplification bound is asserted: admitting three 64 MiB grid objects
-    // for 24 KiB of change is inherent to content addressing on a fixed grid,
-    // and pretending otherwise would be a bound on the grid, not on this code.
-    //
-    // Three composed slots ride the bounded compose pool, so ~192 MiB here is
-    // legitimate; what must not happen is the overlay itself holding them.
-    assert!(
-        peak_rss < 320 * MIB,
-        "the overflow path must hold slots on disk, not in the daemon (peak RSS {} MiB)",
         peak_rss / MIB
     );
 }
@@ -423,19 +349,31 @@ fn eagerly_admitted_slots_survive_a_post_fsync_kill() {
     );
 }
 
-/// The budget is load-bearing, not decorative. A writer whose resident slots
-/// would exceed the ceiling must spill instead of growing, and the daemon's
-/// peak RSS is the evidence: without the check, the same access pattern
-/// balloons past three quarters of a gigabyte.
+/// The degradation-and-budget arm. A sparse writer touches the far end of many
+/// slots and completes none of them, so the overlay must fall back to the spill
+/// file rather than grow. High amplification here is correct — a 64 MiB grid
+/// object costs 64 MiB to admit however few of its bytes changed — so what is
+/// under test is that the path stays byte-exact and that memory stays bounded,
+/// not that it is cheap.
+///
+/// This arm was two: one proving the spill path stays exact and one proving the
+/// budget forces it. They drove the *identical* access pattern — an 8 KiB stamp
+/// 60 MiB into each slot, one-slot ceiling — and differed only in slot count and
+/// in which RSS sample they asserted, so the pair paid for two daemons and two
+/// rounds of composing to test one mechanism. Merged, with every assertion from
+/// both kept: the six-slot count is what the pre-flush bound needs to be
+/// discriminating, and the descending write order is the more adversarial of the
+/// two, so nothing arrives where the next byte is expected.
 #[test]
-fn a_writer_past_the_budget_spills_instead_of_growing_memory() {
+fn an_out_of_order_writer_spills_instead_of_growing_and_stays_exact() {
     let _serial = serial();
     if !fuse_available() {
         return;
     }
-    let (root, mountpoint) = fresh_workspace("amp-budget");
+    let (root, mountpoint) = fresh_workspace("amp-sparse");
     // One slot's worth of ceiling: the first slot may assemble in RAM, every
-    // later one must overflow.
+    // later one must overflow. Left at the 512 MiB default these six incomplete
+    // slots would all fit, and the arm would silently stop testing the spill.
     let budget = 64 * MIB;
     let daemon = BinMount::spawn(&root, "main", &mountpoint, Some(budget));
 
@@ -450,34 +388,58 @@ fn a_writer_past_the_budget_spills_instead_of_growing_memory() {
         .expect("create works");
     file.set_len(slots * 64 * MIB).expect("truncate works");
 
-    // Each write lands 60 MiB into its own slot. Held in RAM, every one of
-    // them would zero-extend a buffer to 60 MiB: 360 MiB for 48 KiB of data.
-    for slot in 0..slots {
+    let (read_before, write_before) = proc_io(daemon.pid());
+    // Descending slot order, each write landing 60 MiB into its own slot:
+    // nothing completes, and nothing arrives where the next byte is expected.
+    // Held in RAM, every one would zero-extend a buffer to 60 MiB — 360 MiB
+    // for 48 KiB of data, which is what the pre-flush bound below rules out.
+    for slot in (0..slots).rev() {
         let at = slot * 64 * MIB + 60 * MIB;
         file.write_all_at(&stamp, at)
             .expect("far-offset write works");
     }
     let peak_before_flush = proc_vmhwm(daemon.pid());
     file.sync_all().expect("fsync works");
+    let (read_after, write_after) = proc_io(daemon.pid());
 
     let mut sample = vec![0_u8; stamp.len()];
     for slot in 0..slots {
         let at = slot * 64 * MIB + 60 * MIB;
         file.read_exact_at(&mut sample, at)
-            .expect("read back works");
-        assert_eq!(
-            sample, stamp,
-            "the stamp at {at} survives the overflow path"
-        );
+            .expect("sparse read back works");
+        assert_eq!(sample, stamp, "the stamp at {at} survives the spill path");
     }
+    // The untouched bytes of a sparse file are still holes reading as zero.
+    let mut gap = vec![0xAA_u8; 4096];
+    file.read_exact_at(&mut gap, 8 * MIB).expect("gap reads");
+    assert!(
+        gap.iter().all(|byte| *byte == 0),
+        "untouched bytes are zero"
+    );
     drop(file);
     let peak_rss = proc_vmhwm(daemon.pid());
     daemon.sigterm_and_wait();
 
+    // No amplification bound is asserted: admitting six 64 MiB grid objects for
+    // 48 KiB of change is inherent to content addressing on a fixed grid, and
+    // pretending otherwise would be a bound on the grid, not on this code.
+    report(
+        "sparse/out-of-order",
+        slots * stamp.len() as u64,
+        write_after - write_before,
+        read_after - read_before,
+    );
     println!(
         "budget: ceiling {} MiB, peak RSS before flush {} MiB, after {} MiB",
         budget / MIB,
         peak_before_flush / MIB,
+        peak_rss / MIB
+    );
+    // Composed slots ride the bounded compose pool, so a few hundred MiB after
+    // the flush is legitimate; what must not happen is the overlay holding them.
+    assert!(
+        peak_rss < 320 * MIB,
+        "the overflow path must hold slots on disk, not in the daemon (peak RSS {} MiB)",
         peak_rss / MIB
     );
     // Assert the PRE-FLUSH peak: at that point assembly is the only thing
