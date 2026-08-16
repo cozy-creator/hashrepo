@@ -28,14 +28,6 @@ dev = [
     "pytest>=9.0",
     "ruff>=0.6",
 ]
-# The real library the Rust mount tests hand a mounted path to, so the claim
-# "safe_open works on a mounted path with no wrapper" is proved by safetensors
-# itself. numpy is safe_open's only backend that does not pull a multi-GB
-# deep-learning runtime; do not add torch here.
-mount-tests = [
-    "numpy>=1.26",
-    "safetensors>=0.4",
-]
 
 [build-system]
 requires = ["hatchling"]

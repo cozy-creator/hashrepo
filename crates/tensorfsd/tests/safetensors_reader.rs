@@ -16,9 +16,17 @@
 //! mount alike. That property is why the planner exists.
 //!
 //! Prerequisites: `/dev/fuse`, `fusermount3`, and a `python3` that can
-//! `import safetensors` and `numpy` (`uv sync --all-extras`, or point
-//! `TENSORFS_TEST_PYTHON` at an interpreter that has them). Each is named
-//! loudly on skip.
+//! `import safetensors` and `numpy`. Each is named loudly on skip. The
+//! reader is a prerequisite of THIS test, not of the `tensorfs` Python
+//! package — it stays out of `pyproject.toml` (numpy's stubs need a newer
+//! `python_version` than the package's typing gate targets) and out of the
+//! project virtualenv. Give it its own:
+//!
+//! ```text
+//! python3 -m venv /tmp/safetensors-reader
+//! /tmp/safetensors-reader/bin/pip install safetensors numpy
+//! TENSORFS_TEST_PYTHON=/tmp/safetensors-reader/bin/python3 cargo test -p tensorfsd
+//! ```
 //!
 //! `numpy` is the framework because it is the only `safe_open` backend that
 //! does not pull a multi-GB deep-learning runtime. The PyTorch and Diffusers
@@ -49,8 +57,8 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
 
 const MODEL: &str = "model.safetensors";
 
-/// The interpreter that must carry `safetensors`; the repository's own
-/// virtualenv is not on `PATH` for `cargo test`, so it is nameable.
+/// The interpreter that must carry `safetensors`, nameable because it is
+/// deliberately not the project's own virtualenv.
 fn python() -> String {
     std::env::var("TENSORFS_TEST_PYTHON").unwrap_or_else(|_| "python3".to_owned())
 }
