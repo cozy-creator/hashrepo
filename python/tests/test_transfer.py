@@ -193,6 +193,62 @@ def test_progress_reports_a_landed_object_before_the_batch_finishes(tmp_path: Pa
     assert set(beats) == {first, second}
 
 
+def test_a_resident_object_advances_progress_before_the_batch_finishes(tmp_path: Path) -> None:
+    """A resumed transfer must look alive, not dead.
+
+    pgw#1287: an object already on disk was `skipped` and reported nothing, so
+    a resume whose previous attempt landed most objects was indistinguishable
+    from one making no headway at all — and a caller that brakes on two
+    consecutive zero-progress attempts would condemn the healthiest possible
+    pod. Residency is not free either: `contains` REHASHES every byte, so a
+    mostly-resident snapshot can spend minutes verifying while reporting
+    nothing.
+
+    `progress` answers "is this advancing toward readiness", and a verified
+    resident object is completed work toward readiness. Same arrival-style
+    gate as the fetched case, so the emission must be incremental too.
+    """
+
+    resident = CASRef.digest_bytes(b"already here")
+    fetched = CASRef.digest_bytes(b"still remote")
+    resident_reported = threading.Event()
+
+    class GatedTransport(MemoryTransport):
+        def download(self, grant: TransferGrant, destination: Path) -> None:
+            if not resident_reported.wait(timeout=10):
+                raise AssertionError(
+                    "the resident object reported no progress while the "
+                    "fetched one was still in flight — a resume that is "
+                    "mostly complete reads as a transfer making no headway"
+                )
+            super().download(grant, destination)
+
+    cas = LocalCAS(tmp_path / "destination")
+    cas.put_bytes(b"already here", expected=resident)
+    transport = GatedTransport({fetched: b"still remote"})
+    beats: list[CASRef] = []
+
+    def progress(ref: CASRef, _size: int) -> None:
+        beats.append(ref)
+        if ref == resident:
+            resident_reported.set()
+
+    report = _download(
+        [grant(resident, 12), grant(fetched, 12)],
+        cas,
+        transport=transport,
+        parallel=2,
+        progress=progress,
+    )
+
+    assert report.failures == []
+    assert report.skipped_resident == 1
+    assert report.succeeded == 1
+    # Only the fetched object moved bytes, but BOTH advanced readiness.
+    assert report.bytes_transferred == 12
+    assert set(beats) == {resident, fetched}
+
+
 def test_python_consumes_and_reproduces_shared_go_grant_vector() -> None:
     path = Path("spec/v1/vectors/upload_grant.json")
     raw = path.read_bytes().strip()
