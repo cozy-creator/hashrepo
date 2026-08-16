@@ -324,6 +324,171 @@ fn an_oversized_frame_is_refused_before_allocation() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Splits `bytes` at `at`, with a pause longer than the daemon's poll window
+/// between the halves, so the frame is genuinely in flight across an idle tick.
+///
+/// This is the condition `fill_frame_bytes` exists for and the one no test
+/// reached: every other request in this file is one `write_all`, which the
+/// kernel delivers in a single `read`, so the retry path never runs.
+fn write_across_a_poll_tick(stream: &mut UnixStream, bytes: &[u8], at: usize) {
+    // The daemon's accept loop polls on the same 200ms tick, so a split
+    // written immediately after connect can land entirely BEFORE the
+    // connection is accepted — both halves then arrive in one read and the
+    // test silently proves nothing. One completed round trip guarantees the
+    // per-connection thread exists and is blocked in its read loop.
+    let warmup = ok(stream, 0, "hello", json!({}));
+    assert!(warmup.is_object(), "the warm-up round trip answers");
+
+    stream
+        .write_all(&bytes[..at])
+        .and_then(|()| stream.flush())
+        .expect("the first half writes");
+    // ACCEPT_POLL is 200ms; overshoot so the daemon definitely sees WouldBlock.
+    std::thread::sleep(Duration::from_millis(350));
+    stream
+        .write_all(&bytes[at..])
+        .and_then(|()| stream.flush())
+        .expect("the second half writes");
+}
+
+fn framed(value: &Value) -> Vec<u8> {
+    let body = serde_json::to_vec(value).expect("request serializes");
+    let length = u32::try_from(body.len()).expect("request fits a frame");
+    let mut frame = length.to_le_bytes().to_vec();
+    frame.extend_from_slice(&body);
+    frame
+}
+
+/// A request body that arrives in two reads, straddling the poll window, must
+/// reassemble byte-exactly.
+///
+/// This is the regression that shipped once already: `read_exact` cannot be
+/// retried after `WouldBlock` — it leaves the buffer unspecified and the
+/// stream advanced — so the body loop tracks a fill offset and reads into
+/// `buffer[filled..]`. Reading into `buffer` from the start instead silently
+/// reassembles the frame out of order, and the corruption is invisible until
+/// the JSON fails to parse. Nothing forced that path before this test.
+///
+/// No mount, so no FUSE dependency: this exercises the socket and the framing
+/// only.
+#[test]
+fn a_request_body_split_across_the_poll_window_reassembles_exactly() {
+    let root = tempdir("rpc-split-body");
+    let daemon = Daemon::spawn(&root);
+    let mut stream = daemon.connect();
+
+    let frame = framed(&json!({"id": 7, "method": "hello", "params": {}}));
+    // Split inside the BODY: the length prefix lands whole in the first write.
+    assert!(frame.len() > 8, "the body must be long enough to split");
+    write_across_a_poll_tick(&mut stream, &frame, 4 + (frame.len() - 4) / 2);
+
+    let response = receive(&mut stream);
+    assert_eq!(response["id"], json!(7), "response correlates: {response}");
+    assert!(
+        response.get("error").is_none(),
+        "a body that merely arrived in two pieces is a VALID request, not a \
+         malformed one — the framing reassembled it wrong: {response}"
+    );
+
+    daemon.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The same, one layer earlier: a length prefix that arrives in two reads.
+///
+/// The idle refusal is only correct while NOTHING of the frame has arrived —
+/// hence `!frame_started && filled == 0`. Dropping the `filled == 0` half
+/// makes a half-read length prefix report "idle", and the caller loops and
+/// reads the prefix's remaining bytes as if they began a new frame, so a
+/// perfectly ordinary request is misparsed as a garbage length.
+#[test]
+fn a_length_prefix_split_across_the_poll_window_is_not_mistaken_for_idle() {
+    let root = tempdir("rpc-split-prefix");
+    let daemon = Daemon::spawn(&root);
+    let mut stream = daemon.connect();
+
+    let frame = framed(&json!({"id": 11, "method": "hello", "params": {}}));
+    // Split INSIDE the 4-byte length prefix.
+    write_across_a_poll_tick(&mut stream, &frame, 2);
+
+    let response = receive(&mut stream);
+    assert_eq!(response["id"], json!(11), "response correlates: {response}");
+    assert!(
+        response.get("error").is_none(),
+        "a prefix that merely arrived in two pieces is not an idle tick: {response}"
+    );
+
+    daemon.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A frame of exactly the bound is legal — the refusal says `1..=BOUND`.
+///
+/// `an_oversized_frame_is_refused_before_allocation` only ever sends
+/// `BOUND + 1`, so an off-by-one that turned the ceiling into `>=` would
+/// refuse the largest legal frame with nothing going red.
+#[test]
+fn a_frame_of_exactly_the_bound_is_accepted_not_refused() {
+    let root = tempdir("rpc-exact-bound");
+    let daemon = Daemon::spawn(&root);
+    let mut stream = daemon.connect();
+
+    // Pad an unknown method out to exactly the bound. Unknown-method is a
+    // dispatch answer, which proves the frame was read whole and parsed —
+    // exactly what is under test — while keeping the payload trivial.
+    let skeleton = json!({"id": 13, "method": "nosuchmethod", "params": {"pad": ""}});
+    let padding = FRAME_BOUND as usize - serde_json::to_vec(&skeleton).unwrap().len();
+    let request = json!({
+        "id": 13, "method": "nosuchmethod", "params": {"pad": "a".repeat(padding)}
+    });
+    let frame = framed(&request);
+    assert_eq!(
+        frame.len() - 4,
+        FRAME_BOUND as usize,
+        "the request body must be exactly the bound"
+    );
+    stream.write_all(&frame).expect("the frame writes");
+
+    let response = receive(&mut stream);
+    assert_eq!(
+        response["error"]["code"],
+        json!("unknown-method"),
+        "the largest LEGAL frame must reach dispatch, not be refused for its \
+         size: {}",
+        response["error"]
+    );
+
+    daemon.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A zero-length frame is a framing violation, and must be refused as one.
+///
+/// Without the `length == 0` clause it falls through to a zero-byte body that
+/// fails JSON parsing instead, downgrading a typed protocol refusal into a
+/// generic `malformed-frame`.
+#[test]
+fn a_zero_length_frame_is_refused_as_a_framing_violation() {
+    let root = tempdir("rpc-zero-frame");
+    let daemon = Daemon::spawn(&root);
+    let mut stream = daemon.connect();
+
+    stream
+        .write_all(&0_u32.to_le_bytes())
+        .expect("the length prefix writes");
+
+    let refusal = receive(&mut stream);
+    assert_eq!(
+        refusal["error"]["code"],
+        json!("frame-too-large"),
+        "an empty frame is refused by the framing layer, not by the JSON \
+         parser downstream: {refusal}"
+    );
+
+    daemon.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_closed_connection_releases_every_mount_it_opened() {
     if !fuse_available() {
