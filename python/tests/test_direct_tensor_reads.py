@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 from tensorfs import (
     EXTRACT_SIZE_LIMIT,
+    CASRef,
     FileTooLarge,
     LocalCAS,
     TensorError,
@@ -337,7 +338,7 @@ def test_a_small_non_tensor_file_can_be_extracted_to_a_path(
     assert json.loads(target.read_bytes())["architectures"] == ["Fixture"]
 
 
-def _oversized_snapshot(tmp_path: Path) -> tuple[LocalCAS, object]:
+def _oversized_snapshot(tmp_path: Path) -> tuple[LocalCAS, CASRef]:
     """A file above the extraction ceiling, made sparse so it costs nothing.
 
     Every 64 MiB run of zeros hashes to the same digest, so the whole thing
