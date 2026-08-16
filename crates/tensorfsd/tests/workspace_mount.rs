@@ -10,8 +10,9 @@ use std::process;
 use std::sync::{Barrier, Mutex};
 use std::time::{Duration, Instant};
 
+use tensorfs_core::planner::PlannerId;
 use tensorfs_core::tfm1::{Entry, FileRecord};
-use tensorfs_core::workspace::WorkspaceStore;
+use tensorfs_core::workspace::{Mutation, WorkspaceStore};
 use tensorfsd::mount_workspace;
 
 /// Real mounts are a shared-kernel resource; the machine budget is two at a
@@ -245,7 +246,9 @@ impl Drop for BinMount {
         // red-proving — would otherwise leave a live daemon and a mount entry
         // behind on a machine several lanes share. An in-process
         // `mount_workspace` unmounts itself when its session drops; a spawned
-        // daemon has nothing that would.
+        // daemon has nothing that would. The inherited stdout pipe is the
+        // other half: a leaked daemon holds it open, so cargo waits on it
+        // forever and an ordinary assertion failure presents as a hung suite.
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = process::Command::new("fusermount3")
@@ -266,6 +269,10 @@ impl BinMount {
                 workspace,
                 mountpoint.to_str().expect("test paths are UTF-8"),
             ])
+            // Null stdio: an inherited pipe would keep the test harness's
+            // output stream open for as long as a leaked daemon lives.
+            .stdout(process::Stdio::null())
+            .stderr(process::Stdio::null())
             .spawn()
             .expect("daemon spawns");
         for _ in 0..100 {
@@ -830,6 +837,492 @@ fn an_unlinked_open_file_keeps_serving_until_close() {
         tree.entries().iter().all(|(path, _)| path != "doomed.bin"),
         "the committed tree no longer names the unlinked file"
     );
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// The compose path's inheritance rule, asserted on the bytes it governs.
+///
+/// A slot the overlay covers end to end inherits nothing, because reading the
+/// superseded object under bytes that are all about to be overwritten is pure
+/// read amplification. A slot the overlay covers only in PART must inherit
+/// every committed byte it did not write. Nothing asserted the second half:
+/// every pre-existing arm either overwrote a whole slot or never read back the
+/// untouched remainder, so deleting the inheritance entirely — and separately,
+/// deleting the gap check from `Dirty::covers`, which is what decides "end to
+/// end" — left the whole suite green while a partial overwrite silently zeroed
+/// every byte it did not touch.
+///
+/// The two patches are deliberately placed: one starts exactly at the slot's
+/// first byte (so the coverage lookup finds a range and must still notice it
+/// stops short), one is an island in the middle.
+#[test]
+fn a_partial_overwrite_inherits_every_committed_byte_it_did_not_write() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("inherit-root");
+    let mountpoint = unique_dir("inherit-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let base = pattern(23, (2 * MIB) as usize);
+    let head_patch = pattern(29, 4096);
+    let island_patch = pattern(31, 4096);
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let path = mount.mountpoint().join("inherit.bin");
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&path)
+        .expect("create works");
+    file.write_all_at(&base, 0).expect("baseline write works");
+    file.sync_all().expect("baseline fsync works");
+    drop(file);
+
+    // Reopened, so the overlay starts empty and every untouched byte can only
+    // come from the committed object.
+    let file = OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("reopen works");
+    file.write_all_at(&head_patch, 0)
+        .expect("head patch writes");
+    file.write_all_at(&island_patch, MIB)
+        .expect("island patch writes");
+    file.sync_all().expect("patch fsync works");
+    drop(file);
+
+    mount.unmount();
+    assert!(!mounted_here(&mountpoint), "unmount leaves a clean table");
+
+    let mut expected = base.clone();
+    expected[..head_patch.len()].copy_from_slice(&head_patch);
+    expected[MIB as usize..MIB as usize + island_patch.len()].copy_from_slice(&island_patch);
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let served = fs::read(mount.mountpoint().join("inherit.bin")).expect("patched file reads");
+    assert_eq!(
+        served.len(),
+        expected.len(),
+        "a partial overwrite does not change the length"
+    );
+    // Report the first divergence rather than dumping two megabytes.
+    let divergence = served
+        .iter()
+        .zip(&expected)
+        .position(|(got, want)| got != want);
+    assert_eq!(
+        divergence, None,
+        "a partially overwritten slot must inherit every committed byte it did not write; \
+         first wrong byte at offset {divergence:?}"
+    );
+    mount.unmount();
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// A dirty range that starts exactly on a 64 MiB grid boundary must not hide
+/// the writes in the slot BELOW it.
+///
+/// `Dirty::overlaps` asks the range list for the last range starting strictly
+/// before the slot's end. Widening that to an inclusive bound picks up the
+/// range that starts exactly AT the boundary — which belongs to the next slot —
+/// concludes the slot below has no dirty bytes, and reuses its committed
+/// record verbatim. The writes into it are then dropped on the floor at fsync,
+/// with no error anywhere. Every pre-existing arm writes one contiguous run, so
+/// no range ever started on a boundary and the bound was never exercised.
+///
+/// The committed shape is a 64 MiB hole plus a small tail, so the arm proves
+/// the boundary property without paying to write 64 MiB of real bytes first.
+#[test]
+fn a_write_at_a_grid_boundary_does_not_hide_the_slot_below_it() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("boundary-root");
+    let mountpoint = unique_dir("boundary-mnt");
+    let slot = 64 * MIB;
+    let tail = pattern(37, 8192);
+    {
+        let meta = WorkspaceStore::open(&root).expect("store opens");
+        meta.create_workspace("main").expect("workspace creates");
+        let tail_object = meta.store().put_bytes(&tail).expect("tail admits");
+        meta.commit_generation(
+            "main",
+            &[Mutation::CreateFile {
+                path: "boundary.bin".into(),
+                executable: false,
+                planner: PlannerId::RawFixed64mV1,
+                records: vec![
+                    FileRecord::Hole { length: slot },
+                    FileRecord::Data {
+                        digest: tail_object.digest(),
+                        length: tail.len() as u64,
+                    },
+                ],
+            }],
+        )
+        .expect("file commits");
+    }
+
+    let below = pattern(43, 8192);
+    let above = pattern(47, 8192);
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let file = OpenOptions::new()
+        .write(true)
+        .open(mount.mountpoint().join("boundary.bin"))
+        .expect("open works");
+    // Two disjoint dirty ranges: one inside the first slot, one starting on
+    // the boundary exactly. They never coalesce, so the range list holds both.
+    file.write_all_at(&below, 0)
+        .expect("sub-boundary write works");
+    file.write_all_at(&above, slot)
+        .expect("on-boundary write works");
+    file.sync_all().expect("fsync works");
+    drop(file);
+    mount.unmount();
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let served = OpenOptions::new()
+        .read(true)
+        .open(mount.mountpoint().join("boundary.bin"))
+        .expect("reopen works");
+    let mut sample = vec![0_u8; below.len()];
+    served
+        .read_exact_at(&mut sample, 0)
+        .expect("sub-boundary read works");
+    assert_eq!(
+        sample, below,
+        "a write below a grid boundary survives a write that starts exactly on it"
+    );
+    served
+        .read_exact_at(&mut sample, slot)
+        .expect("on-boundary read works");
+    assert_eq!(sample, above, "the on-boundary write survives");
+    // The hole between them is still a hole.
+    served
+        .read_exact_at(&mut sample, 8 * MIB)
+        .expect("hole read works");
+    assert!(
+        sample.iter().all(|byte| *byte == 0),
+        "the untouched interior of the slot still reads as zeros"
+    );
+    drop(served);
+    mount.unmount();
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// An incomplete slot is never admitted out of RAM, however full its buffer is.
+///
+/// `admit_if_complete` requires BOTH a full-size buffer and dirty ranges that
+/// cover the slot end to end. Dropping the coverage half admits a buffer whose
+/// gaps are zero padding — bytes no reader ever consults, so the file stays
+/// byte-exact and nothing fails — while paying a whole extra 64 MiB object for
+/// a slot that then gets composed anyway. Pure write amplification on exactly
+/// the sparse workload the assembly budget exists to protect, and the store's
+/// object count is the only thing that can see it.
+///
+/// The gap must hold real committed bytes for the count to discriminate: with
+/// a hole there, the zero-padded eager admission and the composed object are
+/// byte-identical, and content addressing folds them into one object. That is
+/// what made the first version of this arm pass under the very mutation it was
+/// written for.
+#[test]
+fn an_incomplete_slot_is_never_admitted_out_of_ram() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("incomplete-root");
+    let mountpoint = unique_dir("incomplete-mnt");
+    let slot = 64 * MIB;
+    let committed = pattern(53, slot as usize);
+    {
+        let meta = WorkspaceStore::open(&root).expect("store opens");
+        meta.create_workspace("main").expect("workspace creates");
+        let object = meta.store().put_bytes(&committed).expect("slot admits");
+        meta.commit_generation(
+            "main",
+            &[Mutation::CreateFile {
+                path: "incomplete.bin".into(),
+                executable: false,
+                planner: PlannerId::RawFixed64mV1,
+                records: vec![FileRecord::Data {
+                    digest: object.digest(),
+                    length: slot,
+                }],
+            }],
+        )
+        .expect("file commits");
+    }
+    assert_eq!(count_store_objects(&root), 1, "the fixture is one object");
+
+    let head = pattern(59, 8192);
+    let foot = pattern(61, 8192);
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let file = OpenOptions::new()
+        .write(true)
+        .open(mount.mountpoint().join("incomplete.bin"))
+        .expect("open works");
+    // Both ends of one whole grid slot, nothing in between: the slot buffer
+    // reaches full size, so only the coverage half of the completeness test
+    // can refuse to admit it.
+    file.write_all_at(&head, 0).expect("head write works");
+    file.write_all_at(&foot, slot - foot.len() as u64)
+        .expect("foot write works");
+    file.sync_all().expect("fsync works");
+    drop(file);
+    mount.unmount();
+
+    assert_eq!(
+        count_store_objects(&root),
+        2,
+        "an incomplete slot is composed once and never also admitted out of RAM; \
+         a third object means a whole 64 MiB was written for nothing"
+    );
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let served = OpenOptions::new()
+        .read(true)
+        .open(mount.mountpoint().join("incomplete.bin"))
+        .expect("reopen works");
+    let mut sample = vec![0_u8; head.len()];
+    served.read_exact_at(&mut sample, 0).expect("head reads");
+    assert_eq!(sample, head, "the head of the incomplete slot is exact");
+    served
+        .read_exact_at(&mut sample, slot - foot.len() as u64)
+        .expect("foot reads");
+    assert_eq!(sample, foot, "the foot of the incomplete slot is exact");
+    served
+        .read_exact_at(&mut sample, 32 * MIB)
+        .expect("middle reads");
+    assert_eq!(
+        sample,
+        &committed[(32 * MIB) as usize..(32 * MIB) as usize + sample.len()],
+        "the untouched middle still serves its committed bytes"
+    );
+    drop(served);
+    mount.unmount();
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// Truncating down and back up must read as zeros, not as the old bytes.
+///
+/// `shrink_to` clips the range that straddles the new end, which is what keeps
+/// the discarded tail out of the dirty overlay. Without the clip the bytes are
+/// still in the slot buffer and still marked readable, so growing the file back
+/// resurrects them — a POSIX violation that leaks whatever the file used to
+/// hold. The pre-existing truncate arms only ever shrink, so the resurrection
+/// path was never walked.
+#[test]
+fn truncating_down_and_back_up_reads_the_regrown_bytes_as_zeros() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("regrow-root");
+    let mountpoint = unique_dir("regrow-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let secret = pattern(61, MIB as usize);
+    let kept = 1000_u64;
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let path = mount.mountpoint().join("regrown.bin");
+    let file = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("create works");
+    file.write_all_at(&secret, 0).expect("write works");
+    file.set_len(kept).expect("truncate-shrink works");
+    file.set_len(MIB).expect("truncate-grow works");
+    file.sync_all().expect("fsync works");
+    drop(file);
+    mount.unmount();
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let served = fs::read(mount.mountpoint().join("regrown.bin")).expect("regrown file reads");
+    assert_eq!(served.len() as u64, MIB, "the regrown length is served");
+    assert_eq!(
+        &served[..kept as usize],
+        &secret[..kept as usize],
+        "the surviving prefix is exact"
+    );
+    let leaked = served[kept as usize..]
+        .iter()
+        .position(|byte| *byte != 0)
+        .map(|at| at as u64 + kept);
+    assert_eq!(
+        leaked, None,
+        "bytes discarded by a truncate must not come back when the file grows again; \
+         first resurrected byte at offset {leaked:?}"
+    );
+    mount.unmount();
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// `open(O_TRUNC)` on a file that already has committed bytes discards them.
+///
+/// Every pre-existing arm that opens truncating opens a file that does not
+/// exist yet, so the truncation branch was only ever reached with nothing to
+/// discard. A mount that ignores the flag serves the old tail past the end of
+/// the new content — the classic "shorter rewrite leaves the previous version's
+/// suffix behind" corruption.
+#[test]
+fn opening_an_existing_file_truncating_discards_its_committed_bytes() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("otrunc-root");
+    let mountpoint = unique_dir("otrunc-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let long = pattern(71, MIB as usize);
+    let short = b"short\n";
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let path = mount.mountpoint().join("rewritten.bin");
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&path)
+        .expect("create works");
+    file.write_all_at(&long, 0).expect("long write works");
+    file.sync_all().expect("long fsync works");
+    drop(file);
+
+    // The truncating reopen is the whole point: it must reach the mount as a
+    // real length change, not as a no-op that leaves a megabyte behind.
+    let file = OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .expect("truncating reopen works");
+    file.write_all_at(short, 0).expect("short write works");
+    file.sync_all().expect("short fsync works");
+    drop(file);
+    mount.unmount();
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let served = fs::read(mount.mountpoint().join("rewritten.bin")).expect("rewritten file reads");
+    assert_eq!(
+        served, short,
+        "a truncating open discards every committed byte, leaving no tail of the old content"
+    );
+    mount.unmount();
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// An unlinked file with an open handle keeps its objects until the last close,
+/// and stops keeping them the moment that close lands.
+///
+/// The mount pins the inode with an `Unlinked` lease, which is what holds the
+/// inode's object map in the root set: without it the unlink orphans the inode
+/// immediately and the collector deletes bytes the open handle is still
+/// serving. The pre-existing unlink arm never runs a collection, so it passes
+/// with the lease removed entirely; and nothing at all asserted the other
+/// edge — that the lease is RELEASED on the last close, without which every
+/// unlinked-open file leaks its objects for the life of the store.
+///
+/// The daemon is a separate process here so the collector genuinely runs
+/// against a live mount rather than beside it in the same connection.
+#[test]
+fn an_unlink_open_lease_holds_objects_exactly_until_the_last_close() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("lease-root");
+    let mountpoint = unique_dir("lease-mnt");
+    {
+        let meta = WorkspaceStore::open(&root).expect("store opens");
+        if !meta.supports_multiprocess() {
+            eprintln!("skipping: this store root cannot be opened by two processes");
+            return;
+        }
+        meta.create_workspace("main").expect("workspace creates");
+    }
+
+    let payload = pattern(67, (256 * 1024) as usize);
+    let daemon = BinMount::spawn(&root, "main", &mountpoint);
+    // fsync, not just close: RELEASE composes best-effort and `close(2)`
+    // returns before the daemon has processed it, so seeding through
+    // `fs::write` would race the SIGTERM below for the object's existence.
+    let seed = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(mountpoint.join("doomed.bin"))
+        .expect("seed file creates");
+    seed.write_all_at(&payload, 0).expect("seed write works");
+    seed.sync_all().expect("seed fsync works");
+    drop(seed);
+    daemon.sigterm_and_wait();
+    assert_eq!(
+        count_store_objects(&root),
+        1,
+        "the seeded file admitted exactly one object"
+    );
+
+    // A fresh mount, so the open handle below reads through the daemon rather
+    // than out of page cache left over from writing the file.
+    let daemon = BinMount::spawn(&root, "main", &mountpoint);
+    let doomed = mountpoint.join("doomed.bin");
+    let handle = File::open(&doomed).expect("open works");
+    fs::remove_file(&doomed).expect("unlink works");
+
+    // Enough passes to clear the two-epoch quarantine several times over.
+    let meta = WorkspaceStore::open(&root).expect("store opens beside the daemon");
+    for _ in 0..4 {
+        meta.collect().expect("collection runs");
+    }
+    assert_eq!(
+        count_store_objects(&root),
+        1,
+        "the unlink-open lease keeps the inode's objects out of the collector's reach"
+    );
+    let mut served = Vec::new();
+    (&handle)
+        .read_to_end(&mut served)
+        .expect("the unlinked handle still reads after a collection");
+    assert_eq!(
+        served, payload,
+        "an unlinked open file serves its exact bytes across a collection"
+    );
+
+    // The last close releases the lease, which orphans the inode and lets the
+    // collector reclaim the bytes. RELEASE is asynchronous, so poll rather
+    // than assume it has landed.
+    drop(handle);
+    let mut collected = false;
+    for _ in 0..100 {
+        std::thread::sleep(Duration::from_millis(100));
+        meta.collect().expect("collection runs");
+        if count_store_objects(&root) == 0 {
+            collected = true;
+            break;
+        }
+    }
+    assert!(
+        collected,
+        "the last close must release the unlink-open lease, or the file's objects \
+         are unreachable garbage for the life of the store"
+    );
+    drop(meta);
+    daemon.sigterm_and_wait();
     fs::remove_dir_all(&root).ok();
     fs::remove_dir_all(&mountpoint).ok();
 }
