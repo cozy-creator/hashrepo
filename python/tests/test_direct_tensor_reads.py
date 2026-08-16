@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pytest
 from tensorfs import (
-    EXTRACT_SIZE_LIMIT,
     CASRef,
     FileTooLarge,
     LocalCAS,
@@ -338,8 +337,8 @@ def test_a_small_non_tensor_file_can_be_extracted_to_a_path(
     assert json.loads(target.read_bytes())["architectures"] == ["Fixture"]
 
 
-def _oversized_snapshot(tmp_path: Path) -> tuple[LocalCAS, CASRef]:
-    """A file above the extraction ceiling, made sparse so it costs nothing.
+def _large_sparse_snapshot(tmp_path: Path) -> tuple[LocalCAS, CASRef]:
+    """A multi-hundred-MiB file, made sparse so it costs nothing.
 
     Every 64 MiB run of zeros hashes to the same digest, so the whole thing
     occupies a single CAS object no matter how large it is declared.
@@ -349,35 +348,30 @@ def _oversized_snapshot(tmp_path: Path) -> tuple[LocalCAS, CASRef]:
     source.mkdir()
     big = source / "model.safetensors"
     with big.open("wb") as handle:
-        handle.seek(EXTRACT_SIZE_LIMIT + (1 << 20) - 1)
+        handle.seek((513 << 20) - 1)
         handle.write(b"\0")
     cas = LocalCAS(tmp_path / "cas")
     manifest = cas.ingest_repository(source)
     return cas, cas.store_manifest(manifest)
 
 
-def test_extraction_refuses_a_weight_sized_file_and_writes_nothing(
-    tmp_path: Path,
-) -> None:
-    """The hatch must never become a way back to materializing weights."""
+def test_extraction_has_no_size_cap_and_streams_any_file(tmp_path: Path) -> None:
+    """No hard cap -- ruled by Paul, 2026-08-16.
 
-    cas, ref = _oversized_snapshot(tmp_path)
-    destination = tmp_path / "leak" / "model.safetensors"
+    "no hard-cap on materialization size; we just want to avoid large
+    non-tensor files being in tensorfs (our chunked CAS system)". The control
+    is scope at ingestion, not a limit here: extraction streams record by
+    record, so a large file costs O(one block) of memory, and refusing it
+    would only push a legitimate caller back toward a worse copy path. An
+    earlier revision shipped a 512 MiB `FileTooLarge` ceiling; this test pins
+    its absence.
+    """
+
+    cas, ref = _large_sparse_snapshot(tmp_path)
+    destination = tmp_path / "out" / "model.safetensors"
     with open_tensors(cas, ref) as tensors:
-        with pytest.raises(FileTooLarge, match="extraction bound"):
-            tensors.extract("model.safetensors", destination)
-    assert not destination.exists()
-
-
-def test_a_caller_cannot_widen_the_extraction_bound(tmp_path: Path) -> None:
-    """`limit` may only tighten. A bound a caller can raise is not a bound."""
-
-    cas, ref = _oversized_snapshot(tmp_path)
-    destination = tmp_path / "model.safetensors"
-    with open_tensors(cas, ref) as tensors:
-        with pytest.raises(FileTooLarge):
-            tensors.extract("model.safetensors", destination, limit=1 << 40)
-    assert not destination.exists()
+        target = tensors.extract("model.safetensors", destination)
+    assert target.stat().st_size == 513 << 20
 
 
 def test_extraction_honours_a_tightened_bound(
