@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::PlannerId;
+use tensorfs_core::store::StoreError;
 use tensorfs_core::tfm1::FileRecord;
 use tensorfs_core::workspace::{GcReport, LeaseKind, Mutation, WorkspaceError, WorkspaceStore};
 
@@ -393,7 +394,13 @@ fn gc_needs_two_full_epochs_and_rescues_rereferenced_objects() {
     // Epoch 3: two full epochs quarantined; deleted.
     let third = quiet_collect(&store);
     assert_eq!(third.deleted, 1);
-    assert!(store.store().verify(&orphan.digest()).is_err());
+    assert!(
+        matches!(
+            store.store().verify(&orphan.digest()),
+            Err(StoreError::Missing { .. })
+        ),
+        "the orphan must be UNLINKED by GC, not merely unreadable"
+    );
     assert!(store.store().verify(&keep_digest).is_ok());
 
     // Rescue: an object quarantined once but referenced before deletion
@@ -498,8 +505,20 @@ fn snapshot_and_lease_roots_pin_objects_against_collection() {
     for _ in 0..3 {
         quiet_collect(&store);
     }
-    assert!(store.store().verify(&leased_digest).is_err());
-    assert!(store.store().verify(&sealed_digest).is_err());
+    assert!(
+        matches!(
+            store.store().verify(&leased_digest),
+            Err(StoreError::Missing { .. })
+        ),
+        "the leased object must be UNLINKED once the lease is gone"
+    );
+    assert!(
+        matches!(
+            store.store().verify(&sealed_digest),
+            Err(StoreError::Missing { .. })
+        ),
+        "the sealed object must be UNLINKED once the snapshot is gone"
+    );
 }
 
 #[test]
@@ -528,5 +547,11 @@ fn deleting_a_workspace_unreferences_its_objects() {
     for _ in 0..3 {
         quiet_collect(&store);
     }
-    assert!(store.store().verify(&digest).is_err());
+    assert!(
+        matches!(
+            store.store().verify(&digest),
+            Err(StoreError::Missing { .. })
+        ),
+        "the object must be UNLINKED by GC, not merely unreadable"
+    );
 }

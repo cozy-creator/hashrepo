@@ -352,3 +352,33 @@ fn reads_do_not_rehash_which_is_why_verify_exists() {
     );
     assert_eq!(Consistency::scan(scratch.path()).corrupt.len(), 1);
 }
+
+/// The oracle must refuse to vouch for a root it never actually read.
+///
+/// `walk` returns silently when `read_dir` fails, so before `namespace_present`
+/// a scan of a wrong path — or of a directory that was never opened as a store
+/// — reported a perfectly intact store and passed. `kill_matrix` leans on this
+/// as its primary independent oracle after every round, so a vacuous pass there
+/// would hollow out the whole matrix. `ObjectStore::open` always creates
+/// `objects/sha256`, so an absent namespace can only mean the scan looked
+/// somewhere no store lives.
+#[test]
+#[should_panic(expected = "examined nothing")]
+fn a_scan_of_a_path_holding_no_store_cannot_report_intact() {
+    let scratch = Scratch::new("no-store");
+    // A real directory, deliberately never opened as a store.
+    Consistency::scan(scratch.path()).assert_intact("a path holding no store");
+}
+
+/// `assert_examined` proves the scan rehashed something, so "verified 40
+/// objects, all good" can never be confused with "found nothing to verify".
+#[test]
+#[should_panic(expected = "expected at least 1")]
+fn an_empty_but_valid_store_cannot_satisfy_assert_examined() {
+    let scratch = Scratch::new("empty-store");
+    // Opened for real, so the namespace exists and `assert_intact` is content
+    // — which is exactly why the object-count clause has to be separate.
+    let meta = WorkspaceStore::open(scratch.path()).expect("store opens");
+    drop(meta);
+    Consistency::scan(scratch.path()).assert_examined(1, "an empty store");
+}

@@ -364,6 +364,8 @@ impl WorkspaceStore {
                 .verify(digest)
                 .map_err(|_| WorkspaceError::MissingObject { digest: *digest })?;
         }
+        #[cfg(test)]
+        AFTER_VERIFY_SEAM.fire();
 
         let mut connection = self.connection.lock().expect("metadata mutex is healthy");
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -442,6 +444,8 @@ impl WorkspaceStore {
                     jobs.push(job);
                 }
             }
+            #[cfg(test)]
+            AFTER_SEAL_PLAN_SEAM.fire();
 
             // Phase C: one transaction re-checks the generation, applies the
             // re-boundary, and seals. A moved head invalidates phase B's
@@ -1350,4 +1354,263 @@ fn build_snapshot(
         }
     }
     Ok(builder.finish()?)
+}
+
+/// A test-only one-shot hook, fired at a point no static on-disk state can
+/// reach.
+///
+/// Both users below guard the same shape: objects are admitted or rehashed
+/// OUTSIDE the metadata transaction and rechecked for presence INSIDE it, so
+/// a GC pass cannot delete them in between and leave a head naming bytes that
+/// no longer exist. Deleting the objects before the call proves nothing —
+/// the outer verify (or the admission that just wrote them) refuses first —
+/// so the race can only be constructed temporally.
+///
+/// `#[cfg(test)]` keeps every line of this out of shipped binaries. The hook
+/// is ONE-SHOT: it is taken as it fires, so an armed hook cannot leak into
+/// another test sharing this binary.
+#[cfg(test)]
+struct Seam(Mutex<Option<Box<dyn Fn() + Send + Sync>>>);
+
+#[cfg(test)]
+impl Seam {
+    const fn new() -> Self {
+        Self(Mutex::new(None))
+    }
+
+    fn arm(&self, hook: impl Fn() + Send + Sync + 'static) {
+        *self.0.lock().expect("seam mutex is healthy") = Some(Box::new(hook));
+    }
+
+    fn fire(&self) {
+        let hook = self.0.lock().expect("seam mutex is healthy").take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+}
+
+/// Between `commit_generation`'s out-of-transaction `verify` sweep and its
+/// in-transaction presence recheck.
+#[cfg(test)]
+static AFTER_VERIFY_SEAM: Seam = Seam::new();
+
+/// Between `seal_snapshot`'s phase B (plan and admit outside the lock) and
+/// phase C's transaction, which rechecks every newly admitted digest.
+#[cfg(test)]
+static AFTER_SEAL_PLAN_SEAM: Seam = Seam::new();
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    /// The seams are process-global one-shots, so the tests that arm them run
+    /// one at a time. Poison is stepped over: a failing seam test must not
+    /// cascade into the other.
+    static SEAM_LANE: Mutex<()> = Mutex::new(());
+
+    fn seam_lane() -> std::sync::MutexGuard<'static, ()> {
+        SEAM_LANE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "tensorfs-workspace-unit-{name}-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    /// What a GC pass looks like from the outside: every resident object gone.
+    /// Returns the count so a seam can prove it actually did something.
+    fn wipe_objects(root: &std::path::Path) -> usize {
+        let mut removed = 0;
+        let mut stack = vec![root.join("objects").join("sha256")];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if std::fs::remove_file(&path).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+        removed
+    }
+
+    /// A minimal well-formed safetensors file, so sealing has something to
+    /// re-boundary and therefore new objects to admit in phase B.
+    fn safetensors(tensors: &[(&str, u64, u8)]) -> Vec<u8> {
+        let mut header = String::from("{");
+        let mut offset = 0_u64;
+        for (index, (name, length, _)) in tensors.iter().enumerate() {
+            if index != 0 {
+                header.push(',');
+            }
+            let end = offset + length;
+            header.push_str(&format!(
+                "\"{name}\":{{\"dtype\":\"U8\",\"shape\":[{length}],\"data_offsets\":[{offset},{end}]}}"
+            ));
+            offset = end;
+        }
+        header.push('}');
+
+        let mut file = Vec::new();
+        file.extend_from_slice(&(header.len() as u64).to_le_bytes());
+        file.extend_from_slice(header.as_bytes());
+        for (_, length, fill) in tensors {
+            file.extend(std::iter::repeat_n(*fill, *length as usize));
+        }
+        file
+    }
+
+    /// The GC race the in-transaction recheck exists to close.
+    ///
+    /// `commit_generation` verifies every referenced object OUTSIDE the
+    /// metadata transaction, then rechecks presence INSIDE it. Deleting the
+    /// objects before the call proves nothing — the outer `verify` refuses
+    /// first, and the test would still pass with the recheck removed. The
+    /// seam deletes them in the window between the two, which is exactly what
+    /// a GC pass does to a writer stalled across two collection epochs.
+    #[test]
+    fn a_delete_between_verify_and_commit_cannot_land_a_head_naming_deleted_bytes() {
+        let _lane = seam_lane();
+        let root = scratch("gc-race");
+        let store = WorkspaceStore::open(&root).expect("store opens");
+        store.create_workspace("main").expect("workspace created");
+
+        let bytes = b"bytes a stalled writer already verified".to_vec();
+        let admitted = store.store().put_bytes(&bytes).expect("object admits");
+        let digest = admitted.digest();
+
+        let before = store
+            .head_generation("main")
+            .expect("head readable before the race");
+
+        // Fires after `verify` has passed and before the transaction opens.
+        let victim = root.clone();
+        AFTER_VERIFY_SEAM.arm(move || {
+            let store = ObjectStore::open(&victim).expect("collector opens the store");
+            assert!(
+                store.remove_object(&digest).expect("collector deletes"),
+                "the seam must actually remove the object it is simulating a GC for"
+            );
+        });
+
+        let result = store.commit_generation(
+            "main",
+            &[Mutation::CreateFile {
+                path: "model.bin".to_owned(),
+                executable: false,
+                planner: PlannerId::RawFixed64mV1,
+                records: vec![FileRecord::Data {
+                    digest,
+                    length: admitted.length(),
+                }],
+            }],
+        );
+
+        match result {
+            Err(WorkspaceError::MissingObject { digest: refused }) => {
+                assert_eq!(refused, digest, "the refusal must name the deleted object");
+            }
+            Err(other) => panic!("expected MissingObject, got {other:?}"),
+            Ok(generation) => panic!(
+                "the commit landed generation {generation} while naming bytes \
+                 that no longer exist — the in-transaction recheck is gone"
+            ),
+        }
+
+        let after = store
+            .head_generation("main")
+            .expect("head readable after the race");
+        assert_eq!(
+            after, before,
+            "a refused commit must not advance the workspace head"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The same race, one layer up: `seal_snapshot` admits its re-boundaried
+    /// objects in phase B OUTSIDE the metadata lock and rechecks them inside
+    /// phase C's transaction. That recheck was as unguarded as
+    /// `commit_generation`'s — no static on-disk state reaches it, because the
+    /// objects are admitted by the very call under test, so only the seam can
+    /// delete them in the window.
+    ///
+    /// A seal that ignored the recheck would store a snapshot naming bytes
+    /// that no longer exist: a permanent, self-verifying identity over
+    /// unreadable content.
+    #[test]
+    fn a_delete_between_seal_planning_and_its_transaction_cannot_seal_deleted_bytes() {
+        let _lane = seam_lane();
+        let root = scratch("seal-race");
+        let store = WorkspaceStore::open(&root).expect("store opens");
+        store.create_workspace("main").expect("workspace created");
+
+        // Committed as ONE raw region, so sealing must re-slice it into
+        // header-plus-tensor regions and admit every one of them anew.
+        let bytes = safetensors(&[
+            ("blk.attn.weight", 4096, 0xA1),
+            ("blk.norm.weight", 512, 0xC3),
+        ]);
+        let admitted = store.store().put_bytes(&bytes).expect("object admits");
+        store
+            .commit_generation(
+                "main",
+                &[Mutation::CreateFile {
+                    path: "model.safetensors".to_owned(),
+                    executable: false,
+                    planner: PlannerId::RawFixed64mV1,
+                    records: vec![FileRecord::Data {
+                        digest: admitted.digest(),
+                        length: admitted.length(),
+                    }],
+                }],
+            )
+            .expect("the grid record commits");
+
+        let before = store
+            .head_generation("main")
+            .expect("head readable before the race");
+
+        // Fires after phase B has planned and admitted, before phase C opens
+        // its transaction.
+        let victim = root.clone();
+        AFTER_SEAL_PLAN_SEAM.arm(move || {
+            assert!(
+                wipe_objects(&victim) > 0,
+                "the seam must actually remove the objects it is simulating a GC for"
+            );
+        });
+
+        match store.seal_snapshot("main", None) {
+            Err(WorkspaceError::MissingObject { .. }) => {}
+            Err(other) => panic!("expected MissingObject, got {other:?}"),
+            Ok(id) => panic!(
+                "seal stored snapshot {id:?} naming bytes that no longer exist \
+                 — phase C's in-transaction recheck is gone"
+            ),
+        }
+
+        assert_eq!(
+            store
+                .head_generation("main")
+                .expect("head readable after the race"),
+            before,
+            "a refused seal must not advance the workspace head"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
