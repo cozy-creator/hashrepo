@@ -20,7 +20,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # The mount tests hand a mounted path to the real safetensors library.
+      # Without this they skip loudly rather than pass vacuously.
+      - name: Install the safetensors reader
+        run: |
+          python3 -m venv /tmp/safetensors-reader
+          /tmp/safetensors-reader/bin/pip install --quiet 'safetensors>=0.4' 'numpy>=1.26'
       - run: cargo test --workspace --all-features
+        env:
+          TENSORFS_TEST_PYTHON: /tmp/safetensors-reader/bin/python3
       - run: cargo check --workspace --all-targets --all-features --target wasm32-unknown-unknown
 
   rust-platform:
