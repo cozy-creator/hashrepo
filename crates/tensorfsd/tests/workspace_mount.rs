@@ -557,6 +557,238 @@ fn an_8_kib_overwrite_recomposes_exactly_the_touched_object() {
     fs::remove_dir_all(&mountpoint).ok();
 }
 
+/// Two local writers through one live mount.
+///
+/// Disjoint ranges of one file must both land in full; overlapping ranges must
+/// order normally, so every byte belongs to one writer or the other and never
+/// to a torn mixture of the two; and neither writer may ever see a CAS-shaped
+/// refusal (`EAGAIN`/`EBUSY`/`EIO`) leak out of the commit path — the metadata
+/// generation advance is the daemon's problem, not the caller's.
+///
+/// Complementary to `two_o_append_writers_never_overwrite_each_other`, not a
+/// second copy of it: that arm holds the append contract, where the offset is
+/// the filesystem's to choose. This one holds POSITIONAL writes, where both
+/// callers name their own offsets and the overlay has to merge or order them.
+///
+/// **What this arm does NOT prove, said plainly, because the obvious reading is
+/// wrong.** There is no per-inode lock in `workspace_fs.rs`. There is no lock
+/// at all: the file holds neither a `Mutex` nor an `RwLock`. Ordering comes
+/// entirely from `fuser::spawn_mount2`'s single session thread, which takes
+/// `&mut self` for every operation, so operations on ALL inodes are globally
+/// serialized. "Serializes per inode" is therefore true today only as a
+/// consequence of serializing everything, and this test cannot tell the two
+/// apart — it would pass identically under either design. The throughput
+/// ceiling that global serialization implies is not measured here and not
+/// asserted anywhere; a real per-inode lock would be a behaviour change this
+/// arm would not notice.
+#[test]
+fn concurrent_writers_merge_disjoint_ranges_and_order_overlaps_without_cas_failures() {
+    use std::sync::Barrier;
+
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("concurrent-root");
+    let mountpoint = unique_dir("concurrent-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let base = mount.mountpoint().to_path_buf();
+
+    // ---- disjoint ranges ----
+    //
+    // Sixteen interleaved 256 KiB stripes, so the two writers' FUSE requests
+    // are forced to alternate rather than running as two contiguous bursts.
+    const STRIPE: usize = 256 * 1024;
+    const STRIPES: usize = 16;
+    let stripes: Vec<Vec<u8>> = (0..STRIPES)
+        .map(|index| pattern(40 + index as u8, STRIPE))
+        .collect();
+    let expected: Vec<u8> = stripes.concat();
+
+    let disjoint_path = base.join("disjoint.bin");
+    File::create(&disjoint_path).expect("disjoint file creates");
+    let gate = Barrier::new(2);
+    let failures: Vec<String> = std::thread::scope(|scope| {
+        let workers: Vec<_> = [0_usize, 1]
+            .into_iter()
+            .map(|parity| {
+                let gate = &gate;
+                let stripes = &stripes;
+                let disjoint_path = &disjoint_path;
+                scope.spawn(move || {
+                    let file = OpenOptions::new()
+                        .write(true)
+                        .open(disjoint_path)
+                        .expect("writer opens its own descriptor");
+                    let mut failures = Vec::new();
+                    gate.wait();
+                    for index in (parity..STRIPES).step_by(2) {
+                        if let Err(error) =
+                            file.write_all_at(&stripes[index], (index * STRIPE) as u64)
+                        {
+                            failures.push(format!("writer {parity} stripe {index}: {error:?}"));
+                        }
+                    }
+                    if let Err(error) = file.sync_all() {
+                        failures.push(format!("writer {parity} fsync: {error:?}"));
+                    }
+                    failures
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| worker.join().expect("writers do not panic"))
+            .collect()
+    });
+    assert!(
+        failures.is_empty(),
+        "a concurrent writer was refused: {failures:?}"
+    );
+    assert_eq!(
+        fs::read(&disjoint_path).expect("disjoint read"),
+        expected,
+        "disjoint concurrent ranges must both land in full"
+    );
+
+    // ---- overlapping ranges ----
+    //
+    // Both writers rewrite the same extent, several times each. There is no
+    // ordering to assert between them, so the assertion is the one that
+    // actually matters: whatever order they land in, every byte must come from
+    // one writer or the other AT THAT POSITION. A byte belonging to neither is
+    // a torn write or a misplaced overlay piece.
+    //
+    // 4 MiB, not 1 MiB, and the size is load-bearing. The mount negotiates
+    // FUSE_MAX_PAGES, so `max_write` is the kernel's 1 MiB ceiling: a 1 MiB
+    // pwrite arrives as ONE `write` op, the session thread runs it whole, and
+    // the later writer wins the entire extent every time — measured, 100%/0%.
+    // That is a real property, and it is also a test that cannot observe
+    // interleaving at all. Above `max_write` each pwrite splits into several
+    // ops and the two writers genuinely interleave.
+    const OVERLAP: usize = 4 * MIB as usize;
+    const ROUNDS: usize = 4;
+    // The two extents overlap in their middle half and are exclusive at their
+    // ends. That is what makes the arm deterministic instead of a race the
+    // assertions have to tolerate: the contested middle may land in either
+    // order, but the head belongs only to `left` and the tail only to `right`,
+    // so a writer that was LOST — not merely ordered second — is a hard
+    // failure rather than a lucky 100%/0% split.
+    const QUARTER: usize = OVERLAP / 4;
+    let left = pattern(101, OVERLAP);
+    let right = pattern(103, OVERLAP);
+    let differ = left.iter().zip(&right).filter(|(a, b)| a != b).count();
+    assert!(
+        differ > OVERLAP * 9 / 10,
+        "the two overlap patterns are too similar to discriminate ({differ} of {OVERLAP})"
+    );
+
+    let overlap_path = base.join("overlap.bin");
+    File::create(&overlap_path).expect("overlap file creates");
+    let gate = Barrier::new(2);
+    let failures: Vec<String> = std::thread::scope(|scope| {
+        let workers: Vec<_> = [
+            ("left", &left, 0_usize, OVERLAP - QUARTER),
+            ("right", &right, QUARTER, OVERLAP),
+        ]
+        .into_iter()
+        .map(|(label, payload, from, to)| {
+            let gate = &gate;
+            let overlap_path = &overlap_path;
+            scope.spawn(move || {
+                let file = OpenOptions::new()
+                    .write(true)
+                    .open(overlap_path)
+                    .expect("writer opens its own descriptor");
+                let mut failures = Vec::new();
+                gate.wait();
+                for round in 0..ROUNDS {
+                    if let Err(error) = file.write_all_at(&payload[from..to], from as u64) {
+                        failures.push(format!("{label} round {round}: {error:?}"));
+                    }
+                }
+                if let Err(error) = file.sync_all() {
+                    failures.push(format!("{label} fsync: {error:?}"));
+                }
+                failures
+            })
+        })
+        .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| worker.join().expect("writers do not panic"))
+            .collect()
+    });
+    assert!(
+        failures.is_empty(),
+        "an overlapping concurrent writer was refused: {failures:?}"
+    );
+
+    mount.unmount();
+    assert!(!mounted_here(&mountpoint), "unmount leaves a clean table");
+
+    // Everything above must be a COMMITTED fact, not overlay state: the whole
+    // check runs again against a fresh mount of the same store.
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let base = mount.mountpoint();
+    assert_eq!(
+        fs::read(base.join("disjoint.bin")).expect("disjoint reread"),
+        expected,
+        "disjoint concurrent writes must survive a remount byte-exact"
+    );
+
+    let landed = fs::read(base.join("overlap.bin")).expect("overlap reread");
+    assert_eq!(landed.len(), OVERLAP, "the overlapped extent changed size");
+    // The exclusive ends: neither writer may be lost, whatever order they ran.
+    assert_eq!(
+        &landed[..QUARTER],
+        &left[..QUARTER],
+        "the left writer's exclusive head did not land"
+    );
+    assert_eq!(
+        &landed[OVERLAP - QUARTER..],
+        &right[OVERLAP - QUARTER..],
+        "the right writer's exclusive tail did not land"
+    );
+    // The contested middle: any order is legal, a third value is not.
+    let mut from_left = 0_usize;
+    let mut from_right = 0_usize;
+    let mut torn = Vec::new();
+    for index in QUARTER..OVERLAP - QUARTER {
+        let byte = landed[index];
+        if byte == left[index] {
+            from_left += 1;
+        } else if byte == right[index] {
+            from_right += 1;
+        } else if torn.len() < 8 {
+            torn.push(index);
+        }
+    }
+    assert!(
+        torn.is_empty(),
+        "the contested extent holds bytes belonging to NEITHER writer at {torn:?} \
+         ({from_left} left, {from_right} right of {})",
+        OVERLAP - 2 * QUARTER
+    );
+    println!(
+        "overlapping {} MiB writers: exclusive ends both landed; contested middle \
+         {from_left} left / {from_right} right, 0 torn",
+        OVERLAP / MIB as usize
+    );
+
+    mount.unmount();
+    assert!(
+        !mounted_here(&mountpoint),
+        "final unmount leaves a clean table"
+    );
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
 #[test]
 fn an_unlinked_open_file_keeps_serving_until_close() {
     let _serial = serial();
