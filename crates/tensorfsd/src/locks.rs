@@ -251,4 +251,89 @@ mod tests {
             .expect("conflicts");
         assert_eq!(extent.end, u64::MAX);
     }
+
+    /// Ranges are inclusive on BOTH ends, so a request touching a held lock at
+    /// exactly one byte conflicts and one byte past it does not.
+    ///
+    /// Every other test here works in ranges wide enough that an off-by-one in
+    /// `overlaps` is invisible: turning either `<=` into `<` left the whole
+    /// suite green. Each direction is pinned separately, because the two
+    /// comparisons guard opposite edges.
+    #[test]
+    fn overlap_is_inclusive_at_both_edges_by_exactly_one_byte() {
+        let mut table = LockTable::default();
+        table.set(1, A, 100, true, 10, 20).expect("grants");
+
+        // Upper edge: `self.start <= end`.
+        assert!(
+            table.first_conflict(1, B, true, 0, 10).is_some(),
+            "a request ending ON the held lock's first byte conflicts"
+        );
+        assert!(
+            table.first_conflict(1, B, true, 0, 9).is_none(),
+            "a request ending one byte BEFORE it does not"
+        );
+
+        // Lower edge: `start <= self.end`.
+        assert!(
+            table.first_conflict(1, B, true, 20, 30).is_some(),
+            "a request starting ON the held lock's last byte conflicts"
+        );
+        assert!(
+            table.first_conflict(1, B, true, 21, 30).is_none(),
+            "a request starting one byte AFTER it does not"
+        );
+    }
+
+    /// `getlk` must report the LOWEST conflicting extent, whichever holder
+    /// happens to be stored first.
+    ///
+    /// The existing coverage only ever conflicts against one owner, and
+    /// `merge_owner` keeps a single owner's locks sorted incidentally — so
+    /// `first_conflict`'s own sort was doing nothing observable and deleting
+    /// it changed no result. Two owners, inserted in reverse start order, is
+    /// the arrangement no incidental ordering can normalise.
+    #[test]
+    fn getlk_reports_the_lowest_start_across_holders_not_insertion_order() {
+        const C: u64 = 33;
+        let mut table = LockTable::default();
+        table.set(1, A, 100, true, 500, 599).expect("grants");
+        table.set(1, B, 200, true, 100, 199).expect("grants");
+
+        let hit = table
+            .first_conflict(1, C, true, 0, u64::MAX)
+            .expect("conflicts");
+        assert_eq!(
+            (hit.start, hit.pid),
+            (100, 200),
+            "getlk reports the lowest conflicting extent, not the one inserted first"
+        );
+    }
+
+    /// An inode that leaves the tree takes its locks with it.
+    ///
+    /// `forget_ino` had no test at all — making it a no-op left the suite
+    /// green — so a forgotten inode could have kept refusing locks forever,
+    /// and a recycled inode number would have inherited a stranger's locks.
+    #[test]
+    fn forgetting_an_inode_drops_every_lock_held_on_it() {
+        let mut table = LockTable::default();
+        table.set(1, A, 100, true, 0, 99).expect("grants");
+        table.set(2, A, 100, true, 0, 99).expect("grants");
+        assert!(table.first_conflict(1, B, true, 0, 99).is_some());
+
+        table.forget_ino(1);
+
+        assert!(
+            table.first_conflict(1, B, true, 0, 99).is_none(),
+            "a forgotten inode holds no locks"
+        );
+        table
+            .set(1, B, 200, true, 0, 99)
+            .expect("and another owner may now take the range");
+        assert!(
+            table.first_conflict(2, B, true, 0, 99).is_some(),
+            "forgetting one inode must not disturb another"
+        );
+    }
 }
