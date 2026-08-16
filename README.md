@@ -35,11 +35,24 @@ The supported v1 shape is intentionally narrow:
 - Linux/POSIX durability semantics; and
 - no Xet, OCI, plugin, or self-hostable-server compatibility layer.
 
+### Platform support
+
+The mounted filesystem is **Linux/FUSE3 only**. macOS (macFUSE/FSKit) and
+Windows (WinFsp) are unimplemented, not merely untested: `crates/tensorfsd`
+compiles to an empty shell off Linux and its `tensorfsd` binary exits
+non-zero. The Windows named-pipe control plane is a seam, not a feature.
+
+`crates/tensorfs-core` — formats, planners and the storage engine — is
+genuinely cross-platform and CI runs its tests on macOS and Windows in the
+`core-cross-platform` job. That job builds `tensorfs-core` alone, so no green
+check on this repository should be read as macOS or Windows mount coverage.
+
 ## Layout
 
 ```text
 spec/v1/                 format documentation, JSON Schema, golden vectors
 crates/tensorfs-core/     Rust canonical formats, planners and storage engine
+crates/tensorfsd/        the mount daemon and control plane (Linux only)
 python/src/tensorfs/     Python local CAS and grant-transfer data plane
 *.go                     Go manifest, planning, and promotion engine
 ```
