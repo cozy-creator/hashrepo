@@ -1,6 +1,6 @@
 [project]
 name = "tensorfs"
-version = "0.4.0"
+version = "0.1.0"
 description = "Content-addressed local storage and resumable chunk transfer"
 readme = "README.md"
 license = "MIT"
