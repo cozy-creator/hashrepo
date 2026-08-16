@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/tensorfs-core", "crates/tensorfsd"]
+members = ["crates/tensorfs-core", "crates/tensorfs-py", "crates/tensorfsd"]
 resolver = "2"
 
 [workspace.package]
@@ -7,6 +7,13 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/cozy-creator/tensorfs"
 rust-version = "1.91"
+
+# Both release artifacts ship to users inside a wheel -- the extension module
+# and the `tensorfsd` binary beside it -- so debug symbols are dead weight in
+# every install. A backtrace from a released build names frames, not lines;
+# reproduce against a local `cargo build --release` without this to debug.
+[profile.release]
+strip = "symbols"
 
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }

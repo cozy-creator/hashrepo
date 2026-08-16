@@ -4,7 +4,7 @@ import http.server
 import json
 import threading
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -115,7 +115,7 @@ def test_expired_grant_is_a_replan_not_a_byte_failure(tmp_path: Path) -> None:
     ref = CASRef.digest_bytes(b"data")
     cas = LocalCAS(tmp_path / "source")
     cas.put_bytes(b"data")
-    expiry = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+    expiry = (datetime.now(UTC) - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
     report = _upload(
         [grant(ref, 4, expires_at=expiry)], cas, transport=MemoryTransport()
     )

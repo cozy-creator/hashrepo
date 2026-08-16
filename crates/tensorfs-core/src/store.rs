@@ -401,6 +401,12 @@ impl ObjectStore {
 
     /// Visits every resident object digest and length. GC's mark phase needs
     /// the complete resident set; visit order is unspecified.
+    ///
+    /// Reachability GC and remote sync are the only callers, so this and the
+    /// three helpers below follow their features. Without the gate a
+    /// `store`-only build -- the one the Python extension links -- warns that
+    /// they are dead, which is true and not a defect.
+    #[cfg(any(feature = "sync", feature = "workspace"))]
     pub(crate) fn each_object(
         &self,
         mut visit: impl FnMut(ObjectDigest, u64),
@@ -440,10 +446,12 @@ impl ObjectStore {
     /// names a regular file so nothing else is ever removed.
     /// A cheap resident-existence stat for callers that already verified the
     /// bytes and only need to re-check presence inside a metadata transaction.
+    #[cfg(any(feature = "sync", feature = "workspace"))]
     pub(crate) fn exists(&self, digest: &ObjectDigest) -> bool {
         self.object_path(digest).is_file()
     }
 
+    #[cfg(any(feature = "sync", feature = "workspace"))]
     pub(crate) fn remove_object(&self, digest: &ObjectDigest) -> Result<bool, StoreError> {
         let path = self.object_path(digest);
         match fs::symlink_metadata(&path) {
@@ -645,6 +653,8 @@ pub(crate) fn temp_identity(metadata: &fs::Metadata) -> TempIdentity {
     }
 }
 
+/// Only `each_object` reads object filenames back, so this shares its gate.
+#[cfg(any(feature = "sync", feature = "workspace"))]
 fn parse_digest_hex(name: &str) -> Option<ObjectDigest> {
     if name.len() != 64 {
         return None;

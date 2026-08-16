@@ -1,5 +1,6 @@
 //! A committed file's ordered records presented as one planner byte source.
 
+use std::borrow::Borrow;
 use std::io::{self, Read, Seek, SeekFrom};
 
 use crate::object::ObjectDigest;
@@ -17,15 +18,19 @@ use crate::tfm1::FileRecord;
 /// entry the committed head pins as a GC root, so the viewed bytes cannot
 /// change for this source's lifetime. The no-op answer is therefore truthful,
 /// not optimistic.
-pub(crate) struct RecordsSource<'store> {
-    store: &'store ObjectStore,
+///
+/// Generic over how the store is held: the workspace passes `&ObjectStore`,
+/// while a binding that must outlive one call — the Python extension's
+/// `RecordsReader` — passes `Arc<ObjectStore>`.
+pub struct RecordsSource<S> {
+    store: S,
     /// `(start_offset, record)` in file order.
     segments: Vec<(u64, FileRecord)>,
     length: u64,
 }
 
-impl<'store> RecordsSource<'store> {
-    pub(crate) fn new(store: &'store ObjectStore, records: &[FileRecord]) -> Self {
+impl<S: Borrow<ObjectStore>> RecordsSource<S> {
+    pub fn new(store: S, records: &[FileRecord]) -> Self {
         let mut segments = Vec::with_capacity(records.len());
         let mut position = 0_u64;
         for record in records {
@@ -45,7 +50,11 @@ impl<'store> RecordsSource<'store> {
         within: u64,
         destination: &mut [u8],
     ) -> io::Result<()> {
-        let mut file = self.store.open_object(digest).map_err(io::Error::other)?;
+        let mut file = self
+            .store
+            .borrow()
+            .open_object(digest)
+            .map_err(io::Error::other)?;
         file.seek(SeekFrom::Start(within))?;
         file.read_exact(destination)
     }
@@ -57,7 +66,7 @@ const fn record_length(record: &FileRecord) -> u64 {
     }
 }
 
-impl ByteSource for RecordsSource<'_> {
+impl<S: Borrow<ObjectStore>> ByteSource for RecordsSource<S> {
     fn len(&self) -> u64 {
         self.length
     }

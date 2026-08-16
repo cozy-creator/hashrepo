@@ -5,7 +5,7 @@ import http.server
 import json
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import ClassVar
 
@@ -76,7 +76,7 @@ def test_real_http_partial_resume_and_repository_materialization(tmp_path: Path)
         (source_root / "second").write_bytes(b"second")
         source = LocalCAS(tmp_path / "source-cas")
         manifest = source.ingest_repository(source_root)
-        expiry = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat().replace(
+        expiry = (datetime.now(UTC) + timedelta(minutes=10)).isoformat().replace(
             "+00:00", "Z"
         )
 
@@ -140,7 +140,7 @@ def test_real_http_out_of_order_chunks_reassemble_and_check_whole_digest(
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     try:
-        expiry = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat().replace(
+        expiry = (datetime.now(UTC) + timedelta(minutes=10)).isoformat().replace(
             "+00:00", "Z"
         )
         grants = [
