@@ -233,7 +233,9 @@ def test_a_truncated_gguf_directory_is_refused(tmp_path: Path) -> None:
 def test_the_ggml_table_matches_the_rust_planner() -> None:
     """Both implementations must accept and reject exactly the same files."""
 
-    rust = Path("crates/tensorfs-core/src/planner/gguf.rs").read_text()
+    planner = Path(__file__).resolve().parents[2] / "crates/tensorfs-core/src/planner/gguf.rs"
+    assert planner.is_file(), planner  # a missing file must fail, not skip
+    rust = planner.read_text()
     section = rust.split("fn ggml_layout")[1].split("#[cfg(test)]")[0]
     pinned: dict[int, tuple[int, int]] = {}
     for line in section.splitlines():
