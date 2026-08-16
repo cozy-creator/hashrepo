@@ -125,6 +125,20 @@ impl DaemonState {
     /// Detaches one lease's entry. The caller drops it OUTSIDE the state
     /// mutex: unmounting can be slow, and a wedged unmount must never hold
     /// every other connection hostage.
+    ///
+    /// Untested on purpose. Observing this ordering needs an unmount that
+    /// blocks long enough for a second connection to prove it is not stuck
+    /// behind it, and no input a test can supply produces one: dropping a
+    /// `MountEntry` drops a `fuser::BackgroundSession`, which has no `Drop`
+    /// impl in 0.15 — the session thread's `JoinHandle` is detached rather
+    /// than joined — and then a `Mount` whose drop is a non-blocking
+    /// `umount`/`fusermount3 -u` that logs EBUSY instead of retrying. The
+    /// alternatives are a wall-clock threshold, which is a performance gate,
+    /// or a test-only barrier in this drop path, which would only prove the
+    /// barrier we inserted is outside the lock. The ordering does surface in
+    /// `a_closed_connection_releases_every_mount_it_opened`: the mount table
+    /// empties strictly before the mountpoint does, which is why that test
+    /// polls on both.
     fn detach(&mut self, lease: u64) -> Option<MountEntry> {
         self.mounts.remove(&lease)
     }
