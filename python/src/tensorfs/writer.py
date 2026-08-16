@@ -26,10 +26,9 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .chunking import DTYPE_BITS
 from .manifest import MAX_CHUNK_SIZE, Chunk, FileEntry
 from .refs import CASRef
-from .tensors import TensorError, TensorView
+from .tensors import DTYPE_BITS, TensorError, TensorView
 
 if TYPE_CHECKING:
     from .local import LocalCAS

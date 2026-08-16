@@ -1,7 +1,7 @@
 [project]
 name = "tensorfs"
 version = "0.1.0"
-description = "Content-addressed local storage and resumable chunk transfer"
+description = "Content-addressed local storage with direct per-tensor reads and writes"
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Paul Fidika", email = "paul@fidika.com" }]
@@ -15,8 +15,9 @@ dependencies = []
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: MIT License",
-    # No Windows: `local.py` and `journal.py` lock with `fcntl`, so the
-    # facade cannot be imported there. macOS has flock and is tested.
+    # No Windows: `local.py` locks with `fcntl` and `tensors.py` maps with
+    # POSIX mmap flags, so the facade cannot be imported there. macOS has
+    # flock and is tested.
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",

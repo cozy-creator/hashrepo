@@ -2,8 +2,10 @@
 
 The fixture is built so the assertions can actually fail. Every tensor is
 filled with distinct pseudorandom bytes rather than a constant, so an
-off-by-one offset changes the bytes it returns; and the tensor sizes are chosen
-to force all three interesting shapes at once against the Python chunker:
+off-by-one offset changes the bytes it returns; and the object grid is stated
+explicitly to force all three interesting shapes at once. The manifest wire
+accepts any grid — the Rust seal planner's aligned one, or the packing grid
+the retired Python chunker committed — and the reader must serve them all:
 
 * ``dense.weight`` is larger than 64 MiB, so it spans several CAS objects;
 * ``mid.weight`` is a prefix of a shared, packed object;
@@ -18,14 +20,17 @@ import struct
 from pathlib import Path
 
 import pytest
+from repo_ingest import fixed_lengths, ingest_file, ingest_with_grid
 from tensorfs import (
     CASRef,
     FileTooLarge,
     LocalCAS,
+    RepositoryManifest,
     TensorError,
     open_tensors,
 )
 from tensorfs.manifest import MAX_CHUNK_SIZE
+from tensorfs.tensors import DTYPE_BITS
 
 MIB = 1 << 20
 
@@ -73,6 +78,33 @@ def _build_safetensors(path: Path) -> dict[str, bytes]:
     return bodies
 
 
+def _packed_lengths(model: Path) -> list[int]:
+    """The retired chunker's packing grid, stated outright.
+
+    Header object, then 64 MiB strides from the large tensor's own start, then
+    every remaining tensor packed into one shared object. This is the grid old
+    snapshots were committed under, and the hardest one for the reader.
+    """
+
+    size = model.stat().st_size
+    with model.open("rb") as handle:
+        header_end = 8 + int.from_bytes(handle.read(8), "little")
+    dense = 26 * 1024 * 1024 * 4
+    assert dense > MAX_CHUNK_SIZE
+    return [header_end, MAX_CHUNK_SIZE, dense - MAX_CHUNK_SIZE, size - header_end - dense]
+
+
+def _ingest_tree(cas: LocalCAS, source: Path) -> RepositoryManifest:
+    """model.safetensors under the packed grid, everything else Rust-planned."""
+
+    model = source / "model.safetensors"
+    entries = [ingest_with_grid(cas, model, _packed_lengths(model), manifest_path=model.name)]
+    for path in sorted(source.iterdir()):
+        if path != model:
+            entries.append(ingest_file(cas, path, manifest_path=path.name))
+    return RepositoryManifest(tuple(entries))
+
+
 @pytest.fixture(scope="module")
 def fixture(tmp_path_factory: pytest.TempPathFactory) -> dict[str, object]:
     root = tmp_path_factory.mktemp("direct-tensor-reads")
@@ -83,7 +115,7 @@ def fixture(tmp_path_factory: pytest.TempPathFactory) -> dict[str, object]:
     (source / "config.json").write_text(json.dumps({"architectures": ["Fixture"]}))
 
     cas = LocalCAS(root / "cas")
-    manifest = cas.ingest_repository(source)
+    manifest = _ingest_tree(cas, source)
     ref = cas.store_manifest(manifest)
     return {
         "cas_root": root / "cas",
@@ -158,7 +190,7 @@ def test_a_tensor_larger_than_one_object_is_reassembled_across_the_boundary(
 def test_packed_tensors_are_read_out_of_a_shared_object(
     fixture: dict[str, object],
 ) -> None:
-    """The Python chunker packs sub-64 MiB tensors, so these are partial reads."""
+    """The packed grid puts several tensors in one object, so these are partial reads."""
 
     cas = LocalCAS(Path(str(fixture["cas_root"])))
     bodies: dict[str, bytes] = fixture["bodies"]  # type: ignore[assignment]
@@ -241,7 +273,7 @@ def test_verification_catches_a_corrupted_object(tmp_path: Path) -> None:
     source.mkdir()
     bodies = _build_safetensors(source / "model.safetensors")
     cas = LocalCAS(tmp_path / "cas")
-    manifest = cas.ingest_repository(source)
+    manifest = _ingest_tree(cas, source)
     ref = cas.store_manifest(manifest)
 
     entry = next(item for item in manifest.files if item.path == "model.safetensors")
@@ -276,7 +308,8 @@ def test_a_header_whose_span_contradicts_its_dtype_is_refused(tmp_path: Path) ->
         handle.write(b"\x00" * 32)
 
     cas = LocalCAS(tmp_path / "cas")
-    ref = cas.store_manifest(cas.ingest_repository(source))
+    entry = ingest_file(cas, source / "model.safetensors")
+    ref = cas.store_manifest(RepositoryManifest((entry,)))
     with open_tensors(cas, ref) as tensors:
         with pytest.raises(TensorError, match="declares 32 bytes"):
             # Mapping.keys() is a lazy view and would not build the index.
@@ -351,8 +384,8 @@ def _large_sparse_snapshot(tmp_path: Path) -> tuple[LocalCAS, CASRef]:
         handle.seek((513 << 20) - 1)
         handle.write(b"\0")
     cas = LocalCAS(tmp_path / "cas")
-    manifest = cas.ingest_repository(source)
-    return cas, cas.store_manifest(manifest)
+    entry = ingest_with_grid(cas, big, fixed_lengths(big.stat().st_size), manifest_path=big.name)
+    return cas, cas.store_manifest(RepositoryManifest((entry,)))
 
 
 def test_extraction_has_no_size_cap_and_streams_any_file(tmp_path: Path) -> None:
@@ -372,6 +405,27 @@ def test_extraction_has_no_size_cap_and_streams_any_file(tmp_path: Path) -> None
     with open_tensors(cas, ref) as tensors:
         target = tensors.extract("model.safetensors", destination)
     assert target.stat().st_size == 513 << 20
+
+
+def test_the_dtype_table_matches_the_rust_planner() -> None:
+    """Reader and planner must agree on every safetensors dtype's width."""
+
+    import re
+
+    planner = (
+        Path(__file__).resolve().parents[2] / "crates/tensorfs-core/src/planner/safetensors.rs"
+    )
+    assert planner.is_file(), planner  # a missing file must fail, not skip
+    section = planner.read_text().split("fn dtype_bits")[1]
+    pinned: dict[str, int] = {}
+    for names, bits in re.findall(
+        r'((?:"[A-Z0-9_]+"\s*\|\s*)*"[A-Z0-9_]+")\s*=>\s*Some\((\d+)\)', section, re.DOTALL
+    ):
+        for name in re.findall(r'"([A-Z0-9_]+)"', names):
+            pinned[name] = int(bits)
+
+    assert pinned, "failed to parse the Rust table; this test would prove nothing"
+    assert pinned == DTYPE_BITS
 
 
 def test_extraction_honours_a_tightened_bound(

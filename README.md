@@ -8,19 +8,17 @@ files and repositories. It provides:
 - direct per-tensor reads and writes over safetensors and GGUF, with no file
   built at any point (`docs/direct-tensor-reads.md`);
 - compare-and-swap logical refs;
-- durable transfer-session journals and reachability-driven local collection;
-- opaque grant-driven Python upload/download with verified restart resume;
 - Go missing-object planning and staged verification/promotion; and
 - one set of v1 golden vectors consumed by both Python and Go.
 
 The released 0.3.1 Python and Go implementations are the measured prototype
-and migration source. The production v1 data plane is now being hard-cut to
-one Rust implementation. Python becomes a typed local control client, Go
-remains Tensorhub's non-authoring verifier/promoter, and neither retains a
-second chunker, local CAS, filesystem, or materializer.
-
-Importing the local CAS does not load the HTTP transport. Transfer exports are
-resolved lazily, so offline/local-only use has no network-stack side effect.
+and migration source. The production v1 data plane is being hard-cut to one
+Rust implementation, and the Python half of that cut has landed: the Python
+chunker, grant transfer client, transfer journal and Python GC are deleted.
+The Rust planner (`crates/tensorfs-core/src/planner/`) is the only chunker.
+Python is a typed local client — the CAS store, the manifest model, direct
+tensor reads/writes and the daemon client — and Go remains Tensorhub's
+non-authoring verifier/promoter.
 
 ## Status
 
@@ -56,7 +54,7 @@ spec/v1/                 format documentation, JSON Schema, golden vectors
 crates/tensorfs-core/     Rust canonical formats, planners and storage engine
 crates/tensorfs-py/      the PyO3 extension module, `tensorfs._tensorfs`
 crates/tensorfsd/        the mount daemon and control plane (Linux only)
-python/src/tensorfs/     Python local CAS and grant-transfer data plane
+python/src/tensorfs/     Python local CAS, direct tensor reads/writes, daemon client
 *.go                     Go manifest, planning, and promotion engine
 ```
 
@@ -66,7 +64,7 @@ python/src/tensorfs/     Python local CAS and grant-transfer data plane
 
 | in the wheel | what it is |
 | --- | --- |
-| `tensorfs/*.py` | the pure-Python facade — `LocalCAS`, transfer, the daemon client |
+| `tensorfs/*.py` | the pure-Python facade — `LocalCAS`, tensor reads/writes, the daemon client |
 | `tensorfs/_tensorfs.abi3.so` | the compiled Rust extension, imported in-process |
 
 Every platform ships exactly the same two halves. This is HuggingFace's shape
@@ -165,46 +163,16 @@ objects, but insertion, deletion, ordering, sharding and absolute file offsets
 never become part of an unchanged tensor object's digest. Readers remain
 format-blind and reconstruct solely from ordered digest/length records.
 
-### Released 0.3.1 evidence
+### The retired Python chunker
 
-`LocalCAS.ingest_file` and `ingest_repository` automatically isolate a valid
-safetensors header region into one or more bounded chunks,
-anchors 64 MiB chunks at each large tensor, and packs consecutive small tensors
-up to 64 MiB. Files that do not pass the bounded structural parser silently use
-bounded fixed 64 MiB offsets. The manifest remains format 1 and readers use its
-ordered lengths rather than inferring boundaries.
-The 64 MiB choice measured 3,226 tensor-aligned objects versus 2,397 fixed
-objects (1.346x) over 186 unique local layouts; smaller 32/16/4 MiB floors cost
-2.272x/3.378x/7.988x. A perfectly filled 50 GiB body is 800 objects, while one
-all-small 50 GiB run needs at most 1,600 body objects plus the header.
-
-This improves reuse for unchanged or frozen tensors, duplicate uploads,
-partial-fine-tune and LoRA checkpoint series, and structurally identical model
-variants with the same ordered tensor names and sizes. It does not help a full
-fine-tune where every tensor changes, and it does not reduce the first cold
-download; binding and file selection are outside TensorFS chunking. Adding,
-removing, or resizing a small tensor can repack the remainder of its consecutive
-small-tensor run up to the next large-tensor boundary. This deterministic greedy
-policy is not content-defined chunking and has no rolling-hash resynchronization.
-te#185 phase 4 measures real stored-byte and object-count deltas over a 25-step
-frozen-base LoRA series; it is measurement, not a runtime selector or rollout gate.
-
-For an opt-in, real-scale local measurement, run:
-
-```bash
-uv run python python/benchmarks/safetensors_dedup.py
-```
-
-The default builds a 1 GiB, 16-tensor parent, changes eight bytes in one tensor,
-ingests both into one local CAS, and reports retained/reused bytes, wall/CPU
-time, throughput, peak RSS, filesystem I/O blocks, and verified materialization.
-It needs about 4 GiB of temporary disk. Timing is deliberately not a shared-CI
-gate; compare runs on the same idle machine and filesystem.
-
-Package `0.2.0` introduced that measured planner and `MAX_CHUNK_SIZE`. Package
-`0.3.0` removed the transitional public writer selector. The native hard cut
-keeps its proven header/tensor validation vectors but deliberately removes its
-greedy-small-run weakness rather than preserving it as a compatibility mode.
+Repo versions through PR #62 carried a second chunker in Python
+(`LocalCAS.ingest_file`/`ingest_repository`), whose greedy packing of
+consecutive small tensors disagreed with the Rust planner's
+one-object-per-tensor grid (issue #64) — packed tensors own no digest and
+cannot be inherited by `TensorWriter`. It is deleted; the Rust planner is the
+only chunker, and the frozen PyPI `hashrepo` 0.3.1 snapshot is its historical
+record. Readers stay format-blind: any wire-legal grid, packed grids from old
+snapshots included, reconstructs from the manifest's ordered lengths.
 
 Every consumer must reconstruct from the manifest's `(digest, len)` sequence.
 `chunk_size_bytes` and `MAX_CHUNK_SIZE` are per-object ceilings, never exact
@@ -212,8 +180,8 @@ chunk lengths or a basis for inferring object count.
 
 ## Releasing
 
-Package releases use SemVer beginning at `0.1.0`; protocol, manifest, journal,
-and local-ref formats independently remain v1. Before launch, format v1 may be
+Package releases use SemVer beginning at `0.1.0`; protocol, manifest, and
+local-ref formats independently remain v1. Before launch, format v1 may be
 broken in place: no v2 or compatibility reader is added beside it.
 
 For a release, merge the reviewed release commit to `main`, tag that exact
@@ -222,9 +190,9 @@ The `Publish to PyPI` workflow reruns the Python, Go and Rust gates, then calls
 `wheels.yaml` to build six platform wheels plus an sdist on native runners
 for every architecture — manylinux and musllinux on x86_64 and aarch64, and
 macOS on both architectures, with no QEMU anywhere. There is no Windows wheel:
-`local.py` and `journal.py` lock with `fcntl`, so `import tensorfs` cannot
-succeed there. The Rust half builds on Windows fine; the Python half is what
-needs a real POSIX-lock replacement first. Each
+`local.py` locks with `fcntl`, so `import tensorfs` cannot succeed there. The
+Rust half builds on Windows fine; the Python half is what needs a real
+POSIX-lock replacement first. Each
 wheel is installed into a clean venv and must pass `mypy --strict` across the
 extension boundary, a `LocalCAS` round trip, and a native `ObjectStore` plus
 `RecordsReader` round trip. The sdist is separately built and installed from

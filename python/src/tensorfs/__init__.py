@@ -1,8 +1,7 @@
-"""Content-addressed local storage and chunk manifests."""
+"""Content-addressed local storage and direct tensor reads and writes."""
 
 from typing import TYPE_CHECKING, Any
 
-from .journal import TransferJournal, TransferSession
 from .local import DigestMismatch, LocalCAS, RefConflict
 from .manifest import MAX_CHUNK_SIZE, Chunk, FileEntry, RepositoryManifest
 from .refs import CASRef
@@ -28,21 +27,6 @@ if TYPE_CHECKING:
         DaemonStatus,
         MountedPath,
     )
-    from .transfer import (
-        TransferGrant,
-        TransferReport,
-        download,
-        upload,
-    )
-
-_TRANSFER_EXPORTS = frozenset(
-    (
-        "TransferGrant",
-        "TransferReport",
-        "download",
-        "upload",
-    )
-)
 
 _DAEMON_EXPORTS = frozenset(
     (
@@ -57,11 +41,7 @@ _DAEMON_EXPORTS = frozenset(
 
 
 def __getattr__(name: str) -> Any:
-    if name in _TRANSFER_EXPORTS:
-        from . import transfer
-
-        value = getattr(transfer, name)
-    elif name in _DAEMON_EXPORTS:
+    if name in _DAEMON_EXPORTS:
         from . import daemon
 
         value = getattr(daemon, name)
@@ -93,13 +73,7 @@ __all__ = [
     "TensorReader",
     "TensorView",
     "TensorWriter",
-    "TransferGrant",
-    "TransferJournal",
-    "TransferReport",
-    "TransferSession",
-    "download",
     "dtype_itemsize",
     "open_tensors",
     "read_entry",
-    "upload",
 ]

@@ -5,15 +5,12 @@ import hashlib
 import json
 import os
 import tempfile
-import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-from .chunking import plan_chunks
-from .manifest import Chunk, FileEntry, RepositoryManifest
+from .manifest import RepositoryManifest
 from .refs import CASRef
 
 _COPY_BUFFER = 1 << 20
@@ -25,16 +22,6 @@ class DigestMismatch(ValueError):
 
 class RefConflict(RuntimeError):
     """A logical ref changed from the value the caller observed."""
-
-
-@dataclass(frozen=True, slots=True)
-class GCReport:
-    """One reachability collection pass."""
-
-    examined: int
-    reachable: int
-    deleted: int
-    bytes_deleted: int
 
 
 class _ObjectWriter:
@@ -356,83 +343,6 @@ class LocalCAS:
             temporary.unlink(missing_ok=True)
             raise
 
-    def ingest_file(
-        self,
-        source: str | Path,
-        *,
-        manifest_path: str | None = None,
-    ) -> FileEntry:
-        path = Path(source)
-        initial = path.stat()
-        whole = hashlib.sha256()
-        chunks: list[Chunk] = []
-        copied = 0
-        with path.open("rb") as handle:
-            before = os.fstat(handle.fileno())
-            chunk_lengths = plan_chunks(handle, initial.st_size)
-            if not chunk_lengths:
-                return FileEntry(
-                    manifest_path or path.name,
-                    initial.st_size,
-                    self.put_file(path, size=initial.st_size),
-                )
-            handle.seek(0)
-            for length in chunk_lengths:
-                data = handle.read(length)
-                if len(data) != length:
-                    raise OSError(f"{path} ended while it was being ingested")
-                copied += len(data)
-                whole.update(data)
-                digest = self.put_bytes(data)
-                chunks.append(Chunk(digest, len(data)))
-            if handle.read(1):
-                raise OSError(f"{path} grew while it was being ingested")
-            after = os.fstat(handle.fileno())
-        if (
-            copied != initial.st_size
-            or before.st_size != initial.st_size
-            or after.st_size != initial.st_size
-            or after.st_mtime_ns != before.st_mtime_ns
-        ):
-            raise OSError(f"{path} changed while it was being ingested")
-        return FileEntry(
-            manifest_path or path.name,
-            copied,
-            CASRef(whole.hexdigest()),
-            tuple(chunks),
-        )
-
-    def ingest_repository(
-        self,
-        source: str | Path,
-    ) -> RepositoryManifest:
-        """Ingest every regular file below a directory into one manifest.
-
-        V1 manifests describe files, not symlinks or empty directories. Refusing
-        those filesystem entry types keeps materialization portable and prevents
-        a source-tree link from escaping the repository root.
-        """
-
-        root = Path(source)
-        if not root.is_dir():
-            raise NotADirectoryError(root)
-        entries: list[FileEntry] = []
-        for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
-            if path.is_symlink():
-                raise ValueError(f"repository contains a symlink: {path.relative_to(root)}")
-            if path.is_dir():
-                continue
-            if not path.is_file():
-                relative = path.relative_to(root)
-                raise ValueError(f"repository contains a non-regular file: {relative}")
-            entries.append(
-                self.ingest_file(
-                    path,
-                    manifest_path=path.relative_to(root).as_posix(),
-                )
-            )
-        return RepositoryManifest(tuple(entries))
-
     def store_manifest(self, manifest: RepositoryManifest) -> CASRef:
         return self.put_bytes(manifest.canonical_bytes())
 
@@ -534,86 +444,3 @@ class LocalCAS:
                     temporary.unlink(missing_ok=True)
                     raise
         return desired
-
-    def _logical_roots_unlocked(self) -> set[CASRef]:
-        roots: set[CASRef] = set()
-        for path in self.refs.iterdir():
-            if not path.is_file():
-                continue
-            if len(path.name) != 64 or any(char not in "0123456789abcdef" for char in path.name):
-                continue
-            raw = json.loads(path.read_bytes())
-            if (
-                not isinstance(raw, dict)
-                or set(raw) != {"format", "name", "target"}
-                or raw.get("format") != 1
-                or not isinstance(raw.get("name"), str)
-                or self._ref_id(raw["name"]) != path.name
-            ):
-                raise ValueError(f"logical ref record {path.name!r} is malformed")
-            roots.add(CASRef.parse(str(raw.get("target", ""))))
-        return roots
-
-    def collect_garbage(
-        self,
-        reachable: Iterable[str | CASRef] = (),
-        *,
-        manifests: Iterable[RepositoryManifest] = (),
-        older_than: float,
-    ) -> GCReport:
-        """Delete unreferenced immutable objects older than a caller cutoff.
-
-        Current logical refs are always roots. Consumers add active byte refs
-        and repository manifests; TensorFS deliberately owns no retention
-        policy. A required age cutoff protects freshly produced bytes during the
-        gap before a consumer installs its logical ref.
-        """
-
-        if older_than <= 0:
-            raise ValueError("garbage collection requires a positive age grace")
-        with self._store_lock(exclusive=True):
-            keep = self._logical_roots_unlocked()
-            keep.update(CASRef.parse(ref) for ref in reachable)
-            for manifest in manifests:
-                for entry in manifest.files:
-                    keep.update(ref for ref, _size in entry.objects())
-
-            # A logical ref commonly targets a stored repository manifest.
-            # Expand valid manifests; arbitrary object bytes simply remain roots.
-            for root in tuple(keep):
-                with self._object_lock(root):
-                    path = self._verify_object_unlocked(root, None)
-                try:
-                    manifest = RepositoryManifest.from_bytes(path.read_bytes())
-                except (OSError, UnicodeDecodeError, ValueError):
-                    continue
-                for entry in manifest.files:
-                    keep.update(ref for ref, _size in entry.objects())
-
-            cutoff = time.time() - older_than
-            examined = deleted = bytes_deleted = 0
-            namespace = self.objects / "sha256"
-            if namespace.exists():
-                for path in namespace.glob("*/*/*"):
-                    if not path.is_file():
-                        continue
-                    try:
-                        ref = CASRef(path.name)
-                    except ValueError:
-                        continue
-                    examined += 1
-                    stat = path.stat()
-                    if ref in keep or stat.st_mtime > cutoff:
-                        continue
-                    with self._object_lock(ref):
-                        try:
-                            current = path.stat()
-                        except FileNotFoundError:
-                            continue
-                        if current.st_mtime > cutoff:
-                            continue
-                        path.unlink()
-                        _fsync_dir(path.parent)
-                        deleted += 1
-                        bytes_deleted += current.st_size
-            return GCReport(examined, len(keep), deleted, bytes_deleted)
