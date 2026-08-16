@@ -20,7 +20,7 @@ use crate::workspace_db::{Connection, OptionalExtension, TransactionBehavior, pa
 use thiserror::Error;
 
 use crate::object::ObjectDigest;
-use crate::planner::{ByteSource, PlanError, PlannerId, plan};
+use crate::planner::{PlanError, PlannerId, plan};
 use crate::store::{ObjectStore, StoreError};
 use crate::tfm1::{
     Entry, FileRecord, Snapshot, SnapshotBuilder, SnapshotId, Tfm1Error, case_fold, decode,
@@ -556,24 +556,36 @@ impl WorkspaceStore {
             .iter()
             .map(|(start, length, digest)| ((*start, *length), *digest))
             .collect();
-        let mut new_records = Vec::with_capacity(planned.regions().len());
-        let mut new_digests = Vec::new();
-        for region in planned.regions() {
-            if let Some(digest) = by_range.get(&(region.offset(), region.length())) {
-                new_records.push(FileRecord::Data {
-                    digest: *digest,
-                    length: region.length(),
-                });
-                continue;
+        // A region the committed head already covers is reused as-is; only
+        // the rest are read and admitted, and those go through the store's
+        // bounded concurrent path so a re-plan of a many-slot tensor is not
+        // one SHA-256 core's worth of wall-clock.
+        let mut pending_regions = Vec::new();
+        let mut pending_slots = Vec::new();
+        for (slot, region) in planned.regions().iter().enumerate() {
+            if !by_range.contains_key(&(region.offset(), region.length())) {
+                pending_regions.push(*region);
+                pending_slots.push(slot);
             }
-            let mut buffer = vec![0_u8; region.length() as usize];
-            source
-                .read_exact_at(region.offset(), &mut buffer)
-                .map_err(PlanError::Read)?;
-            let admitted = self.store.put_bytes(&buffer)?;
-            new_digests.push(admitted.digest());
+        }
+        let admitted = self.store.admit_regions(&source, &pending_regions)?;
+
+        let mut new_digests = Vec::with_capacity(admitted.len());
+        let mut fresh: HashMap<usize, ObjectDigest> = HashMap::with_capacity(admitted.len());
+        for (slot, object) in pending_slots.iter().zip(&admitted) {
+            fresh.insert(*slot, object.digest());
+            new_digests.push(object.digest());
+        }
+
+        let mut new_records = Vec::with_capacity(planned.regions().len());
+        for (slot, region) in planned.regions().iter().enumerate() {
+            let digest = by_range
+                .get(&(region.offset(), region.length()))
+                .copied()
+                .or_else(|| fresh.get(&slot).copied())
+                .expect("every planned region is either already committed or freshly admitted");
             new_records.push(FileRecord::Data {
-                digest: admitted.digest(),
+                digest,
                 length: region.length(),
             });
         }

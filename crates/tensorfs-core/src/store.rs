@@ -1,8 +1,9 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fs4::FileExt;
@@ -15,12 +16,42 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::fs::MetadataExt;
 
 use crate::object::ObjectDigest;
+use crate::planner::{ByteSource, MAX_OBJECT_SIZE, Region};
 
 const VERIFY_BUFFER_SIZE: usize = 1024 * 1024;
 const TEMP_PREFIX: &str = "obj-";
 const TEMP_SUFFIX: &str = ".tmp";
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Process-wide ceiling on bytes held in RAM while admitting objects, and the
+/// environment variable that overrides it.
+///
+/// This is deliberately the SAME name and default the daemon's slot assembly
+/// uses. Ingest and assembly both hold whole grid slots in RAM for the same
+/// reason, so an operator tunes one number rather than discovering a second
+/// knob that means almost the same thing.
+const INGEST_BUDGET_ENV: &str = "TENSORFS_ASSEMBLY_BUDGET_BYTES";
+const DEFAULT_INGEST_BUDGET: u64 = 8 * MAX_OBJECT_SIZE;
+
+/// How many objects may be hashed and admitted at once.
+///
+/// Each worker holds one whole object in RAM (never more than
+/// [`MAX_OBJECT_SIZE`]), so budget-divided-by-object-ceiling *is* the worker
+/// count: memory is the binding constraint, not cores. It is then clamped by
+/// the machine's parallelism, because SHA-256 is compute-bound even with
+/// SHA-NI — more hashing threads than cores buys context switches, not
+/// throughput. A 4-vCPU pod therefore runs 4 workers, not 8.
+#[must_use]
+pub fn ingest_concurrency() -> usize {
+    let budget = std::env::var(INGEST_BUDGET_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_INGEST_BUDGET);
+    let by_memory = usize::try_from(budget / MAX_OBJECT_SIZE).unwrap_or(1);
+    let by_cores = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    by_memory.clamp(1, by_cores.max(1))
+}
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -157,6 +188,94 @@ impl ObjectStore {
         let mut writer = self.writer()?;
         writer.write_all(bytes)?;
         writer.finish()
+    }
+
+    /// Admits the named regions of one source and returns them in region
+    /// order, hashing and installing up to [`ingest_concurrency`] of them at
+    /// once.
+    ///
+    /// Every region is read and hashed exactly **once**. Callers must not hash
+    /// first and admit second — that is two full SHA-256 passes over the same
+    /// bytes, and SHA-256 is what bounds ingest.
+    ///
+    /// The per-object crash boundary is unchanged: leased temp, hash while
+    /// writing, verify, fsync, no-clobber `hard_link` install, directory
+    /// fsync. Concurrency adds throughput without widening the durability
+    /// window, and two workers racing the same digest still converge on one
+    /// file with both succeeding, because the install is no-clobber.
+    ///
+    /// On error the regions that already succeeded stay admitted. That is
+    /// safe and deliberate: an admitted object nothing references is an
+    /// unreferenced CAS entry, which the two-epoch GC reclaims.
+    pub fn admit_regions<S>(
+        &self,
+        source: &S,
+        regions: &[Region],
+    ) -> Result<Vec<AdmittedObject>, StoreError>
+    where
+        S: ByteSource + Sync + ?Sized,
+    {
+        if regions.is_empty() {
+            return Ok(Vec::new());
+        }
+        let workers = ingest_concurrency().min(regions.len());
+        if workers <= 1 {
+            return regions
+                .iter()
+                .map(|region| self.admit_region(source, region))
+                .collect();
+        }
+
+        let next = AtomicUsize::new(0);
+        let mut collected: Vec<(usize, Result<AdmittedObject, StoreError>)> =
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..workers)
+                    .map(|_| {
+                        let next = &next;
+                        scope.spawn(move || {
+                            let mut mine = Vec::new();
+                            loop {
+                                let index = next.fetch_add(1, Ordering::Relaxed);
+                                let Some(region) = regions.get(index) else {
+                                    break;
+                                };
+                                mine.push((index, self.admit_region(source, region)));
+                            }
+                            mine
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .flat_map(|handle| match handle.join() {
+                        Ok(done) => done,
+                        // Never swallow a worker panic into a short result
+                        // vector — that would silently drop objects the
+                        // caller is about to name in a manifest.
+                        Err(payload) => std::panic::resume_unwind(payload),
+                    })
+                    .collect()
+            });
+        collected.sort_by_key(|(index, _)| *index);
+        // Returns the first failure in REGION order, not in completion order,
+        // so a concurrent run reports the same error a serial one would.
+        collected.into_iter().map(|(_, result)| result).collect()
+    }
+
+    /// Reads one region into a bounded buffer and admits it.
+    fn admit_region<S>(&self, source: &S, region: &Region) -> Result<AdmittedObject, StoreError>
+    where
+        S: ByteSource + ?Sized,
+    {
+        let length = usize::try_from(region.length())
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let mut buffer = Vec::new();
+        buffer
+            .try_reserve_exact(length)
+            .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
+        buffer.resize(length, 0);
+        source.read_exact_at(region.offset(), &mut buffer)?;
+        self.put_bytes(&buffer)
     }
 
     /// Opens a resident object for reading, refusing symlinks and every

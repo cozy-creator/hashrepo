@@ -33,7 +33,7 @@ pub enum RegionKind {
     Raw,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Region {
     pub(crate) offset: u64,
     pub(crate) length: u64,
