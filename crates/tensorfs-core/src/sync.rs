@@ -269,6 +269,16 @@ pub enum SyncError {
     },
     #[error("the remote omitted a grant for requested object {0}")]
     GrantOmitted(ObjectDigest),
+    #[error("the remote's missing set departs from canonical manifest order at {digest}")]
+    MissingNotCanonical { digest: ObjectDigest },
+    #[error(
+        "the remote declares object {digest} as {actual} bytes, the manifest records {expected}"
+    )]
+    MissingLength {
+        digest: ObjectDigest,
+        expected: u64,
+        actual: u64,
+    },
     #[error("the remote neither granted nor reported staged the claimed pack {0}")]
     PackGrantOmitted(String),
     #[error("grant replans exhausted after {0} attempts")]
@@ -331,6 +341,47 @@ fn data_closure(snapshot: &Snapshot) -> Vec<(ObjectDigest, u64)> {
         }
     }
     closure
+}
+
+/// The missing set the remote answers with must be a faithful projection of
+/// the manifest the client just declared: the same digests, with the same
+/// lengths, in the same canonical order. A subsequence is expected — the
+/// remote drops what it already holds — but a reorder is not.
+///
+/// The client refuses rather than re-sorting. Push assembles packs greedily
+/// in the order it is handed, so the order decides which objects share a
+/// pack, and therefore each pack's SHA-256 — the checksum a grant binds and a
+/// resume must match. Silently re-sorting would repair the run in front of us
+/// and leave the remote free to answer differently on the next replan, which
+/// is exactly how a resume stops recognising its own staged packs. The order
+/// is a wire contract, so a remote that breaks it is broken, and the honest
+/// answer is to say so with the digest that proves it.
+fn verify_canonical_missing(
+    closure: &[(ObjectDigest, u64)],
+    missing: &[(ObjectDigest, u64)],
+) -> Result<(), SyncError> {
+    let mut cursor = 0_usize;
+    for (digest, length) in missing {
+        // Only ever scans FORWARD, so a digest that is absent from the
+        // manifest and one that has already been passed are the same refusal:
+        // both mean this row cannot be where canonical order would put it.
+        let Some(offset) = closure[cursor..]
+            .iter()
+            .position(|(candidate, _)| candidate == digest)
+        else {
+            return Err(SyncError::MissingNotCanonical { digest: *digest });
+        };
+        cursor += offset + 1;
+        let expected = closure[cursor - 1].1;
+        if *length != expected {
+            return Err(SyncError::MissingLength {
+                digest: *digest,
+                expected,
+                actual: *length,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The digest the snapshot's own canonical bytes occupy in the object
@@ -420,7 +471,12 @@ pub fn push_snapshot<T: SyncTransport>(
         plan.max_pack_payload.min(MAX_PACK_PAYLOAD)
     };
 
+    // The manifest we declared is the only authority on which objects exist
+    // and in what order; the remote's answer is checked against it, never
+    // trusted for it.
+    let closure = data_closure(&decoded);
     let mut missing = plan.missing;
+    verify_canonical_missing(&closure, &missing)?;
     loop {
         if missing.is_empty() {
             break;
@@ -529,6 +585,7 @@ pub fn push_snapshot<T: SyncTransport>(
             return Err(SyncError::ReplansExhausted(report.replans));
         }
         missing = transport.pack_grants(&session, &[])?.missing;
+        verify_canonical_missing(&closure, &missing)?;
     }
 
     loop {

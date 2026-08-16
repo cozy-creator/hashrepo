@@ -1,6 +1,7 @@
 package tensorfs
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -8,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -24,6 +26,15 @@ type tfp1Corpus struct {
 		FixtureSHA256 string `json:"fixture_sha256"`
 		Description   string `json:"description"`
 	} `json:"golden"`
+	GeneratedGolden []struct {
+		Name    string `json:"name"`
+		Objects []struct {
+			RampSeed uint8  `json:"ramp_seed"`
+			Length   uint64 `json:"length"`
+		} `json:"objects"`
+		PackSHA256  string `json:"pack_sha256"`
+		Description string `json:"description"`
+	} `json:"generated_golden"`
 	Refusals []struct {
 		Name    string `json:"name"`
 		Fixture string `json:"fixture"`
@@ -56,8 +67,8 @@ func loadTFP1Corpus(t *testing.T) tfp1Corpus {
 		corpus.FixtureEncoding != "lowercase-hex-lf-v1" {
 		t.Fatalf("corpus header drifted: %+v", corpus)
 	}
-	if len(corpus.Golden) == 0 || len(corpus.Refusals) == 0 {
-		t.Fatal("corpus must carry golden and refusal cases")
+	if len(corpus.Golden) == 0 || len(corpus.Refusals) == 0 || len(corpus.GeneratedGolden) == 0 {
+		t.Fatal("corpus must carry golden, generated-golden and refusal cases")
 	}
 	return corpus
 }
@@ -181,24 +192,102 @@ func TestEverySingleByteTFP1MutationRefusesOrChangesContent(t *testing.T) {
 	}
 }
 
+func tfp1Assemble(count uint64, rows []byte, payload []byte) []byte {
+	data := []byte("TFP1")
+	data = binary.LittleEndian.AppendUint64(data, count)
+	data = append(data, rows...)
+	return append(data, payload...)
+}
+
+func tfp1Row(digest [32]byte, offset, length uint64) []byte {
+	out := append([]byte(nil), digest[:]...)
+	out = binary.LittleEndian.AppendUint64(out, offset)
+	return binary.LittleEndian.AppendUint64(out, length)
+}
+
+// tfp1Ramp is the corpus's generated-object recipe: byte i is
+// (seed + i) mod 256. Position-sensitive, so a shifted or reordered payload
+// cannot hash to the same pin.
+func tfp1Ramp(seed uint8, length uint64) []byte {
+	out := make([]byte, length)
+	for index := range out {
+		out[index] = seed + uint8(index)
+	}
+	return out
+}
+
+// The generated goldens are real goldens: decoded, digest-verified, and
+// pinned by the envelope's own SHA-256. They live as a recipe instead of a
+// committed fixture because the 64 MiB boundary pack would be 128 MiB of hex
+// in git. Go builds the canonical layout itself here — it has no encoder — so
+// the pin is agreement between two independent assemblers, not one echoed.
+func TestGoBuildsEveryGeneratedTFP1GoldenToItsPin(t *testing.T) {
+	corpus := loadTFP1Corpus(t)
+	for _, row := range corpus.GeneratedGolden {
+		t.Run(row.Name, func(t *testing.T) {
+			type member struct {
+				digest [32]byte
+				bytes  []byte
+			}
+			members := make([]member, 0, len(row.Objects))
+			for _, object := range row.Objects {
+				if object.Length == 0 || object.Length > uint64(MaxChunkSize) {
+					t.Fatalf("recipe length %d is outside the object bound", object.Length)
+				}
+				body := tfp1Ramp(object.RampSeed, object.Length)
+				members = append(members, member{digest: sha256.Sum256(body), bytes: body})
+			}
+			sort.Slice(members, func(i, j int) bool {
+				return bytes.Compare(members[i].digest[:], members[j].digest[:]) < 0
+			})
+
+			var rows, payload []byte
+			var offset uint64
+			for _, m := range members {
+				rows = append(rows, tfp1Row(m.digest, offset, uint64(len(m.bytes)))...)
+				payload = append(payload, m.bytes...)
+				offset += uint64(len(m.bytes))
+			}
+			pack := tfp1Assemble(uint64(len(members)), rows, payload)
+
+			sum := sha256.Sum256(pack)
+			if got := hex.EncodeToString(sum[:]); got != row.PackSHA256 {
+				t.Fatalf("generated pack hashes to %s, the corpus pins %s", got, row.PackSHA256)
+			}
+			parsed, err := ParseTFP1(pack)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(parsed.Objects) != len(members) {
+				t.Fatalf("decoded %d objects, built %d", len(parsed.Objects), len(members))
+			}
+			for index, object := range parsed.Objects {
+				if object.Digest.hex != hex.EncodeToString(members[index].digest[:]) ||
+					!bytes.Equal(object.Bytes, members[index].bytes) {
+					t.Fatalf("object %d does not round-trip", index)
+				}
+			}
+			if offset != uint64(len(payload)) {
+				t.Fatal("the payload must be exactly the objects, tiled in index order")
+			}
+		})
+	}
+
+	// The boundary claim the corpus exists to pin: one object at the object
+	// cap fills the payload cap exactly, and one byte more is not a pack.
+	boundary := corpus.GeneratedGolden[0]
+	if len(boundary.Objects) != 1 || boundary.Objects[0].Length != uint64(MaxChunkSize) {
+		t.Fatalf("the first generated golden must be the full-payload pack: %+v", boundary)
+	}
+}
+
 func TestTFP1CapBoundariesWithGeneratedBytes(t *testing.T) {
 	full := make([]byte, MaxChunkSize)
 	for index := range full {
 		full[index] = 0xa5
 	}
 	digest := sha256.Sum256(full)
-
-	assemble := func(count uint64, rows []byte, payload []byte) []byte {
-		data := []byte("TFP1")
-		data = binary.LittleEndian.AppendUint64(data, count)
-		data = append(data, rows...)
-		return append(data, payload...)
-	}
-	row := func(digest [32]byte, offset, length uint64) []byte {
-		out := append([]byte(nil), digest[:]...)
-		out = binary.LittleEndian.AppendUint64(out, offset)
-		return binary.LittleEndian.AppendUint64(out, length)
-	}
+	assemble, row := tfp1Assemble, tfp1Row
 
 	// One maximum-size object fills a pack exactly.
 	pack, err := ParseTFP1(assemble(1, row(digest, 0, uint64(MaxChunkSize)), full))
