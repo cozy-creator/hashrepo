@@ -187,18 +187,22 @@ fn structural_attacks_are_refused_on_every_read() {
         ));
     }
 
-    // A directory where an object belongs. The REFUSAL is universal; its typed
-    // SHAPE is not. Unix reaches the store's own file-type check and answers
-    // `NotARegularFile`. Windows refuses inside `open` itself — `PermissionDenied`,
-    // OS code 5 — before any check of ours can run, so it surfaces as `Io`.
+    // A directory where an object belongs.
     //
-    // The property this arm exists to prove is that a directory never opens as
-    // an object and no bytes are produced, and that holds on both. Unix keeps
-    // the exact variant asserted; Windows asserts the refusal without dictating
-    // whose refusal it is. Normalising the variant would mean stat-ing before
-    // every open, and `open_object` is the hot read path — paying a syscall on
-    // every legitimate read to tidy an error that only arises under deliberate
-    // tampering is the wrong trade, and the same one rejected for re-hashing.
+    // Both platforms answer `NotARegularFile`, but they reach it differently
+    // and that difference is worth knowing. On unix the open of a directory
+    // SUCCEEDS (`O_RDONLY|O_NOFOLLOW|O_NONBLOCK` on a directory is legal) and
+    // the store's own post-open file-type check refuses it. On Windows the
+    // open would fail with ERROR_ACCESS_DENIED, so the refusal is made by the
+    // type check that already runs BEFORE the open there.
+    //
+    // That pre-open check is not a tax added to make this test pass: the
+    // Windows branch of `open_object` already stats unconditionally to refuse
+    // symlinks, because Windows cannot refuse traversal at open the way
+    // `O_NOFOLLOW` does. Widening that existing stat from "is it a symlink" to
+    // "is it a regular file" costs no additional syscall on Windows and
+    // changes nothing at all on the unix hot path — so the uniform typed
+    // contract here is free, unlike re-hashing on read, which is not.
     let (scratch, meta, _id, digest) = built("dir");
     let path = object_path(scratch.path(), &digest);
     fs::remove_file(&path).expect("victim removes");
@@ -208,17 +212,8 @@ fn structural_attacks_are_refused_on_every_read() {
         .store()
         .open_object(&digest)
         .expect_err("a directory is not an object");
-    #[cfg(unix)]
     assert!(
         matches!(error, StoreError::NotARegularFile { .. }),
-        "directory produced {error:?}"
-    );
-    #[cfg(not(unix))]
-    assert!(
-        matches!(
-            error,
-            StoreError::NotARegularFile { .. } | StoreError::Io(_)
-        ),
         "directory produced {error:?}"
     );
 }

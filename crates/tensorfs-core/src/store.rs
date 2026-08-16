@@ -171,10 +171,19 @@ impl ObjectStore {
             .open(&path);
         #[cfg(windows)]
         let opened = {
-            // Windows cannot refuse symlink traversal at open, so the link
+            // Windows cannot refuse symlink traversal at open, so the type
             // check precedes the open under the store's single-writer layout.
+            //
+            // The check is on the whole file type, not just symlinks: opening
+            // a directory on Windows fails with ERROR_ACCESS_DENIED, which
+            // would surface as a bare `Io` and make the refusal reason
+            // platform-dependent for callers. This stat is already being paid
+            // here for the symlink check, so widening it to `!is_file()`
+            // costs no extra syscall, keeps `NotARegularFile` meaning the same
+            // thing on every platform, and skips an open that was going to
+            // fail anyway.
             match fs::symlink_metadata(&path) {
-                Ok(metadata) if metadata.file_type().is_symlink() => {
+                Ok(metadata) if !metadata.file_type().is_file() => {
                     return Err(StoreError::NotARegularFile { digest: *digest });
                 }
                 Ok(_) => {}
