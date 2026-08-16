@@ -825,8 +825,13 @@ impl SyncTransport for PerturbingHub {
         Ok(plan)
     }
 
-    fn upload_pack(&self, grant: &PackGrant, pack: &[u8]) -> Result<(), TransportError> {
-        self.inner.upload_pack(grant, pack)
+    fn upload_pack(
+        &self,
+        grant: &PackGrant,
+        pack: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<(), TransportError> {
+        self.inner.upload_pack(grant, pack, progress)
     }
 
     fn complete(&self, session: &str) -> Result<CompleteStatus, TransportError> {
@@ -844,8 +849,12 @@ impl SyncTransport for PerturbingHub {
         self.inner.download_grants(digests)
     }
 
-    fn download(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError> {
-        self.inner.download(grant)
+    fn download(
+        &self,
+        grant: &DownloadGrant,
+        progress: ProgressSink<'_>,
+    ) -> Result<Vec<u8>, TransportError> {
+        self.inner.download(grant, progress)
     }
 }
 
@@ -879,8 +888,15 @@ fn a_hub_that_reorders_the_missing_set_is_refused_and_never_repaired() {
         );
 
         let hub = PerturbingHub::new(Perturbation::Reverse);
-        let error = push_snapshot(&meta, &hub, &id, None, PushOptions::default())
-            .expect_err("a reordered missing set must refuse");
+        let error = push_snapshot(
+            &meta,
+            &hub,
+            &id,
+            None,
+            PushOptions::default(),
+            ProgressSink::silent(),
+        )
+        .expect_err("a reordered missing set must refuse");
         assert!(
             matches!(&error, SyncError::MissingNotCanonical { digest } if *digest == canonical[1]),
             "round {round}: the refusal must name the first out-of-order digest, got {error:?}"
@@ -916,8 +932,15 @@ fn a_hub_that_restates_an_object_length_is_refused() {
     let canonical = data_digests(&meta, &id);
 
     let hub = PerturbingHub::new(Perturbation::InflateFirstLength);
-    let error = push_snapshot(&meta, &hub, &id, None, PushOptions::default())
-        .expect_err("an inflated length must refuse");
+    let error = push_snapshot(
+        &meta,
+        &hub,
+        &id,
+        None,
+        PushOptions::default(),
+        ProgressSink::silent(),
+    )
+    .expect_err("an inflated length must refuse");
     assert!(
         matches!(
             &error,
