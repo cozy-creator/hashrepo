@@ -25,13 +25,44 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tensorfs import FileEntry, LocalCAS, open_tensors  # noqa: E402
+from tensorfs import (  # noqa: E402
+    CASRef,
+    Chunk,
+    FileEntry,
+    LocalCAS,
+    RepositoryManifest,
+    native,
+    open_tensors,
+)
 from tensorfs.manifest import MAX_CHUNK_SIZE  # noqa: E402
+
+
+def ingest_repository(cas: LocalCAS, root: Path) -> RepositoryManifest:
+    """Commit every file under the Rust planner's grid — the only chunker."""
+
+    entries: list[FileEntry] = []
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        whole = hashlib.sha256()
+        chunks: list[Chunk] = []
+        with path.open("rb") as handle:
+            for region in native.plan_file(path).regions:
+                data = handle.read(region.length)
+                whole.update(data)
+                chunks.append(Chunk(cas.put_bytes(data), region.length))
+        entries.append(
+            FileEntry(
+                path.relative_to(root).as_posix(),
+                path.stat().st_size,
+                CASRef(whole.hexdigest()),
+                tuple(chunks),
+            )
+        )
+    return RepositoryManifest(tuple(entries))
 
 MIB = 1 << 20
 BIG = "dense.weight"
 
-# One tensor above 64 MiB so it spans several objects, plus enough packed
+# One tensor above 64 MiB so it spans several objects, plus enough smaller
 # tensors that the file is meaningfully larger than the tensor under test.
 _TENSORS: tuple[tuple[str, str, tuple[int, ...]], ...] = (
     (BIG, "F32", (26, 1024, 1024)),
@@ -287,7 +318,7 @@ def main() -> int:
 
     source, model = build_fixture(root)
     cas = LocalCAS(root / "cas")
-    manifest = cas.ingest_repository(source)
+    manifest = ingest_repository(cas, source)
     ref = cas.store_manifest(manifest)
     (root / "ref").write_text(str(ref))
     entry = next(item for item in manifest.files if item.path == "model.safetensors")

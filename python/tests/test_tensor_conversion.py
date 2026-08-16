@@ -17,6 +17,7 @@ import struct
 from pathlib import Path
 
 import pytest
+from repo_ingest import ingest_with_grid
 from tensorfs import (
     LocalCAS,
     RepositoryManifest,
@@ -47,9 +48,9 @@ def _nbytes(dtype: str, shape: tuple[int, ...]) -> int:
 def _seed_snapshot(cas: LocalCAS) -> tuple[RepositoryManifest, dict[str, bytes]]:
     """Author the source through TensorWriter, so it carries the seal grid.
 
-    Ingesting a real file instead would commit it under the Python chunker's
-    packing grid, where small tensors share an object and therefore cannot be
-    inherited at all. That difference is asserted directly further down.
+    A packed grid — where small tensors share an object and therefore cannot
+    be inherited at all — is the wire-legal alternative, and that difference
+    is asserted directly further down.
     """
 
     bodies = {
@@ -193,9 +194,13 @@ def test_a_packed_source_tensor_cannot_be_inherited(tmp_path: Path) -> None:
     )
 
     cas = LocalCAS(tmp_path / "cas")
-    # ingest_repository uses the Python chunker, which packs both tensors into
-    # one shared object.
-    manifest = cas.ingest_repository(source_dir)
+    # One whole-file object — the wire allows it, and old packing-grid
+    # snapshots look exactly like this — so both tensors share an object.
+    model = source_dir / "model.safetensors"
+    entry = ingest_with_grid(
+        cas, model, [model.stat().st_size], manifest_path=model.name
+    )
+    manifest = RepositoryManifest((entry,))
     with open_tensors(cas, manifest) as src:
         assert src.object_span(src["a"]) is None
         writer = TensorWriter(cas, "out.safetensors")

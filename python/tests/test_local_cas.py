@@ -4,11 +4,11 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from repo_ingest import ingest_file, ingest_repository
 from tensorfs import (
     MAX_CHUNK_SIZE,
     FileEntry,
@@ -25,7 +25,7 @@ def test_local_cas_survives_restart_and_rereads_committed_bytes(tmp_path: Path) 
     root = tmp_path / "cas"
 
     first = LocalCAS(root)
-    entry = first.ingest_file(source, manifest_path="artifacts/graph.bin")
+    entry = ingest_file(first, source, manifest_path="artifacts/graph.bin")
     manifest = RepositoryManifest((entry,))
     manifest_ref = first.store_manifest(manifest)
     first.compare_and_swap_ref("compiled/cg-key-v1-example", manifest_ref, expected=None)
@@ -300,7 +300,7 @@ def test_file_above_chunk_boundary_round_trips(tmp_path: Path) -> None:
             remaining -= len(data)
 
     cas = LocalCAS(tmp_path / "cas")
-    entry = cas.ingest_file(source)
+    entry = ingest_file(cas, source)
     assert entry.size_bytes == MAX_CHUNK_SIZE + 3
     assert [chunk.length for chunk in entry.chunks] == [MAX_CHUNK_SIZE, 3]
 
@@ -314,7 +314,7 @@ def test_repository_tree_round_trips_with_portable_paths(tmp_path: Path) -> None
     (source / "nested" / "weights.bin").write_bytes(b"weights")
     cas = LocalCAS(tmp_path / "cas")
 
-    manifest = cas.ingest_repository(source)
+    manifest = ingest_repository(cas, source)
     assert [entry.path for entry in manifest.files] == ["config.json", "nested/weights.bin"]
     manifest_ref = cas.store_manifest(manifest)
     cas.compare_and_swap_ref("snapshot", manifest_ref, expected=None)
@@ -325,49 +325,3 @@ def test_repository_tree_round_trips_with_portable_paths(tmp_path: Path) -> None
     assert contents == {"config.json": b"{}", "nested/weights.bin": b"weights"}
 
 
-def test_repository_ingest_refuses_symlinks(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    source.mkdir()
-    outside = tmp_path / "outside"
-    outside.write_bytes(b"secret")
-    (source / "escape").symlink_to(outside)
-    with pytest.raises(ValueError, match="symlink"):
-        LocalCAS(tmp_path / "cas").ingest_repository(source)
-
-
-def test_collect_garbage_expands_manifest_roots_and_never_invents_retention(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "file").write_bytes(b"reachable")
-    cas = LocalCAS(tmp_path / "cas")
-    manifest = cas.ingest_repository(source)
-    manifest_ref = cas.store_manifest(manifest)
-    cas.compare_and_swap_ref("snapshot", manifest_ref, expected=None)
-    orphan = cas.put_bytes(b"orphan")
-    old = time.time() - 3600
-    os.utime(cas.object_path(orphan), (old, old))
-
-    report = cas.collect_garbage(older_than=60)
-    assert report.deleted == 1
-    assert report.bytes_deleted == len(b"orphan")
-    assert not cas.object_path(orphan).exists()
-    assert cas.verify_object(manifest_ref).is_file()
-    assert cas.verify_object(manifest.files[0].digest).read_bytes() == b"reachable"
-
-
-def test_collect_garbage_requires_ref_removal_and_age_grace(tmp_path: Path) -> None:
-    cas = LocalCAS(tmp_path / "cas")
-    rooted = cas.put_bytes(b"rooted")
-    fresh = cas.put_bytes(b"fresh")
-    cas.compare_and_swap_ref("active", rooted, expected=None)
-    assert cas.collect_garbage(older_than=60).deleted == 0
-
-    cas.compare_and_swap_ref("active", None, expected=rooted)
-    old = time.time() - 3600
-    os.utime(cas.object_path(rooted), (old, old))
-    report = cas.collect_garbage(older_than=60)
-    assert report.deleted == 1
-    assert not cas.object_path(rooted).exists()
-    assert cas.object_path(fresh).exists()

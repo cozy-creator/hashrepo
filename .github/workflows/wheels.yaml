@@ -64,18 +64,19 @@ jobs:
             runner: macos-15
             target: aarch64-apple-darwin
           # NO WINDOWS WHEEL, and it is not a build problem -- both Windows
-          # cells built cleanly on this branch, including arm64. The blocker
-          # is the library: `python/src/tensorfs/{local,journal}.py` import
+          # cells built cleanly on an earlier branch, including arm64. The
+          # blocker is the library: `python/src/tensorfs/local.py` imports
           # `fcntl` at module scope for advisory locking, `__init__.py`
-          # imports them eagerly, so `import tensorfs` raises
-          # ModuleNotFoundError on Windows and always has. Shipping a wheel
+          # imports it eagerly, so `import tensorfs` raises
+          # ModuleNotFoundError on Windows and always has. `tensors.py` also
+          # mmaps with POSIX `prot=` flags at read time. Shipping a wheel
           # whose top-level import fails is worse than shipping none.
           #
-          # Restoring Windows needs a real POSIX-lock replacement in those two
-          # modules (`msvcrt.locking` is byte-range and has no shared mode, so
-          # it is not a drop-in), not a matrix edit. Windows users can build
-          # from the sdist meanwhile. macOS is unaffected: it has flock, and
-          # both macOS smokes pass.
+          # Restoring Windows needs a real POSIX-lock replacement in local.py
+          # (`msvcrt.locking` is byte-range and has no shared mode, so it is
+          # not a drop-in) plus an `mmap.ACCESS_READ` mapping path, not a
+          # matrix edit. Windows users can build from the sdist meanwhile.
+          # macOS is unaffected: it has flock, and both macOS smokes pass.
     steps:
       - uses: actions/checkout@v4
 

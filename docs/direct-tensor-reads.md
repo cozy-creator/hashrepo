@@ -57,9 +57,11 @@ consequences, both load-bearing later:
 | ≥ 64 MiB | own objects, split at 64 MiB | own objects, split at 64 MiB |
 | < 64 MiB | **its own object** | **greedily packed** with neighbours |
 
-`chunking.py:183` packs; `safetensors.rs:184` does not. The README documents the
-Rust rule, so Python is the divergent one — it is the 0.3.1 prototype the README
-calls the migration source.
+`chunking.py:183` packed; `safetensors.rs:184` does not. The README documents
+the Rust rule, so Python was the divergent one — the 0.3.1 prototype the README
+calls the migration source. (Resolved since: the Python chunker is deleted —
+issue #64 — and the Rust planner is the only chunker. `chunking.py` references
+below are to the frozen 0.3.1 snapshot.)
 
 When this was only a read concern it was a nuisance: a packed tensor is a slice
 of a shared object, so the reader must do byte-range resolution rather than
@@ -331,7 +333,7 @@ real; the first would still hold on an idle box.
 **Decision: `tensorfs` yields buffers plus `dtype`, `shape` and `block`; the
 caller does `torch.frombuffer`.** `tensorfs` also exports `DTYPE_BITS` and
 `dtype_itemsize()` — pure-Python format knowledge that already existed twice in
-the tree (`chunking.py:29`, `safetensors.rs:221`) and should not be re-derived a
+the tree (`tensors.py`, `safetensors.rs:221`) and should not be re-derived a
 third time by every consumer.
 
 The rejected alternative was an optional `tensorfs[torch]` extra owning a

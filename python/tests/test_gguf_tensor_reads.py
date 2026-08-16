@@ -4,12 +4,12 @@ Same discipline as the safetensors arm: pseudorandom per-tensor payloads so a
 shifted read cannot compare equal, and one tensor above 64 MiB so the
 multi-object path is exercised rather than merely available.
 
-Note what this fixture does NOT prove. The Python chunker has no GGUF planner,
-so these files commit under the bounded fixed grid and their tensors are
-arbitrary slices of 64 MiB objects. That is the harder case for the reader and
-it is the one asserted here. Tensor-aligned GGUF objects come from the Rust
-seal planner (``crates/tensorfs-core/src/planner/gguf.rs``), which is not
-exercised by this test.
+Note what this fixture does NOT prove. These files are committed under the
+bounded fixed grid, stated explicitly, so their tensors are arbitrary slices
+of 64 MiB objects. That is the harder case for the reader and it is the one
+asserted here. Tensor-aligned GGUF objects come from the Rust seal planner
+(``crates/tensorfs-core/src/planner/gguf.rs``), which is not exercised by
+this test.
 """
 
 from __future__ import annotations
@@ -19,9 +19,21 @@ import struct
 from pathlib import Path
 
 import pytest
-from tensorfs import LocalCAS, TensorError, open_tensors
+from repo_ingest import fixed_lengths, ingest_with_grid
+from tensorfs import LocalCAS, RepositoryManifest, TensorError, open_tensors
 from tensorfs.gguf import GGML_LAYOUT, GGUFError
 from tensorfs.manifest import MAX_CHUNK_SIZE
+
+
+def _ingest_fixed(cas: LocalCAS, source: Path) -> RepositoryManifest:
+    """Commit model.gguf under the explicit bounded fixed 64 MiB grid."""
+
+    model = source / "model.gguf"
+    entry = ingest_with_grid(
+        cas, model, fixed_lengths(model.stat().st_size), manifest_path=model.name
+    )
+    return RepositoryManifest((entry,))
+
 
 # Deliberately NOT the GGUF default of 32. A fixture aligned to the default
 # cannot tell whether the reader honoured general.alignment or just guessed it.
@@ -114,7 +126,7 @@ def fixture(tmp_path_factory: pytest.TempPathFactory) -> dict[str, object]:
     source.mkdir()
     bodies = _build_gguf(source / "model.gguf")
     cas = LocalCAS(root / "cas")
-    manifest = cas.ingest_repository(source)
+    manifest = _ingest_fixed(cas, source)
     return {
         "cas_root": root / "cas",
         "manifest": manifest,
@@ -193,7 +205,7 @@ def test_a_gguf_tensor_using_a_removed_ggml_type_is_refused(tmp_path: Path) -> N
     (source / "model.gguf").write_bytes(header + b"\0" * (64 - len(header) % 64))
 
     cas = LocalCAS(tmp_path / "cas")
-    ref = cas.store_manifest(cas.ingest_repository(source))
+    ref = cas.store_manifest(_ingest_fixed(cas, source))
     with open_tensors(cas, ref) as tensors:
         with pytest.raises(TensorError, match="unsupported ggml type 4"):
             list(tensors)
@@ -211,7 +223,7 @@ def test_a_tensor_declared_past_the_end_of_the_file_is_refused(tmp_path: Path) -
     (source / "model.gguf").write_bytes(header + b"\0" * (-len(header) % 32) + b"\0" * 128)
 
     cas = LocalCAS(tmp_path / "cas")
-    ref = cas.store_manifest(cas.ingest_repository(source))
+    ref = cas.store_manifest(_ingest_fixed(cas, source))
     with open_tensors(cas, ref) as tensors:
         with pytest.raises(TensorError, match="past the end"):
             list(tensors)
@@ -224,7 +236,7 @@ def test_a_truncated_gguf_directory_is_refused(tmp_path: Path) -> None:
     (source / "model.gguf").write_bytes(b"GGUF" + struct.pack("<IQQ", 3, 1, 0) + b"\0" * 4)
 
     cas = LocalCAS(tmp_path / "cas")
-    ref = cas.store_manifest(cas.ingest_repository(source))
+    ref = cas.store_manifest(_ingest_fixed(cas, source))
     with open_tensors(cas, ref) as tensors:
         with pytest.raises(TensorError):
             list(tensors)

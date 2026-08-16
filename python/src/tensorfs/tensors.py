@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import gguf
-from .chunking import DTYPE_BITS
 from .manifest import FileEntry, RepositoryManifest
 from .refs import CASRef
 
@@ -53,6 +52,33 @@ _PREFIX_SIZE = 8
 # safetensors 0.8.0's own reader refuses header lengths above this. Matching it
 # keeps a malformed prefix from provoking a huge allocation here.
 _MAX_HEADER_BYTES = 100_000_000
+
+# Mirrors safetensors::tensor::Dtype::bitsize at upstream 6eb4dc9, and the Rust
+# planner's dtype_bits (crates/tensorfs-core/src/planner/safetensors.rs).
+DTYPE_BITS = {
+    "F4": 4,
+    "F6_E2M3": 6,
+    "F6_E3M2": 6,
+    "BOOL": 8,
+    "U8": 8,
+    "I8": 8,
+    "F8_E5M2": 8,
+    "F8_E4M3": 8,
+    "F8_E8M0": 8,
+    "F8_E5M2FNUZ": 8,
+    "F8_E4M3FNUZ": 8,
+    "I16": 16,
+    "U16": 16,
+    "F16": 16,
+    "BF16": 16,
+    "I32": 32,
+    "U32": 32,
+    "F32": 32,
+    "I64": 64,
+    "U64": 64,
+    "F64": 64,
+    "C64": 64,
+}
 
 
 class TensorError(ValueError):
@@ -318,9 +344,10 @@ class TensorReader(Mapping[str, TensorView]):
         snapshot by reference -- its bytes would have to be rewritten.
 
         This is the property that decides whether a conversion can leave a
-        tensor untouched. The Rust seal planner gives every tensor its own
-        object, so it always holds there. The Python chunker packs tensors
-        below 64 MiB into shared objects, so it frequently does not.
+        tensor untouched. The Rust seal planner — the only chunker — gives
+        every tensor its own object, so it always holds for grids it planned.
+        The manifest wire allows arbitrary grids, so snapshots committed under
+        the retired packing chunker may not satisfy it.
         """
 
         starts, objects = self._file_grid(view.file)
