@@ -133,6 +133,13 @@ fn a_second_process_can_write_while_the_first_holds_the_store() {
     // The parent holds the store open for the whole test, exactly as
     // `tensorfsd serve` holds it for its lifetime.
     let held = WorkspaceStore::open(scratch.path()).expect("the first opener succeeds");
+    if !held.supports_multiprocess() {
+        eprintln!(
+            "skipping: this platform/filesystem cannot support shared WAL \
+             coordination, so the store opened single-process"
+        );
+        return;
+    }
     held.create_workspace("parent").expect("workspace creates");
     commit_one(&held, "parent", 0xA1);
 
@@ -171,6 +178,13 @@ fn a_second_process_can_read_what_the_first_committed() {
     let scratch = Scratch::new("read");
 
     let held = WorkspaceStore::open(scratch.path()).expect("the first opener succeeds");
+    if !held.supports_multiprocess() {
+        eprintln!(
+            "skipping: this platform/filesystem cannot support shared WAL \
+             coordination, so the store opened single-process"
+        );
+        return;
+    }
     held.create_workspace("parent").expect("workspace creates");
     commit_one(&held, "parent", 0xB7);
 

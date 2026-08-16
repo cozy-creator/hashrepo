@@ -216,6 +216,17 @@ impl Statement {
 pub struct Connection {
     _database: turso::Database,
     inner: turso::Connection,
+    multiprocess: bool,
+}
+
+/// True for turso's refusal to run multiprocess WAL in this environment — an
+/// in-memory path, an IO backend without shared WAL coordination (Windows'
+/// default), or a network filesystem. Deliberately does NOT match a locking
+/// error: those must surface, never trigger a downgrade.
+fn is_multiprocess_unsupported(error: &turso::Error) -> bool {
+    error
+        .to_string()
+        .contains("multiprocess WAL is not supported")
 }
 
 impl fmt::Debug for Connection {
@@ -247,24 +258,47 @@ impl Connection {
     /// the ONLY place the engine is opened; `workspace.rs` funnels every
     /// `WorkspaceStore::open` through it.
     ///
-    /// Turso refuses multiprocess mode on network filesystems (NFS, CIFS/SMB,
-    /// Ceph, Lustre, GFS2, OCFS2, AFS, Coda, NCP, 9p). We take that refusal
-    /// rather than falling back, because a silent fallback restores the
-    /// single-process bug invisibly, and because the store's crash boundary
-    /// already assumes POSIX semantics those filesystems do not reliably give
-    /// (no-clobber `hard_link`, honest `fsync`, advisory leases).
+    /// Some environments cannot provide it, and turso says so at open rather
+    /// than degrading: Windows' default IO backend does not implement shared
+    /// WAL coordination, and network filesystems are refused outright (NFS,
+    /// CIFS/SMB, Ceph, Lustre, GFS2, OCFS2, AFS, Coda, NCP, 9p). There we fall
+    /// back to the single-process open, because refusing to open the store at
+    /// all is strictly worse than opening it single-process.
+    ///
+    /// That fallback is deliberately NARROW: it triggers only on turso's
+    /// "multiprocess WAL is not supported" refusal, which is a deterministic
+    /// property of the platform and filesystem, and NEVER on a locking error.
+    /// On Linux/ext4 — production — it is unreachable, so the single-process
+    /// regression cannot silently come back the way it arrived. Callers that
+    /// need to know can ask [`Connection::is_multiprocess`].
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref().to_string_lossy().into_owned();
-        let database = block_on(
+        let (database, multiprocess) = match block_on(
             turso::Builder::new_local(&path)
                 .experimental_multiprocess_wal(true)
                 .build(),
-        )?;
+        ) {
+            Ok(database) => (database, true),
+            Err(error) if is_multiprocess_unsupported(&error) => {
+                (block_on(turso::Builder::new_local(&path).build())?, false)
+            }
+            Err(error) => return Err(error.into()),
+        };
         let inner = database.connect()?;
         Ok(Self {
             _database: database,
             inner,
+            multiprocess,
         })
+    }
+
+    /// Whether this store root supports concurrent access from several
+    /// processes. False only where the platform or filesystem cannot support
+    /// it; tests that assert cross-process behaviour should skip on false
+    /// rather than fail.
+    #[must_use]
+    pub const fn is_multiprocess(&self) -> bool {
+        self.multiprocess
     }
 
     pub fn pragma_update(&self, _schema: Option<()>, name: &str, value: &str) -> Result<(), Error> {
