@@ -135,10 +135,31 @@ class TransferGrant:
         }
 
 
-class _GrantTransport(Protocol):
-    def upload(self, grant: TransferGrant, source: Path) -> None: ...
+def _discard_bytes(_moved: int) -> None:
+    """The byte reporter of a transfer nobody is watching."""
+    return None
 
-    def download(self, grant: TransferGrant, destination: Path) -> None: ...
+
+def _byte_reporter(
+    sink: Callable[[CASRef, int], None] | None, digest: CASRef
+) -> Callable[[int], None]:
+    if sink is None:
+        return _discard_bytes
+
+    def moved(count: int) -> None:
+        sink(digest, count)
+
+    return moved
+
+
+class _GrantTransport(Protocol):
+    def upload(
+        self, grant: TransferGrant, source: Path, on_bytes: Callable[[int], None]
+    ) -> None: ...
+
+    def download(
+        self, grant: TransferGrant, destination: Path, on_bytes: Callable[[int], None]
+    ) -> None: ...
 
 
 class _HTTPTransport:
@@ -160,7 +181,12 @@ class _HTTPTransport:
         except (OSError, urllib.error.URLError) as exc:
             raise _TransientTransferError(str(exc)) from exc
 
-    def upload(self, grant: TransferGrant, source: Path) -> None:
+    def upload(
+        self,
+        grant: TransferGrant,
+        source: Path,
+        on_bytes: Callable[[int], None] = _discard_bytes,
+    ) -> None:
         if source.stat().st_size != grant.size_bytes:
             raise DigestMismatch(
                 f"{grant.digest}: upload source is {source.stat().st_size} bytes, "
@@ -170,6 +196,7 @@ class _HTTPTransport:
         def body() -> Iterator[bytes]:
             with source.open("rb") as handle:
                 while block := handle.read(self.block_bytes):
+                    on_bytes(len(block))
                     yield block
 
         headers = dict(grant.headers)
@@ -189,7 +216,12 @@ class _HTTPTransport:
             if not 200 <= status < 300:
                 raise _HTTPStatusError(status)
 
-    def download(self, grant: TransferGrant, destination: Path) -> None:
+    def download(
+        self,
+        grant: TransferGrant,
+        destination: Path,
+        on_bytes: Callable[[int], None] = _discard_bytes,
+    ) -> None:
         request = urllib.request.Request(grant.url, headers=dict(grant.headers), method="GET")
         response = self._open(request)
         copied = 0
@@ -206,6 +238,10 @@ class _HTTPTransport:
                                 f"{grant.digest}: response exceeds {grant.size_bytes} bytes"
                             )
                         output.write(block)
+                        # Reported as the block lands, not once the object is
+                        # whole: a 64 MiB object on a slow link is minutes of
+                        # silence otherwise.
+                        on_bytes(len(block))
                     output.flush()
                     os.fsync(output.fileno())
         except (http.client.IncompleteRead, OSError, urllib.error.URLError) as exc:
@@ -322,6 +358,14 @@ def _run_parallel(
     # than from inside `run`. Callers hand this callback shared state that is
     # not theirs to lock, so moving it onto the pool's threads would fix the
     # timing by breaking the contract.
+    #
+    # `bytes_progress` is the finer signal underneath it, and it cannot share
+    # that thread: bytes move inside the worker, and queueing them for the
+    # completion loop would only report them once the object landed — which is
+    # the coarse signal again. So it fires on the worker moving the bytes and
+    # says so in its docstring; a consumer that wants both watches the object
+    # counter for readiness and the byte counter for liveness. A retried block
+    # is reported twice, because it moved twice.
     with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix="tensorfs") as pool:
         futures = {
             pool.submit(run, index, grant): index
@@ -360,14 +404,16 @@ def _upload(
     max_attempts: int = 5,
     sleep: Callable[[float], None] = time.sleep,
     progress: Callable[[CASRef, int], None] | None = None,
+    bytes_progress: Callable[[CASRef, int], None] | None = None,
 ) -> TransferReport:
     """Upload a remote plan's missing objects from an authoritative local CAS."""
 
     def one(grant: TransferGrant) -> bool:
         path = source.verify_object(grant.digest, size=grant.size_bytes)
+        moved = _byte_reporter(bytes_progress, grant.digest)
         _retry(
             grant,
-            lambda: transport.upload(grant, path),
+            lambda: transport.upload(grant, path, moved),
             max_attempts=max_attempts,
             sleep=sleep,
         )
@@ -383,8 +429,15 @@ def upload(
     parallel: int = _DEFAULT_PARALLEL,
     max_attempts: int = 5,
     progress: Callable[[CASRef, int], None] | None = None,
+    bytes_progress: Callable[[CASRef, int], None] | None = None,
 ) -> TransferReport:
-    """Upload a remote plan's missing objects through their HTTP grants."""
+    """Upload a remote plan's missing objects through their HTTP grants.
+
+    `progress(digest, size)` fires on the caller's thread as each object
+    lands. `bytes_progress(digest, moved)` fires on the worker thread that is
+    moving those bytes, once per block, so a single large object is visible
+    while it is still in flight; it must be safe to call from any thread.
+    """
 
     return _upload(
         grants,
@@ -393,6 +446,7 @@ def upload(
         parallel=parallel,
         max_attempts=max_attempts,
         progress=progress,
+        bytes_progress=bytes_progress,
     )
 
 
@@ -405,6 +459,7 @@ def _download(
     max_attempts: int = 5,
     sleep: Callable[[float], None] = time.sleep,
     progress: Callable[[CASRef, int], None] | None = None,
+    bytes_progress: Callable[[CASRef, int], None] | None = None,
 ) -> TransferReport:
     """Fetch missing objects; resident verified objects are the resume journal."""
 
@@ -419,10 +474,11 @@ def _download(
         descriptor, name = tempfile.mkstemp(prefix="download-", dir=destination.tmp)
         os.close(descriptor)
         temporary = Path(name)
+        moved = _byte_reporter(bytes_progress, grant.digest)
         try:
             _retry(
                 grant,
-                lambda: transport.download(grant, temporary),
+                lambda: transport.download(grant, temporary, moved),
                 max_attempts=max_attempts,
                 sleep=sleep,
             )
@@ -441,8 +497,16 @@ def download(
     parallel: int = _DEFAULT_PARALLEL,
     max_attempts: int = 5,
     progress: Callable[[CASRef, int], None] | None = None,
+    bytes_progress: Callable[[CASRef, int], None] | None = None,
 ) -> TransferReport:
-    """Download missing objects through HTTP grants into an authoritative CAS."""
+    """Download missing objects through HTTP grants into an authoritative CAS.
+
+    `progress(digest, size)` fires on the caller's thread as each object lands
+    or is found resident. `bytes_progress(digest, moved)` fires on the worker
+    thread that is moving those bytes, once per block, so a 64 MiB object on a
+    slow link reports while it arrives; it must be safe to call from any
+    thread.
+    """
 
     return _download(
         grants,
@@ -451,4 +515,5 @@ def download(
         parallel=parallel,
         max_attempts=max_attempts,
         progress=progress,
+        bytes_progress=bytes_progress,
     )

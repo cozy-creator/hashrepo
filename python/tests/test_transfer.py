@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import http.server
 import json
 import threading
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -11,7 +13,13 @@ from tensorfs import (
     LocalCAS,
     TransferGrant,
 )
-from tensorfs.transfer import _download, _TransientTransferError, _upload
+from tensorfs.transfer import (
+    _download,
+    _TransientTransferError,
+    _upload,
+    download,
+    upload,
+)
 
 
 class MemoryTransport:
@@ -29,13 +37,23 @@ class MemoryTransport:
                 self.transient[digest] = remaining - 1
                 raise _TransientTransferError("retry me")
 
-    def upload(self, grant: TransferGrant, source: Path) -> None:
+    def upload(
+        self,
+        grant: TransferGrant,
+        source: Path,
+        on_bytes: Callable[[int], None] = lambda _moved: None,
+    ) -> None:
         self._maybe_fail(grant.digest)
         with self.lock:
             self.objects[grant.digest] = source.read_bytes()
             self.uploads.append(grant.digest)
 
-    def download(self, grant: TransferGrant, destination: Path) -> None:
+    def download(
+        self,
+        grant: TransferGrant,
+        destination: Path,
+        on_bytes: Callable[[int], None] = lambda _moved: None,
+    ) -> None:
         self._maybe_fail(grant.digest)
         destination.write_bytes(self.objects[grant.digest])
         with self.lock:
@@ -163,14 +181,19 @@ def test_progress_reports_a_landed_object_before_the_batch_finishes(tmp_path: Pa
     first_reported = threading.Event()
 
     class GatedTransport(MemoryTransport):
-        def download(self, grant: TransferGrant, destination: Path) -> None:
+        def download(
+            self,
+            grant: TransferGrant,
+            destination: Path,
+            on_bytes: Callable[[int], None] = lambda _moved: None,
+        ) -> None:
             if grant.digest == second and not first_reported.wait(timeout=10):
                 raise AssertionError(
                     "no progress was reported for the first object while the "
                     "second was still in flight — the whole transfer is "
                     "invisible until it ends"
                 )
-            super().download(grant, destination)
+            super().download(grant, destination, on_bytes)
 
     transport = GatedTransport({first: b"first", second: b"second"})
     beats: list[CASRef] = []
@@ -214,14 +237,19 @@ def test_a_resident_object_advances_progress_before_the_batch_finishes(tmp_path:
     resident_reported = threading.Event()
 
     class GatedTransport(MemoryTransport):
-        def download(self, grant: TransferGrant, destination: Path) -> None:
+        def download(
+            self,
+            grant: TransferGrant,
+            destination: Path,
+            on_bytes: Callable[[int], None] = lambda _moved: None,
+        ) -> None:
             if not resident_reported.wait(timeout=10):
                 raise AssertionError(
                     "the resident object reported no progress while the "
                     "fetched one was still in flight — a resume that is "
                     "mostly complete reads as a transfer making no headway"
                 )
-            super().download(grant, destination)
+            super().download(grant, destination, on_bytes)
 
     cas = LocalCAS(tmp_path / "destination")
     cas.put_bytes(b"already here", expected=resident)
@@ -247,6 +275,135 @@ def test_a_resident_object_advances_progress_before_the_batch_finishes(tmp_path:
     # Only the fetched object moved bytes, but BOTH advanced readiness.
     assert report.bytes_transferred == 12
     assert set(beats) == {resident, fetched}
+
+
+class _DrippingServer(http.server.ThreadingHTTPServer):
+    """Serves one object in pieces, gated on the client reporting the first."""
+
+    body: bytes
+    piece: int
+    reported: threading.Event
+    stalled: bool
+    uploaded: bytes
+
+
+class _DrippingHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server: _DrippingServer
+
+    def do_GET(self) -> None:
+        body = self.server.body
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body[: self.server.piece])
+        self.wfile.flush()
+        # Nothing more moves until the client has REPORTED what already
+        # arrived. The bounded wait turns a regression into a failing test
+        # instead of a hung suite; it is a test bailout, not a health rule.
+        if not self.server.reported.wait(timeout=10):
+            self.server.stalled = True
+            return
+        self.wfile.write(body[self.server.piece :])
+
+    def do_PUT(self) -> None:
+        length = int(self.headers["Content-Length"])
+        self.server.uploaded = self.rfile.read(length)
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        pass
+
+
+def _dripping_server(body: bytes, piece: int) -> _DrippingServer:
+    server = _DrippingServer(("127.0.0.1", 0), _DrippingHandler)
+    server.body = body
+    server.piece = piece
+    server.reported = threading.Event()
+    server.stalled = False
+    server.uploaded = b""
+    return server
+
+
+def test_bytes_progress_reports_a_partial_object_while_it_is_still_arriving(
+    tmp_path: Path,
+) -> None:
+    """One object can be a whole transfer, and it must be visible while it runs.
+
+    `progress` fires per completed object, and objects are capped at 64 MiB —
+    so on a slow link a single object is minutes of silence, and a consumer
+    watching for liveness has nothing to watch. `bytes_progress` is the finer
+    signal: the server here refuses to send the rest of the object until the
+    client has reported the piece already delivered, which a transport that
+    only reports whole objects can never do.
+    """
+
+    body = b"\x5a" * (3 << 20)
+    server = _dripping_server(body, 1 << 20)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    beats: list[int] = []
+    lock = threading.Lock()
+
+    def bytes_progress(_ref: CASRef, moved: int) -> None:
+        with lock:
+            beats.append(moved)
+        server.reported.set()
+
+    try:
+        port = int(server.server_address[1])
+        ref = CASRef.digest_bytes(body)
+        report = download(
+            [TransferGrant(ref, len(body), f"http://127.0.0.1:{port}/objects/{ref.digest}")],
+            LocalCAS(tmp_path / "destination"),
+            bytes_progress=bytes_progress,
+        )
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+    assert not server.stalled, (
+        "the download reported nothing while the object was still arriving — "
+        "one large object is invisible for its whole duration"
+    )
+    assert report.ok
+    assert len(beats) >= 2, f"a {len(body)}-byte object reported {len(beats)} time(s)"
+    assert sum(beats) == len(body)
+
+
+def test_bytes_progress_reports_an_upload_as_the_blocks_leave(tmp_path: Path) -> None:
+    body = b"\xc3" * (3 << 20)
+    server = _dripping_server(b"", 0)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    cas = LocalCAS(tmp_path / "source")
+    ref = cas.put_bytes(body)
+    beats: list[int] = []
+    lock = threading.Lock()
+
+    def bytes_progress(_ref: CASRef, moved: int) -> None:
+        with lock:
+            beats.append(moved)
+
+    try:
+        port = int(server.server_address[1])
+        report = upload(
+            [TransferGrant(ref, len(body), f"http://127.0.0.1:{port}/objects/{ref.digest}")],
+            cas,
+            bytes_progress=bytes_progress,
+        )
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+    assert report.ok
+    assert server.uploaded == body, "the exact bytes reach the store"
+    assert len(beats) >= 2, f"a {len(body)}-byte upload reported {len(beats)} time(s)"
+    assert sum(beats) == len(body)
 
 
 def test_python_consumes_and_reproduces_shared_go_grant_vector() -> None:

@@ -37,7 +37,7 @@ use harness::{
     Consistency, DirTransport, Rng, Scratch, assert_snapshot_fully_backed, data_digests,
     is_library_temp, iterations, reconstruct, sealed_workspace, seed_from_env,
 };
-use tensorfs_core::sync::{PushOptions, pull_snapshot, push_snapshot};
+use tensorfs_core::sync::{ProgressSink, PushOptions, pull_snapshot, push_snapshot};
 use tensorfs_core::tfm1::SnapshotId;
 use tensorfs_core::workspace::WorkspaceStore;
 
@@ -105,11 +105,12 @@ fn transfer_child_role() {
                 &id,
                 expected.as_ref(),
                 PushOptions::default(),
+                ProgressSink::silent(),
             )
             .expect("push completes");
         }
         "pull" => {
-            pull_snapshot(&meta, &transport, &id).expect("pull completes");
+            pull_snapshot(&meta, &transport, &id, ProgressSink::silent()).expect("pull completes");
         }
         other => panic!("unknown role {other}"),
     }
@@ -273,8 +274,15 @@ fn a_push_killed_repeatedly_converges_and_a_settled_re_push_moves_nothing() {
 
     // Converged means converged: re-pushing moves nothing.
     let meta = WorkspaceStore::open(source.path()).expect("publisher reopens");
-    let report = push_snapshot(&meta, &transport, &id, Some(&id), PushOptions::default())
-        .expect("a settled push succeeds");
+    let report = push_snapshot(
+        &meta,
+        &transport,
+        &id,
+        Some(&id),
+        PushOptions::default(),
+        ProgressSink::silent(),
+    )
+    .expect("a settled push succeeds");
     assert_eq!(
         report.uploaded_objects, 0,
         "a settled push re-uploaded objects the hub already holds (seed {seed:#x})"
@@ -291,7 +299,15 @@ fn a_pull_killed_repeatedly_converges_byte_exactly_without_re_downloading() {
 
     // Publish once, cleanly: this test attacks the pull, not the push.
     let transport = DirTransport::new(hub.path());
-    push_snapshot(&publisher, &transport, &id, None, PushOptions::default()).expect("push lands");
+    push_snapshot(
+        &publisher,
+        &transport,
+        &id,
+        None,
+        PushOptions::default(),
+        ProgressSink::silent(),
+    )
+    .expect("push lands");
     let originals: Vec<(String, Vec<u8>)> = corpus()
         .iter()
         .map(|(path, _)| ((*path).to_owned(), reconstruct(&publisher, &id, path)))
@@ -363,7 +379,8 @@ fn a_pull_killed_repeatedly_converges_byte_exactly_without_re_downloading() {
     );
 
     // Nothing already verified is paid for twice.
-    let report = pull_snapshot(&meta, &transport, &id).expect("a settled pull succeeds");
+    let report = pull_snapshot(&meta, &transport, &id, ProgressSink::silent())
+        .expect("a settled pull succeeds");
     assert_eq!(
         report.fetched_objects, 0,
         "a settled pull re-downloaded objects it already held (seed {seed:#x})"

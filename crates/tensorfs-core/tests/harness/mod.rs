@@ -31,8 +31,8 @@ use sha2::{Digest as _, Sha256};
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::PlannerId;
 use tensorfs_core::sync::{
-    CompleteStatus, DownloadGrant, GrantsPlan, PackClaim, PackGrant, StagedPack, SyncPlan,
-    SyncTransport, TransportError, manifest_object_digest,
+    CompleteStatus, DownloadGrant, GrantsPlan, PackClaim, PackGrant, ProgressSink, StagedPack,
+    SyncPlan, SyncTransport, TransportError, manifest_object_digest,
 };
 use tensorfs_core::tfm1::{Entry, FileRecord, SnapshotId, decode};
 use tensorfs_core::tfp1;
@@ -774,7 +774,12 @@ impl SyncTransport for FaultHub {
         })
     }
 
-    fn upload_pack(&self, grant: &PackGrant, pack: &[u8]) -> Result<(), TransportError> {
+    fn upload_pack(
+        &self,
+        grant: &PackGrant,
+        pack: &[u8],
+        _progress: ProgressSink<'_>,
+    ) -> Result<(), TransportError> {
         let mut state = self.state.borrow_mut();
         if state.faults.fail_uploads > 0 {
             state.faults.fail_uploads -= 1;
@@ -920,7 +925,11 @@ impl SyncTransport for FaultHub {
         Ok(grants)
     }
 
-    fn download(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError> {
+    fn download(
+        &self,
+        grant: &DownloadGrant,
+        _progress: ProgressSink<'_>,
+    ) -> Result<Vec<u8>, TransportError> {
         let mut state = self.state.borrow_mut();
         if state.faults.fail_downloads > 0 {
             state.faults.fail_downloads -= 1;
@@ -1488,7 +1497,12 @@ impl SyncTransport for DirTransport {
         })
     }
 
-    fn upload_pack(&self, grant: &PackGrant, pack: &[u8]) -> Result<(), TransportError> {
+    fn upload_pack(
+        &self,
+        grant: &PackGrant,
+        pack: &[u8],
+        _progress: ProgressSink<'_>,
+    ) -> Result<(), TransportError> {
         if sha256_hex(pack) != grant.pack_sha256 {
             return Err(TransportError::Refused {
                 code: "checksum-mismatch".to_owned(),
@@ -1584,7 +1598,11 @@ impl SyncTransport for DirTransport {
             .collect())
     }
 
-    fn download(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError> {
+    fn download(
+        &self,
+        grant: &DownloadGrant,
+        _progress: ProgressSink<'_>,
+    ) -> Result<Vec<u8>, TransportError> {
         std::fs::read(&grant.url).map_err(|error| TransportError::Io(error.to_string()))
     }
 }

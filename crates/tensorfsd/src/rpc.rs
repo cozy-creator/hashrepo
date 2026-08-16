@@ -567,6 +567,11 @@ fn dispatch(
                 &id,
                 expected_head.as_ref(),
                 tensorfs_core::sync::PushOptions::default(),
+                // One RPC request answers once, so this call has nowhere to
+                // stream observations to. A push that reports while it runs
+                // needs a notification channel first; that is a wire change,
+                // not a silent one.
+                tensorfs_core::sync::ProgressSink::silent(),
             ) {
                 Ok(report) => Ok(json!({
                     "snapshot": id.to_string(),

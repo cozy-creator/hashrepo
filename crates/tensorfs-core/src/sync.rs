@@ -31,6 +31,86 @@ use crate::workspace::{LeaseId, WorkspaceError, WorkspaceStore};
 /// One bounded download-grant batch, per the wire contract.
 pub const DOWNLOAD_GRANT_BATCH: usize = 256;
 
+/// One observation that a transfer advanced.
+///
+/// This library reports movement; it never judges it. A consumer decides that
+/// a transfer is stuck from the ABSENCE of these observations, against a
+/// budget only the deployment knows — so nothing here owns a clock, a
+/// deadline, or a rate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Progress {
+    /// Bytes that crossed the wire since the previous observation, while the
+    /// object or pack carrying them is still in flight. This is what makes a
+    /// single multi-gigabyte transfer visible while it runs.
+    Bytes(u64),
+    /// One object is accounted for: staged on the remote, verified into the
+    /// local store, or already resident on the far side. Mirrors the Python
+    /// data plane's `progress(digest, size)` so both stacks report one
+    /// contract, and like it, a RESIDENT object advances readiness exactly as
+    /// a moved one does — a resumed transfer is alive, not stalled.
+    Object { digest: ObjectDigest, length: u64 },
+}
+
+/// Where a transfer reports that it advanced.
+///
+/// Every call runs synchronously on the thread driving the transfer: the sync
+/// engine spawns nothing, and a transport reports its own bytes from inside
+/// the call that moves them. The sink is therefore neither `Send` nor `Sync`,
+/// which is the compiler's own proof of that promise — callers can hand it
+/// state they have not otherwise made shareable, exactly as the Python side's
+/// caller-thread callback lets them.
+#[derive(Clone, Copy)]
+pub struct ProgressSink<'sink>(Option<&'sink dyn Fn(Progress)>);
+
+impl std::fmt::Debug for ProgressSink<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("ProgressSink")
+            .field(&if self.0.is_some() {
+                "reporting"
+            } else {
+                "silent"
+            })
+            .finish()
+    }
+}
+
+impl Default for ProgressSink<'_> {
+    fn default() -> Self {
+        Self::silent()
+    }
+}
+
+impl<'sink> ProgressSink<'sink> {
+    /// A transfer nobody is watching.
+    #[must_use]
+    pub const fn silent() -> Self {
+        Self(None)
+    }
+
+    #[must_use]
+    pub const fn new(sink: &'sink dyn Fn(Progress)) -> Self {
+        Self(Some(sink))
+    }
+
+    /// Reports bytes that just moved. Zero-length reports are dropped: an
+    /// observation must mean something happened.
+    pub fn bytes(&self, moved: u64) {
+        if moved > 0
+            && let Some(sink) = self.0
+        {
+            sink(Progress::Bytes(moved));
+        }
+    }
+
+    /// Reports that one object is now accounted for.
+    pub fn object(&self, digest: ObjectDigest, length: u64) {
+        if let Some(sink) = self.0 {
+            sink(Progress::Object { digest, length });
+        }
+    }
+}
+
 /// Bounded transient retries per object fetch. Pull carries no options
 /// struct, so this is the contract rather than a caller's choice.
 const DOWNLOAD_ATTEMPTS: u32 = 4;
@@ -135,14 +215,27 @@ pub trait SyncTransport {
         session: &str,
         claims: &[PackClaim],
     ) -> Result<GrantsPlan, TransportError>;
-    fn upload_pack(&self, grant: &PackGrant, pack: &[u8]) -> Result<(), TransportError>;
+    /// Uploads one pack, reporting bytes to `progress` as they leave — a pack
+    /// is the largest thing this engine moves in one call, so a transport that
+    /// reports only on return makes its whole upload invisible.
+    fn upload_pack(
+        &self,
+        grant: &PackGrant,
+        pack: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<(), TransportError>;
     fn complete(&self, session: &str) -> Result<CompleteStatus, TransportError>;
     fn head(&self) -> Result<Option<SnapshotId>, TransportError>;
     fn download_grants(
         &self,
         digests: &[ObjectDigest],
     ) -> Result<Vec<DownloadGrant>, TransportError>;
-    fn download(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError>;
+    /// Fetches one object, reporting bytes to `progress` as they arrive.
+    fn download(
+        &self,
+        grant: &DownloadGrant,
+        progress: ProgressSink<'_>,
+    ) -> Result<Vec<u8>, TransportError>;
 }
 
 #[derive(Debug, Error)]
@@ -274,12 +367,17 @@ impl Drop for PendingSyncPin<'_> {
 /// answer. Within a run, replans re-probe the session and never retransmit a
 /// staged pack; across restarts, promoted objects report resident and are
 /// never retransmitted.
+///
+/// `progress` observes the push as it happens: the objects the remote already
+/// holds land first, then each pack's bytes as they leave the wire and each of
+/// its members as the pack is accepted.
 pub fn push_snapshot<T: SyncTransport>(
     meta: &WorkspaceStore,
     transport: &T,
     snapshot: &SnapshotId,
     expected_head: Option<&SnapshotId>,
     options: PushOptions,
+    progress: ProgressSink<'_>,
 ) -> Result<PushReport, SyncError> {
     // The transfer reads local object bytes for as long as it runs, and until
     // it lands the snapshot row is usually the only thing rooting them. The
@@ -300,8 +398,20 @@ pub fn push_snapshot<T: SyncTransport>(
             remote: plan.snapshot_id,
         });
     }
-    // What the remote already held before this push moved anything.
+    // What the remote already held before this push moved anything. These
+    // objects are completed work toward readiness, so they advance progress
+    // exactly as uploaded ones do: a resumed push that finds most of its
+    // closure already promoted must not read as a push doing nothing.
     report.skipped_remote_resident = plan.have.len() as u64;
+    let lengths: std::collections::HashMap<[u8; 32], u64> = data_closure(&decoded)
+        .into_iter()
+        .map(|(digest, length)| (*digest.as_bytes(), length))
+        .collect();
+    for digest in &plan.have {
+        if let Some(length) = lengths.get(digest.as_bytes()) {
+            progress.object(*digest, *length);
+        }
+    }
 
     let session = plan.session.clone();
     let max_payload = if plan.max_pack_payload == 0 {
@@ -379,7 +489,7 @@ pub fn push_snapshot<T: SyncTransport>(
 
             let mut attempt = 0;
             loop {
-                match transport.upload_pack(grant, &encoded) {
+                match transport.upload_pack(grant, &encoded, progress) {
                     Ok(()) => break,
                     Err(TransportError::Io(detail)) => {
                         attempt += 1;
@@ -402,6 +512,13 @@ pub fn push_snapshot<T: SyncTransport>(
             report.uploaded_objects += members.len() as u64;
             report.uploaded_bytes += payload;
             report.packs += 1;
+            // Reported as this pack lands, not once every pack has: a push
+            // that only reports at the end is indistinguishable from a dead
+            // one for its entire duration, which is precisely how a healthy
+            // transfer gets condemned.
+            for (digest, length) in &members {
+                progress.object(*digest, *length);
+            }
         }
         let _ = refresh_early;
 
@@ -447,10 +564,11 @@ fn download_with_retry<T: SyncTransport>(
     transport: &T,
     grant: &DownloadGrant,
     attempts: u32,
+    progress: ProgressSink<'_>,
 ) -> Result<Vec<u8>, TransportError> {
     let mut attempt = 0;
     loop {
-        match transport.download(grant) {
+        match transport.download(grant, progress) {
             Ok(bytes) => return Ok(bytes),
             Err(TransportError::Io(detail)) => {
                 attempt += 1;
@@ -505,17 +623,23 @@ fn load_pack_members(
 pub fn pull_head<T: SyncTransport>(
     meta: &WorkspaceStore,
     transport: &T,
+    progress: ProgressSink<'_>,
 ) -> Result<(SnapshotId, PullReport), SyncError> {
     let head = transport.head()?.ok_or(SyncError::NoRemoteHead)?;
-    let report = pull_snapshot(meta, transport, &head)?;
+    let report = pull_snapshot(meta, transport, &head, progress)?;
     Ok((head, report))
 }
 
 /// Pulls one exact remote snapshot id into the local store.
+///
+/// `progress` observes the pull as it happens: bytes as each object streams
+/// in, then the object itself as the verifying writer accepts it, and every
+/// already-resident object as the resume journal is read.
 pub fn pull_snapshot<T: SyncTransport>(
     meta: &WorkspaceStore,
     transport: &T,
     id: &SnapshotId,
+    progress: ProgressSink<'_>,
 ) -> Result<PullReport, SyncError> {
     let tfm1_bytes = match meta.load_snapshot(id) {
         Ok(local) => local.to_bytes(),
@@ -526,7 +650,7 @@ pub fn pull_snapshot<T: SyncTransport>(
                 .iter()
                 .find(|grant| grant.digest == manifest)
                 .ok_or(SyncError::GrantOmitted(manifest))?;
-            let bytes = transport.download(grant)?;
+            let bytes = transport.download(grant, progress)?;
             if SnapshotId::of(&bytes) != *id {
                 return Err(SyncError::RemoteManifestCorrupt(*id));
             }
@@ -538,12 +662,19 @@ pub fn pull_snapshot<T: SyncTransport>(
     let closure = data_closure(&snapshot);
 
     let mut report = PullReport::default();
-    let missing: Vec<(ObjectDigest, u64)> = closure
-        .iter()
-        .filter(|(digest, _)| !meta.store().exists(digest))
-        .copied()
-        .collect();
-    report.skipped_local_resident = (closure.len() - missing.len()) as u64;
+    // A resident object is completed work toward readiness, and reading the
+    // journal is not free either — so it advances progress as it is found,
+    // rather than leaving a mostly-complete resume looking like a pull that
+    // has not moved at all.
+    let mut missing: Vec<(ObjectDigest, u64)> = Vec::new();
+    for (digest, length) in &closure {
+        if meta.store().exists(digest) {
+            report.skipped_local_resident += 1;
+            progress.object(*digest, *length);
+        } else {
+            missing.push((*digest, *length));
+        }
+    }
 
     for batch in missing.chunks(DOWNLOAD_GRANT_BATCH) {
         let digests: Vec<ObjectDigest> = batch.iter().map(|(digest, _)| *digest).collect();
@@ -556,7 +687,7 @@ pub fn pull_snapshot<T: SyncTransport>(
             // A single transient reset must not abandon a whole pull: a
             // multi-gigabyte fetch crosses too many packets for one-shot
             // transfer to be a defensible contract.
-            let bytes = download_with_retry(transport, grant, DOWNLOAD_ATTEMPTS)?;
+            let bytes = download_with_retry(transport, grant, DOWNLOAD_ATTEMPTS, progress)?;
             let mut writer = meta.store().writer()?;
             writer
                 .write_all(&bytes)
@@ -566,6 +697,9 @@ pub fn pull_snapshot<T: SyncTransport>(
             writer.finish_expecting(*digest, *length)?;
             report.fetched_objects += 1;
             report.fetched_bytes += length;
+            // Reported the moment this object is durable, so the next fetch
+            // starts against a counter that has already moved.
+            progress.object(*digest, *length);
         }
     }
 
@@ -588,12 +722,35 @@ pub mod http {
     use serde::Deserialize;
 
     use super::{
-        CompleteStatus, DownloadGrant, GrantsPlan, ObjectDigest, PackClaim, PackGrant, SnapshotId,
-        StagedPack, SyncPlan, SyncTransport, TransportError,
+        CompleteStatus, DownloadGrant, GrantsPlan, ObjectDigest, PackClaim, PackGrant,
+        ProgressSink, SnapshotId, StagedPack, SyncPlan, SyncTransport, TransportError,
     };
 
     const CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
     const TRANSFER_TIMEOUT: Duration = Duration::from_secs(600);
+
+    /// The read buffer one download fills before copying on. It bounds a
+    /// single `read` syscall's appetite — it is not a rate, a deadline, or a
+    /// judgement about how fast a healthy transfer ought to be.
+    const DOWNLOAD_BLOCK: usize = 1 << 20;
+
+    /// Feeds a pack to the carrier while reporting the bytes it hands over, so
+    /// one large PUT is visible while it is in flight instead of only when it
+    /// returns.
+    struct ReportingBody<'body> {
+        rest: &'body [u8],
+        progress: ProgressSink<'body>,
+    }
+
+    impl std::io::Read for ReportingBody<'_> {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let taken = out.len().min(self.rest.len());
+            out[..taken].copy_from_slice(&self.rest[..taken]);
+            self.rest = &self.rest[taken..];
+            self.progress.bytes(taken as u64);
+            Ok(taken)
+        }
+    }
 
     /// Where the bearer token comes from. A file is re-read on every call so
     /// an external refresher can rotate it without restarting the daemon.
@@ -921,7 +1078,12 @@ pub mod http {
             })
         }
 
-        fn upload_pack(&self, grant: &PackGrant, pack: &[u8]) -> Result<(), TransportError> {
+        fn upload_pack(
+            &self,
+            grant: &PackGrant,
+            pack: &[u8],
+            progress: ProgressSink<'_>,
+        ) -> Result<(), TransportError> {
             // Presigned: the grant's own headers are the whole authority and
             // are replayed verbatim — the pack checksum lives inside the
             // signature, so changed bytes refuse at the store.
@@ -929,7 +1091,23 @@ pub mod http {
             for (name, value) in &grant.headers {
                 request = request.set(name, value);
             }
-            match request.send_bytes(pack) {
+            // The body is streamed so its bytes can be reported as they leave,
+            // and the length is stated explicitly because a reader body with
+            // no `content-length` makes ureq switch to chunked framing — which
+            // the presigned signature does not cover. With it set, the wire
+            // bytes are identical to handing over the whole slice at once.
+            if !grant
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            {
+                request = request.set("content-length", &pack.len().to_string());
+            }
+            let body = ReportingBody {
+                rest: pack,
+                progress,
+            };
+            match request.send(body) {
                 Ok(_) => Ok(()),
                 Err(ureq::Error::Status(403, _)) => Err(TransportError::Expired(
                     "upload grant refused (403)".to_owned(),
@@ -1007,7 +1185,11 @@ pub mod http {
                 .collect()
         }
 
-        fn download(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError> {
+        fn download(
+            &self,
+            grant: &DownloadGrant,
+            progress: ProgressSink<'_>,
+        ) -> Result<Vec<u8>, TransportError> {
             let response = match self.agent.get(&grant.url).timeout(TRANSFER_TIMEOUT).call() {
                 Ok(response) => response,
                 Err(ureq::Error::Status(403, _)) => {
@@ -1025,11 +1207,21 @@ pub mod http {
                     return Err(TransportError::Io(transport.to_string()));
                 }
             };
+            // Read block by block rather than in one gulp, so a slow
+            // multi-megabyte object still reports movement while it arrives.
             let mut bytes = Vec::new();
             let mut reader = response.into_reader().take(grant.length + 1);
-            reader
-                .read_to_end(&mut bytes)
-                .map_err(|error| TransportError::Io(error.to_string()))?;
+            let mut block = vec![0_u8; DOWNLOAD_BLOCK];
+            loop {
+                let read = reader
+                    .read(&mut block)
+                    .map_err(|error| TransportError::Io(error.to_string()))?;
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&block[..read]);
+                progress.bytes(read as u64);
+            }
             if bytes.len() as u64 != grant.length {
                 return Err(TransportError::Io(format!(
                     "download for {} returned {} bytes, grant says {}",
