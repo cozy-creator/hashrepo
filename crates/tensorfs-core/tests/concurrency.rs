@@ -19,33 +19,25 @@
 //! Process count is deliberately small (three children plus the parent, so
 //! four concurrent writers) because this suite runs on a heavily shared box.
 //!
-//! # Multi-process coverage is currently PARKED, not deleted
+//! # Multi-process coverage was parked, and is now restored
 //!
-//! The Turso metadata-engine swap (PR #28) changed the store from
-//! multi-process-capable to **single-process exclusive**. The previous
-//! rusqlite implementation ran WAL with a 30 s busy timeout, so several
-//! processes could share one store root (many readers, serialised writers).
-//! Turso takes an exclusive lock on `metadata.sqlite3` at open, so a second
-//! process now fails at `WorkspaceStore::open` with
-//! `Locking error: ... File is locked by another process` — it cannot even
-//! open the store, let alone contend for a write.
+//! The Turso metadata-engine swap (PR #28) briefly made the store
+//! **single-process exclusive**: a second process failed at
+//! `WorkspaceStore::open` with `Locking error: ... File is locked by another
+//! process`. This suite caught it, parked these four tests with `#[ignore]`
+//! rather than deleting them, and pinned the limitation with a tripwire test.
 //!
-//! Measured boundary:
+//! The cause was ours, not Turso's: `workspace_db.rs` called the bare
+//! `turso::Builder::new_local(path).build()`, and `enable_multiprocess_wal`
+//! defaults to `false`, so the engine took a whole-file exclusive lock at
+//! open. `experimental_multiprocess_wal(true)` swaps it for shared WAL
+//! coordination. The tripwire did its job — it went red the moment the fix
+//! landed — so it is gone and these four are live again.
 //!
-//!  * several `WorkspaceStore` connections inside ONE process — still fine,
-//!    which is why the collector race below runs and passes;
-//!  * a second PROCESS opening the same root — fails at open.
-//!
-//! The four multi-process tests are therefore `#[ignore]`d rather than
-//! deleted, and [`a_second_process_cannot_currently_open_the_store`] pins the
-//! present behaviour as an executable assertion. When multi-process support
-//! returns, that pinning test fails and tells you to un-ignore the four.
-//!
-//! This is reported as a finding on the robustness PR, not fixed here:
-//! whether the store should be single-process (with the daemon mediating all
-//! access over its RPC socket) or multi-process is a design decision that
-//! belongs to the Turso lane, and quietly re-tuning its locking from a test
-//! branch would be the wrong way to settle it.
+//! Boundary worth keeping in mind: multiprocess coordination is unavailable on
+//! Windows' default IO backend and on network filesystems, where the store
+//! falls back to a single-process open. `WorkspaceStore::supports_multiprocess`
+//! reports which mode you got.
 
 #![cfg(any(unix, windows))]
 
@@ -196,10 +188,16 @@ fn join(children: Vec<std::process::Child>) {
 /// Every caller must succeed, and each unique digest must end up as exactly
 /// one correct file — no duplicates, no torn content.
 #[test]
-#[ignore = "multi-process store access regressed with the Turso swap (PR #28); see the module docs and a_second_process_cannot_currently_open_the_store"]
 fn concurrent_admissions_of_identical_bytes_converge_on_one_object() {
     let scratch = Scratch::new("admit-race");
     let meta = WorkspaceStore::open(scratch.path()).expect("parent opens the store");
+    if !meta.supports_multiprocess() {
+        eprintln!(
+            "skipping: this platform/filesystem cannot support shared WAL \
+             coordination, so the store opened single-process"
+        );
+        return;
+    }
 
     let children: Vec<_> = (1..=3)
         .map(|id| spawn(scratch.path(), "admit", id, None))
@@ -243,10 +241,16 @@ fn digest_of(meta: &WorkspaceStore, bytes: &[u8]) -> ObjectDigest {
 /// Four writers committing to their own workspaces must all land, and each
 /// workspace's generation must equal its own commit count.
 #[test]
-#[ignore = "multi-process store access regressed with the Turso swap (PR #28); see the module docs and a_second_process_cannot_currently_open_the_store"]
 fn concurrent_commits_to_separate_workspaces_all_land() {
     let scratch = Scratch::new("ws-race");
     let meta = WorkspaceStore::open(scratch.path()).expect("parent opens the store");
+    if !meta.supports_multiprocess() {
+        eprintln!(
+            "skipping: this platform/filesystem cannot support shared WAL \
+             coordination, so the store opened single-process"
+        );
+        return;
+    }
     for writer in 0..4 {
         meta.create_workspace(&format!("ws-{writer}"))
             .expect("workspace creates");
@@ -281,10 +285,16 @@ fn concurrent_commits_to_separate_workspaces_all_land() {
 /// Four writers committing to ONE workspace. Commits serialize; none is
 /// lost; the generation counter equals the total number of commits.
 #[test]
-#[ignore = "multi-process store access regressed with the Turso swap (PR #28); see the module docs and a_second_process_cannot_currently_open_the_store"]
 fn concurrent_commits_to_one_workspace_lose_nothing() {
     let scratch = Scratch::new("one-ws-race");
     let meta = WorkspaceStore::open(scratch.path()).expect("parent opens the store");
+    if !meta.supports_multiprocess() {
+        eprintln!(
+            "skipping: this platform/filesystem cannot support shared WAL \
+             coordination, so the store opened single-process"
+        );
+        return;
+    }
     meta.create_workspace("shared").expect("workspace creates");
 
     let children: Vec<_> = (1..=3)
@@ -392,10 +402,16 @@ fn a_collector_racing_live_commits_never_costs_a_committed_object() {
 /// A collector running while objects are admitted by other PROCESSES. The
 /// collector must never remove an object a live committed head references.
 #[test]
-#[ignore = "multi-process store access regressed with the Turso swap (PR #28); see the module docs and a_second_process_cannot_currently_open_the_store"]
 fn a_collector_racing_other_processes_keeps_every_referenced_object() {
     let scratch = Scratch::new("gc-proc-race");
     let meta = WorkspaceStore::open(scratch.path()).expect("parent opens the store");
+    if !meta.supports_multiprocess() {
+        eprintln!(
+            "skipping: this platform/filesystem cannot support shared WAL \
+             coordination, so the store opened single-process"
+        );
+        return;
+    }
     meta.create_workspace("main").expect("workspace creates");
 
     // Commit a tree first, so there is a live root set to protect.
@@ -466,43 +482,4 @@ fn assert_every_referenced_object_verifies(meta: &WorkspaceStore, workspace: &st
             panic!("{workspace} head references unverifiable {digest}: {error}")
         });
     }
-}
-
-/// Pins the CURRENT single-process constraint as an executable fact.
-///
-/// This is deliberately an assertion about a limitation rather than a
-/// capability, because a limitation nobody has written down is a limitation
-/// somebody will rediscover in production. `tensorfsd serve` holds the store
-/// open for its lifetime, so under today's behaviour any second process
-/// touching the same root — a CLI `seal`, a direct-ingest writer, an
-/// out-of-band GC pass — fails at open rather than contending.
-///
-/// When multi-process access returns, this test starts failing. That failure
-/// is the signal to delete it and un-ignore the four tests above; it is not a
-/// regression.
-#[test]
-fn a_second_process_cannot_currently_open_the_store() {
-    let scratch = Scratch::new("single-process");
-
-    // The parent holds the store, exactly as the daemon would.
-    let held = WorkspaceStore::open(scratch.path()).expect("the first opener succeeds");
-    held.create_workspace("main").expect("workspace creates");
-
-    let child = spawn(scratch.path(), "admit", 1, None);
-    let output = child.wait_with_output().expect("child is reaped");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(
-        !output.status.success(),
-        "a second process opened the store while another held it — multi-process \
-         access appears to work again; delete this test and un-ignore the four \
-         multi-process tests in this file"
-    );
-    assert!(
-        stderr.contains("Locking error") || stderr.contains("locked by another process"),
-        "the second process failed for an unexpected reason: {stderr}"
-    );
-
-    // The store itself is undamaged by the refused open.
-    Consistency::scan(scratch.path()).assert_intact("after a refused second open");
 }
