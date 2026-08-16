@@ -124,6 +124,15 @@ impl Drop for Daemon {
     }
 }
 
+/// Whether `mountpoint` is in the kernel's mount table right now. Release
+/// unmounts before it answers, so this is an exact observation, not a poll.
+fn is_mounted(mountpoint: &str) -> bool {
+    std::fs::read_to_string("/proc/mounts")
+        .expect("mount table reads")
+        .lines()
+        .any(|line| line.split(' ').nth(1) == Some(mountpoint))
+}
+
 fn assert_no_mounts_under(root: &Path) {
     let table = std::fs::read_to_string("/proc/mounts").expect("mount table reads");
     let prefix = root.display().to_string();
@@ -525,14 +534,21 @@ fn a_closed_connection_releases_every_mount_it_opened() {
     drop(first);
 
     let mut second = daemon.connect();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // Both conditions belong in the SAME poll. The teardown detaches entries
+    // under the state mutex and drops them after releasing it — deliberately,
+    // so a slow unmount cannot hold every other connection hostage — so an
+    // empty mount table does not yet imply an unmounted mountpoint. Asserting
+    // the mountpoint immediately after the table went empty raced that
+    // ordering and failed under load.
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let status = ok(&mut second, 1, "status", json!({}));
-        if status["mounts"]
+        let reaped = status["mounts"]
             .as_array()
             .expect("a mounts list")
             .is_empty()
-        {
+            && !Path::new(&mountpoint).exists();
+        if reaped {
             break;
         }
         assert!(
@@ -541,11 +557,93 @@ fn a_closed_connection_releases_every_mount_it_opened() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
-    assert!(
-        !Path::new(&mountpoint).exists(),
-        "the abandoned mountpoint is gone"
+
+    daemon.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Leases are connection-bound: only the connection that opened a mount may
+/// release it.
+///
+/// The lifecycle test above releases lease 999, which no connection holds and
+/// no daemon ever issued. That refusal comes from `detach` missing the entry,
+/// so it is produced with or without the ownership check and proves nothing
+/// about ownership. The condition that separates the two is a lease that DOES
+/// exist and belongs to somebody else, which needs a real mount and a second
+/// live connection.
+///
+/// Nothing here is timed. The owner's `create_workspace` round trip has
+/// already returned before the intruder is even connected, so the lease is in
+/// the daemon's table when the foreign release arrives; the refusal cannot be
+/// a race with an unfinished mount.
+#[test]
+fn one_connection_cannot_release_another_connections_lease() {
+    if !fuse_available() {
+        return;
+    }
+    let root = tempdir("rpc-foreign-release");
+    let daemon = Daemon::spawn(&root);
+
+    let mut owner = daemon.connect();
+    let opened = ok(
+        &mut owner,
+        1,
+        "create_workspace",
+        json!({"workspace": "held"}),
+    );
+    let lease = opened["lease"].as_u64().expect("a lease id");
+    let mountpoint = opened["mountpoint"]
+        .as_str()
+        .expect("a mountpoint")
+        .to_owned();
+    assert!(is_mounted(&mountpoint), "the owner's mount is live");
+
+    let mut intruder = daemon.connect();
+    // Prove the intruder's connection is up and dispatching before it tries
+    // the foreign lease, so a refusal can never be an artefact of a
+    // half-established connection.
+    assert_eq!(
+        ok(&mut intruder, 1, "status", json!({}))["mounts"]
+            .as_array()
+            .expect("a mounts list")
+            .len(),
+        1,
+        "the intruder sees the owner's mount"
+    );
+    assert_eq!(
+        error_code(&mut intruder, 2, "release", json!({"lease": lease})),
+        "unknown-lease",
+        "a foreign connection must not be able to release this lease"
     );
 
+    // The refusal must also be a no-op: refusing after tearing the mount down
+    // would be the same bug with a nicer error code.
+    assert!(
+        is_mounted(&mountpoint),
+        "a refused release must leave the mount standing"
+    );
+    assert_eq!(
+        ok(&mut intruder, 3, "status", json!({}))["mounts"]
+            .as_array()
+            .expect("a mounts list")
+            .len(),
+        1,
+        "the lease survives the foreign release attempt"
+    );
+
+    // And the real owner is unaffected by the attempt.
+    ok(&mut owner, 2, "release", json!({"lease": lease}));
+    assert!(
+        !is_mounted(&mountpoint),
+        "the owner's own release still unmounts"
+    );
+    assert!(
+        !Path::new(&mountpoint).exists(),
+        "the owner's own release still removes the mountpoint"
+    );
+
+    drop(intruder);
+    drop(owner);
     daemon.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }
