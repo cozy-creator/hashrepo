@@ -185,8 +185,18 @@ impl KillWindow {
 fn a_push_killed_repeatedly_still_converges_and_never_re_uploads() {
     let source = Scratch::new("push-kill-src");
     let hub = Scratch::new("push-kill-hub");
-    let (meta, id) = sealed_workspace(source.path(), "publisher", &corpus());
+    let id = {
+        let (meta, id) = sealed_workspace(source.path(), "publisher", &corpus());
+        drop(meta);
+        id
+    };
     let done = source.path().join("done.marker");
+
+    // The publisher store must NOT stay open across a child spawn: since the
+    // Turso swap a second process cannot open a store another process holds
+    // (see the concurrency module docs), and here the child pushes FROM this
+    // very store. So every parent-side inspection below opens the store, uses
+    // it, and drops it again before the next child runs.
 
     // Calibrate against a throwaway hub so the real one starts empty.
     let warmup = Scratch::new("push-kill-warm");
@@ -218,7 +228,10 @@ fn a_push_killed_repeatedly_still_converges_and_never_re_uploads() {
         // push: push reads locally and writes remotely.
         Consistency::scan(source.path())
             .assert_intact(&format!("seed {seed:#x}, push attempt {attempt}"));
-        assert_snapshot_fully_backed(&meta, &id, "publisher after an interrupted push");
+        {
+            let meta = WorkspaceStore::open(source.path()).expect("publisher reopens");
+            assert_snapshot_fully_backed(&meta, &id, "publisher after an interrupted push");
+        }
     }
 
     // Whatever the kills did, a final unhindered run must converge.
@@ -242,6 +255,7 @@ fn a_push_killed_repeatedly_still_converges_and_never_re_uploads() {
     );
 
     // Converged means converged: re-pushing moves nothing.
+    let meta = WorkspaceStore::open(source.path()).expect("publisher reopens");
     let report = push_snapshot(&meta, &transport, &id, Some(&id), PushOptions::default())
         .expect("a settled push succeeds");
     assert_eq!(
