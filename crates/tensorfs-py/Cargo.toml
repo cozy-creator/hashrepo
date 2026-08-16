@@ -1,0 +1,50 @@
+[package]
+name = "tensorfs-py"
+version = "0.1.0"
+description = "The Python extension module for TensorFS"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+# The extension module Python imports as `tensorfs._tensorfs`. `cdylib` only:
+# nothing in this workspace links it as a Rust library.
+name = "_tensorfs"
+crate-type = ["cdylib"]
+
+[features]
+# On by default so `maturin build` and `cargo build -p tensorfs-py` agree.
+# It is what makes the cdylib import-safe: the extension resolves CPython
+# symbols from the interpreter that loads it instead of linking libpython.
+#
+# It is also why this crate is excluded from the workspace `cargo test` and
+# `cargo clippy --all-targets` runs -- a TEST binary is an executable and
+# cannot leave those symbols undefined. The gate for this crate is the Python
+# suite running against the real built wheel, not a Rust unit test.
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+# `store` only. The bound surface calls no HTTP client and no SQL engine, so
+# the wheel links neither.
+tensorfs-core = { path = "../tensorfs-core", default-features = false, features = [
+    "store",
+] }
+
+# abi3-py311: ONE wheel per platform for every CPython from 3.11 up, instead
+# of one per interpreter version.
+#
+# The floor is 3.11 and not lower because CPython added `Py_buffer`,
+# `Py_bf_getbuffer`/`Py_bf_releasebuffer` and `PyMemoryView_FromBuffer` to the
+# stable ABI in 3.11 (Misc/stable_abi.toml, bpo-45459). Below that floor a
+# zero-copy `memoryview` over a CAS object is not expressible under the
+# Limited API at all, and copying every tensor to keep the ABI tidy is the one
+# trade this project must not make.
+#
+# abi3 does NOT cover free-threaded CPython: PyO3 detects `Py_GIL_DISABLED`,
+# warns, and falls back to a version-specific free-threaded build. A stable
+# free-threaded ABI exists (`abi3t`) but its floor is CPython 3.15, which is
+# unreleased. Free-threaded interpreters therefore build from the sdist.
+pyo3 = { version = "0.29.2", features = ["abi3-py311"] }

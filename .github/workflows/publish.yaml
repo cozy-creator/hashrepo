@@ -1,0 +1,168 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+jobs:
+  gates:
+    name: Test tagged release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require the project version tag on master
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match pyproject version ${version}" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin master
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/master; then
+            echo "Tagged commit ${GITHUB_SHA} is not on origin/master" >&2
+            exit 1
+          fi
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: dtolnay/rust-toolchain@1.91.0
+        with:
+          components: clippy,rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install locked Python dependencies
+        run: uv sync --locked --all-extras
+
+      - name: Verify Python package
+        run: |
+          uv run ruff check python
+          uv run mypy
+          uv run pytest -q
+
+      - name: Verify Go package
+        run: |
+          go test -race ./...
+          go vet ./...
+
+      # tensorfs-py is excluded from the test and all-targets clippy runs on
+      # purpose: it enables `pyo3/extension-module` by default, which leaves
+      # CPython symbols undefined for the interpreter to resolve at import.
+      # That is correct for a cdylib and impossible for a test executable.
+      # Its gate is the Python suite above running against the real extension.
+      - name: Verify Rust workspace
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --all-features --exclude tensorfs-py -- -D warnings
+          cargo clippy -p tensorfs-py --lib -- -D warnings
+          cargo test --workspace --all-features --exclude tensorfs-py
+
+  build:
+    name: Build distributions
+    needs: gates
+    permissions:
+      contents: read
+    uses: ./.github/workflows/wheels.yaml
+
+  publish:
+    name: Publish tagged distributions
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Retrieve tested wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Retrieve the tested sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist/
+
+      - name: Every platform wheel and the sdist are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l dist/
+          wheels="$(ls dist/*.whl | wc -l)"
+          # The matrix builds six. A silently shrinking matrix would otherwise
+          # publish a release that drops a platform without notice.
+          if [[ "${wheels}" -ne 6 ]]; then
+            echo "::error::expected 6 platform wheels, found ${wheels}"
+            exit 1
+          fi
+          test -n "$(ls dist/*.tar.gz)" || { echo "::error::no sdist"; exit 1; }
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  verify:
+    name: Verify PyPI release
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Wait for exact version metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          url="https://pypi.org/pypi/tensorfs/${version}/json"
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error "${url}" > release.json; then
+              python3 - <<'PY'
+          import json
+
+          with open("release.json", encoding="utf-8") as source:
+              release = json.load(source)
+          filenames = {item["filename"] for item in release["urls"]}
+          wheels = {name for name in filenames if name.endswith(".whl")}
+          assert any(name.endswith(".tar.gz") for name in filenames), filenames
+
+          # Every wheel is abi3 -- one per platform, not one per interpreter.
+          not_abi3 = {name for name in wheels if "-abi3-" not in name}
+          assert not not_abi3, not_abi3
+
+          # The platforms the matrix promises actually reached PyPI. No
+          # Windows: the pure-Python half imports `fcntl`, so a win_* wheel
+          # could not even be imported. See wheels.yaml.
+          required = [
+              "manylinux", "musllinux", "macosx",
+              "x86_64", "aarch64", "arm64",
+          ]
+          missing = [tag for tag in required if not any(tag in name for name in wheels)]
+          assert not missing, f"missing platform tags {missing} in {sorted(wheels)}"
+          print(f"published {len(wheels)} wheels plus an sdist")
+          PY
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "PyPI did not expose tensorfs ${version} within 60 seconds" >&2
+          exit 1

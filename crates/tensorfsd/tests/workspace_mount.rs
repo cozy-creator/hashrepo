@@ -1,0 +1,1870 @@
+#![cfg(target_os = "linux")]
+
+use std::ffi::{CStr, CString};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+use std::process;
+use std::sync::{Barrier, Mutex};
+use std::time::{Duration, Instant};
+
+use tensorfs_core::planner::PlannerId;
+use tensorfs_core::tfm1::{Entry, FileRecord};
+use tensorfs_core::workspace::{Mutation, WorkspaceStore};
+use tensorfsd::mount_workspace;
+
+/// Real mounts are a shared-kernel resource; the machine budget is two at a
+/// time, so the mount-bearing tests serialize on one lock.
+static MOUNT_LOCK: Mutex<()> = Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    // A poisoned lock only means another test failed; these tests share
+    // nothing but the two-mount machine budget.
+    MOUNT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+const MIB: u64 = 1024 * 1024;
+
+fn fuse_available() -> bool {
+    if !Path::new("/dev/fuse").exists() {
+        eprintln!("skipping: /dev/fuse is not available");
+        return false;
+    }
+    if process::Command::new("fusermount3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: fusermount3 is not available");
+        return false;
+    }
+    true
+}
+
+fn unique_dir(label: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "tensorfsd-{label}-{}-{:x}",
+        process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .expect("clock is sane")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&path).expect("test directory creates");
+    path
+}
+
+fn mounted_here(mountpoint: &Path) -> bool {
+    let mounts = fs::read_to_string("/proc/self/mounts").expect("mount table reads");
+    let needle = mountpoint.to_str().expect("test paths are UTF-8");
+    mounts
+        .lines()
+        .any(|line| line.split_whitespace().nth(1) == Some(needle))
+}
+
+fn pattern(seed: u8, length: usize) -> Vec<u8> {
+    let mut bytes = vec![0_u8; length];
+    let mut state = u64::from(seed) | 1;
+    for chunk in bytes.chunks_mut(8) {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        for (index, byte) in chunk.iter_mut().enumerate() {
+            *byte = (state >> (index * 8)) as u8;
+        }
+    }
+    bytes
+}
+
+/// One directory entry exactly as `getdents64` delivered it. `std::fs::read_dir`
+/// filters `.` and `..` out and never exposes `d_ino`/`d_type`, so the entries
+/// the mount actually serves are only visible through the raw call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Dirent {
+    name: String,
+    ino: u64,
+    kind: u8,
+}
+
+fn raw_dirents(path: &Path) -> Vec<Dirent> {
+    let c_path = CString::new(path.as_os_str().as_bytes()).expect("test paths have no NUL");
+    // SAFETY: `c_path` is a NUL-terminated path, and every pointer below is
+    // used only while the stream is open.
+    let stream = unsafe { libc::opendir(c_path.as_ptr()) };
+    assert!(
+        !stream.is_null(),
+        "opendir({}) failed: {}",
+        path.display(),
+        std::io::Error::last_os_error()
+    );
+    let mut entries = Vec::new();
+    loop {
+        // A NULL return means end-of-stream OR failure; only errno separates
+        // them, so it must start clear.
+        unsafe { *libc::__errno_location() = 0 };
+        let entry = unsafe { libc::readdir(stream) };
+        if entry.is_null() {
+            let error = std::io::Error::last_os_error();
+            assert_eq!(
+                error.raw_os_error(),
+                Some(0),
+                "readdir({}) failed: {error}",
+                path.display()
+            );
+            break;
+        }
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }
+            .to_str()
+            .expect("test names are UTF-8")
+            .to_owned();
+        entries.push(Dirent {
+            name,
+            ino: unsafe { (*entry).d_ino },
+            kind: unsafe { (*entry).d_type },
+        });
+    }
+    unsafe { libc::closedir(stream) };
+    entries
+}
+
+/// The listed names, sorted, including `.` and `..`.
+fn dirent_names(entries: &[Dirent]) -> Vec<String> {
+    let mut names: Vec<String> = entries.iter().map(|entry| entry.name.clone()).collect();
+    names.sort();
+    names
+}
+
+fn dirent<'a>(entries: &'a [Dirent], name: &str) -> &'a Dirent {
+    let mut found = entries.iter().filter(|entry| entry.name == name);
+    let entry = found
+        .next()
+        .unwrap_or_else(|| panic!("{name} is listed, got {:?}", dirent_names(entries)));
+    assert!(found.next().is_none(), "{name} is listed exactly once");
+    entry
+}
+
+fn count_store_objects(root: &Path) -> usize {
+    let mut count = 0;
+    let namespace = root.join("objects").join("sha256");
+    for first in fs::read_dir(&namespace).expect("object namespace lists") {
+        let first = first.expect("object fanout entry reads");
+        if !first.path().is_dir() {
+            continue;
+        }
+        for second in fs::read_dir(first.path()).expect("object fanout lists") {
+            let second = second.expect("object fanout entry reads");
+            count += fs::read_dir(second.path())
+                .expect("object leaf lists")
+                .count();
+        }
+    }
+    count
+}
+
+fn file_digests(store: &WorkspaceStore, workspace: &str, path: &str) -> Vec<String> {
+    let tree = store.head_tree(workspace).expect("head tree builds");
+    for (entry_path, entry) in tree.entries() {
+        if entry_path == path
+            && let Entry::File { records, .. } = entry
+        {
+            return records
+                .iter()
+                .map(|record| match record {
+                    FileRecord::Data { digest, .. } => digest.to_string(),
+                    FileRecord::Hole { length } => format!("hole:{length}"),
+                })
+                .collect();
+        }
+    }
+    panic!("{path} is not a committed file");
+}
+
+fn proc_io(pid: u32) -> (u64, u64) {
+    let raw = fs::read_to_string(format!("/proc/{pid}/io")).expect("daemon io stats read");
+    let field = |name: &str| {
+        raw.lines()
+            .find(|line| line.starts_with(name))
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|value| value.parse::<u64>().ok())
+            .expect("io stat field parses")
+    };
+    (field("read_bytes:"), field("write_bytes:"))
+}
+
+/// The daemon's cumulative major faults — page faults that had to go to the
+/// storage layer. Executable text paging lands here, and `read_bytes` counts
+/// those same bytes, so this separates "the workload read the file" from "the
+/// process read itself".
+fn proc_majflt(pid: u32) -> u64 {
+    let raw = fs::read_to_string(format!("/proc/{pid}/stat")).expect("daemon stat reads");
+    // Field 12 (1-based) is majflt. The comm field is parenthesised and may
+    // contain spaces, so split after the closing paren rather than on it.
+    let tail = raw.rsplit_once(')').expect("stat has a comm field").1;
+    tail.split_whitespace()
+        .nth(9)
+        .and_then(|value| value.parse::<u64>().ok())
+        .expect("majflt parses")
+}
+
+/// Pull the daemon's executable into the page cache before a measured window.
+///
+/// `read_bytes` counts bytes fetched from the storage layer, and the daemon
+/// demand-pages its own text: `BinMount::spawn` returns as soon as the mount
+/// appears, so the compose path has never executed and none of its pages are
+/// resident. Those faults would otherwise land inside the measurement and are
+/// indistinguishable from the workload's own reads. Reading the file populates
+/// the shared per-inode page cache, so the daemon's later text faults are
+/// minor and cost no block I/O.
+///
+/// This does not weaken the bound — it removes a term that was never part of
+/// what the bound is about.
+fn prefault_daemon_image() {
+    let image = Path::new(env!("CARGO_BIN_EXE_tensorfsd"));
+    let bytes = fs::read(image).expect("daemon image reads");
+    // Defeat any optimisation that would elide the read entirely.
+    assert!(!bytes.is_empty(), "the daemon image is not empty");
+}
+
+struct BinMount {
+    child: process::Child,
+    mountpoint: PathBuf,
+    /// Set once the daemon has been signalled and its endpoint dealt with, so
+    /// the panic-path cleanup in `Drop` stands down.
+    reaped: bool,
+}
+
+impl Drop for BinMount {
+    fn drop(&mut self) {
+        if self.reaped {
+            return;
+        }
+        // A test that panics mid-way — the normal state of affairs while
+        // red-proving — would otherwise leave a live daemon and a mount entry
+        // behind on a machine several lanes share. An in-process
+        // `mount_workspace` unmounts itself when its session drops; a spawned
+        // daemon has nothing that would. The inherited stdout pipe is the
+        // other half: a leaked daemon holds it open, so cargo waits on it
+        // forever and an ordinary assertion failure presents as a hung suite.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = process::Command::new("fusermount3")
+            .args(["-u", "-z"])
+            .arg(&self.mountpoint)
+            .status();
+    }
+}
+
+impl BinMount {
+    fn spawn(root: &Path, workspace: &str, mountpoint: &Path) -> Self {
+        let mut child = process::Command::new(env!("CARGO_BIN_EXE_tensorfsd"))
+            .args([
+                "mount-workspace",
+                "--store",
+                root.to_str().expect("test paths are UTF-8"),
+                "--workspace",
+                workspace,
+                mountpoint.to_str().expect("test paths are UTF-8"),
+            ])
+            // Null stdio: an inherited pipe would keep the test harness's
+            // output stream open for as long as a leaked daemon lives.
+            .stdout(process::Stdio::null())
+            .stderr(process::Stdio::null())
+            .spawn()
+            .expect("daemon spawns");
+        for _ in 0..100 {
+            if mounted_here(mountpoint) {
+                return Self {
+                    child,
+                    mountpoint: mountpoint.to_path_buf(),
+                    reaped: false,
+                };
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("daemon did not mount in time");
+    }
+
+    fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    fn sigterm_and_wait(mut self) {
+        let _ = process::Command::new("kill")
+            .args(["-TERM", &self.child.id().to_string()])
+            .status();
+        let _ = self.child.wait();
+        self.reaped = true;
+        assert!(
+            !mounted_here(&self.mountpoint),
+            "a terminated daemon must leave no mount behind"
+        );
+    }
+
+    fn sigkill_and_reap(mut self) {
+        let _ = process::Command::new("kill")
+            .args(["-KILL", &self.child.id().to_string()])
+            .status();
+        let _ = self.child.wait();
+        // SIGKILL leaves a disconnected FUSE endpoint; reap it explicitly the
+        // way an operator would.
+        let _ = process::Command::new("fusermount3")
+            .args(["-u", "-z"])
+            .arg(&self.mountpoint)
+            .status();
+        self.reaped = true;
+        for _ in 0..50 {
+            if !mounted_here(&self.mountpoint) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("stale mount survived cleanup");
+    }
+}
+
+#[test]
+fn ordinary_writes_survive_fsync_and_remount_byte_exact() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("ws-root");
+    let mountpoint = unique_dir("ws-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let base = mount.mountpoint();
+
+    fs::create_dir(base.join("models")).expect("mkdir works");
+    let payload = pattern(7, (2 * MIB) as usize);
+    let file_path = base.join("models").join("weights.bin");
+    let file = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(&file_path)
+        .expect("create works");
+    file.write_all_at(&payload, 0).expect("write works");
+
+    // The dirty overlay must serve reads BEFORE any fsync composes it.
+    let mut before_fsync = vec![0_u8; payload.len()];
+    file.read_exact_at(&mut before_fsync, 0)
+        .expect("pre-fsync read works");
+    assert_eq!(before_fsync, payload, "reads merge the newest dirty ranges");
+
+    // An overlapping rewrite wins over the older dirty bytes.
+    let overwrite = pattern(9, 4096);
+    file.write_all_at(&overwrite, 1024).expect("rewrite works");
+    let mut merged = vec![0_u8; 4096];
+    file.read_exact_at(&mut merged, 1024)
+        .expect("post-rewrite read works");
+    assert_eq!(merged, overwrite, "the newest dirty range wins");
+
+    file.sync_all().expect("fsync works");
+    drop(file);
+
+    fs::write(base.join("config.json"), b"{\"kind\":\"e2e\"}\n").expect("small write works");
+    std::os::unix::fs::symlink("models/weights.bin", base.join("latest")).expect("symlink works");
+    fs::hard_link(&file_path, base.join("models").join("alias.bin")).expect("hardlink works");
+    fs::set_permissions(&file_path, fs::Permissions::from_mode(0o755)).expect("chmod works");
+
+    let grown = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(base.join("sparse.bin"))
+        .expect("sparse file creates");
+    grown.write_all_at(b"head", 0).expect("head write works");
+    grown.set_len(3 * MIB).expect("truncate-grow works");
+    grown.sync_all().expect("sparse fsync works");
+    drop(grown);
+
+    let shrunk_path = base.join("shrunk.bin");
+    let shrunk = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&shrunk_path)
+        .expect("shrunk file creates");
+    shrunk
+        .write_all_at(&pattern(11, MIB as usize), 0)
+        .expect("shrunk write works");
+    shrunk.set_len(1000).expect("truncate-shrink works");
+    shrunk.sync_all().expect("shrunk fsync works");
+    drop(shrunk);
+
+    fs::rename(base.join("config.json"), base.join("config-final.json")).expect("rename works");
+
+    let file_ino = fs::metadata(&file_path).expect("metadata reads").ino();
+    let alias_meta = fs::metadata(base.join("models").join("alias.bin")).expect("alias reads");
+    assert_eq!(alias_meta.ino(), file_ino, "a hardlink shares its inode");
+    assert_eq!(alias_meta.nlink(), 2, "a hardlink group counts two links");
+
+    mount.unmount();
+    assert!(!mounted_here(&mountpoint), "unmount leaves a clean table");
+
+    // Everything committed must survive a completely fresh mount.
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let base = mount.mountpoint();
+    let mut expected = payload.clone();
+    expected[1024..1024 + 4096].copy_from_slice(&overwrite);
+    assert_eq!(
+        fs::read(base.join("models").join("weights.bin")).expect("weights read"),
+        expected,
+        "committed bytes are byte-exact after remount"
+    );
+    assert_eq!(
+        fs::read(base.join("models").join("alias.bin")).expect("alias read"),
+        expected,
+        "the hardlink serves the same bytes"
+    );
+    let mode = fs::metadata(base.join("models").join("weights.bin"))
+        .expect("metadata reads")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o111, 0o111, "the executable bit survived");
+    assert_eq!(
+        fs::read_link(base.join("latest")).expect("readlink works"),
+        PathBuf::from("models/weights.bin"),
+        "the symlink target survived"
+    );
+    assert_eq!(
+        fs::read(base.join("config-final.json")).expect("renamed read"),
+        b"{\"kind\":\"e2e\"}\n",
+        "the renamed file survived under its new name"
+    );
+    let sparse = fs::read(base.join("sparse.bin")).expect("sparse read");
+    assert_eq!(sparse.len() as u64, 3 * MIB, "truncate-grow set the size");
+    assert_eq!(&sparse[..4], b"head", "the written head survived");
+    assert!(
+        sparse[4..].iter().all(|byte| *byte == 0),
+        "grown bytes read as zeros"
+    );
+    let shrunk = fs::read(base.join("shrunk.bin")).expect("shrunk read");
+    assert_eq!(
+        shrunk,
+        pattern(11, MIB as usize)[..1000],
+        "shrink kept the prefix"
+    );
+
+    mount.unmount();
+    assert!(
+        !mounted_here(&mountpoint),
+        "final unmount leaves a clean table"
+    );
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+#[test]
+fn an_8_kib_overwrite_recomposes_exactly_the_touched_object() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("cow-root");
+    let mountpoint = unique_dir("cow-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    // Phase 1: a three-object file written through a real mount.
+    let daemon = BinMount::spawn(&root, "main", &mountpoint);
+    let big_path = mountpoint.join("big.bin");
+    let big = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&big_path)
+        .expect("big file creates");
+    let chunk = pattern(3, (8 * MIB) as usize);
+    for index in 0..20 {
+        big.write_all_at(&chunk, index * 8 * MIB)
+            .expect("bulk write works");
+    }
+    big.sync_all().expect("bulk fsync works");
+    drop(big);
+    daemon.sigterm_and_wait();
+
+    let meta = WorkspaceStore::open(&root).expect("store reopens");
+    let before = file_digests(&meta, "main", "big.bin");
+    assert_eq!(before.len(), 3, "160 MiB composes to three grid objects");
+    let objects_before = count_store_objects(&root);
+    drop(meta);
+
+    // Phase 2: an 8 KiB overwrite inside the second object, with the daemon's
+    // real I/O accounted, so a whole-file recompose cannot hide.
+    let daemon = BinMount::spawn(&root, "main", &mountpoint);
+    // The daemon has only run the mount path so far; its compose text is not
+    // resident and would fault in on the storage layer inside the window below.
+    prefault_daemon_image();
+    let majflt_before = proc_majflt(daemon.pid());
+    let (read_before, write_before) = proc_io(daemon.pid());
+    let big = OpenOptions::new()
+        .write(true)
+        .open(mountpoint.join("big.bin"))
+        .expect("big file reopens");
+    big.write_all_at(&pattern(5, 8192), 70 * MIB)
+        .expect("overwrite works");
+    big.sync_all().expect("overwrite fsync works");
+    drop(big);
+    let (read_after, write_after) = proc_io(daemon.pid());
+    let majflt_delta = proc_majflt(daemon.pid()) - majflt_before;
+    daemon.sigterm_and_wait();
+
+    let read_delta = read_after - read_before;
+    let write_delta = write_after - write_before;
+    println!(
+        "8 KiB overwrite: read {} KiB, wrote {} KiB, {majflt_delta} major faults",
+        read_delta / 1024,
+        write_delta / 1024,
+    );
+    // A gross ceiling on block reads, and deliberately NOT the proof that only
+    // one slot was composed. Measured 2026-08-15, both with a warm cache and
+    // with every object evicted first: a single-slot compose and a forced
+    // whole-file recompose read the SAME volume (0 KiB warm, 96 MiB cold in
+    // both cases). Read volume here is invariant under the regression, so it
+    // cannot discriminate it — the write bound below is what does, and it was
+    // red-proved against exactly that mutation. The exact composition of the
+    // cold-cache 96 MiB was not run to ground; see the PR body.
+    assert!(
+        read_delta < 96 * MIB,
+        "the overwrite path must not explode block reads \
+         (read {read_delta} bytes across {majflt_delta} major faults; a non-zero fault \
+          count means the daemon paged itself in and the prefault did not hold)"
+    );
+    // THE discriminating assertion: a whole-file recompose writes 160 MiB here
+    // against one object's 64 MiB, and forcing every slot to compose fails
+    // exactly this line.
+    assert!(
+        write_delta < 112 * MIB,
+        "composing one 64 MiB slot writes one object, not the file (wrote {write_delta} bytes)"
+    );
+
+    let meta = WorkspaceStore::open(&root).expect("store reopens again");
+    let after = file_digests(&meta, "main", "big.bin");
+    assert_eq!(after.len(), 3, "the record count is unchanged");
+    assert_eq!(before[0], after[0], "the first object digest is untouched");
+    assert_eq!(before[2], after[2], "the third object digest is untouched");
+    assert_ne!(
+        before[1], after[1],
+        "exactly the overwritten object changed"
+    );
+    assert_eq!(
+        count_store_objects(&root),
+        objects_before + 1,
+        "exactly one new object was admitted"
+    );
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// Two local writers through one live mount.
+///
+/// Disjoint ranges of one file must both land in full; overlapping ranges must
+/// order normally, so every byte belongs to one writer or the other and never
+/// to a torn mixture of the two; and neither writer may ever see a CAS-shaped
+/// refusal (`EAGAIN`/`EBUSY`/`EIO`) leak out of the commit path — the metadata
+/// generation advance is the daemon's problem, not the caller's.
+///
+/// Complementary to `two_o_append_writers_never_overwrite_each_other`, not a
+/// second copy of it: that arm holds the append contract, where the offset is
+/// the filesystem's to choose. This one holds POSITIONAL writes, where both
+/// callers name their own offsets and the overlay has to merge or order them.
+///
+/// **What this arm does NOT prove, said plainly, because the obvious reading is
+/// wrong.** There is no per-inode lock in `workspace_fs.rs`. There is no lock
+/// at all: the file holds neither a `Mutex` nor an `RwLock`. Ordering comes
+/// entirely from `fuser::spawn_mount2`'s single session thread, which takes
+/// `&mut self` for every operation, so operations on ALL inodes are globally
+/// serialized. "Serializes per inode" is therefore true today only as a
+/// consequence of serializing everything, and this test cannot tell the two
+/// apart — it would pass identically under either design. The throughput
+/// ceiling that global serialization implies is not measured here and not
+/// asserted anywhere; a real per-inode lock would be a behaviour change this
+/// arm would not notice.
+#[test]
+fn concurrent_writers_merge_disjoint_ranges_and_order_overlaps_without_cas_failures() {
+    use std::sync::Barrier;
+
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("concurrent-root");
+    let mountpoint = unique_dir("concurrent-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let base = mount.mountpoint().to_path_buf();
+
+    // ---- disjoint ranges ----
+    //
+    // Sixteen interleaved 256 KiB stripes, so the two writers' FUSE requests
+    // are forced to alternate rather than running as two contiguous bursts.
+    const STRIPE: usize = 256 * 1024;
+    const STRIPES: usize = 16;
+    let stripes: Vec<Vec<u8>> = (0..STRIPES)
+        .map(|index| pattern(40 + index as u8, STRIPE))
+        .collect();
+    let expected: Vec<u8> = stripes.concat();
+
+    let disjoint_path = base.join("disjoint.bin");
+    File::create(&disjoint_path).expect("disjoint file creates");
+    let gate = Barrier::new(2);
+    let failures: Vec<String> = std::thread::scope(|scope| {
+        let workers: Vec<_> = [0_usize, 1]
+            .into_iter()
+            .map(|parity| {
+                let gate = &gate;
+                let stripes = &stripes;
+                let disjoint_path = &disjoint_path;
+                scope.spawn(move || {
+                    let file = OpenOptions::new()
+                        .write(true)
+                        .open(disjoint_path)
+                        .expect("writer opens its own descriptor");
+                    let mut failures = Vec::new();
+                    gate.wait();
+                    for index in (parity..STRIPES).step_by(2) {
+                        if let Err(error) =
+                            file.write_all_at(&stripes[index], (index * STRIPE) as u64)
+                        {
+                            failures.push(format!("writer {parity} stripe {index}: {error:?}"));
+                        }
+                    }
+                    if let Err(error) = file.sync_all() {
+                        failures.push(format!("writer {parity} fsync: {error:?}"));
+                    }
+                    failures
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| worker.join().expect("writers do not panic"))
+            .collect()
+    });
+    assert!(
+        failures.is_empty(),
+        "a concurrent writer was refused: {failures:?}"
+    );
+    assert_eq!(
+        fs::read(&disjoint_path).expect("disjoint read"),
+        expected,
+        "disjoint concurrent ranges must both land in full"
+    );
+
+    // ---- overlapping ranges ----
+    //
+    // Both writers rewrite the same extent, several times each. There is no
+    // ordering to assert between them, so the assertion is the one that
+    // actually matters: whatever order they land in, every byte must come from
+    // one writer or the other AT THAT POSITION. A byte belonging to neither is
+    // a torn write or a misplaced overlay piece.
+    //
+    // 4 MiB, not 1 MiB, and the size is load-bearing. The mount negotiates
+    // FUSE_MAX_PAGES, so `max_write` is the kernel's 1 MiB ceiling: a 1 MiB
+    // pwrite arrives as ONE `write` op, the session thread runs it whole, and
+    // the later writer wins the entire extent every time — measured, 100%/0%.
+    // That is a real property, and it is also a test that cannot observe
+    // interleaving at all. Above `max_write` each pwrite splits into several
+    // ops and the two writers genuinely interleave.
+    const OVERLAP: usize = 4 * MIB as usize;
+    const ROUNDS: usize = 4;
+    // The two extents overlap in their middle half and are exclusive at their
+    // ends. That is what makes the arm deterministic instead of a race the
+    // assertions have to tolerate: the contested middle may land in either
+    // order, but the head belongs only to `left` and the tail only to `right`,
+    // so a writer that was LOST — not merely ordered second — is a hard
+    // failure rather than a lucky 100%/0% split.
+    const QUARTER: usize = OVERLAP / 4;
+    let left = pattern(101, OVERLAP);
+    let right = pattern(103, OVERLAP);
+    let differ = left.iter().zip(&right).filter(|(a, b)| a != b).count();
+    assert!(
+        differ > OVERLAP * 9 / 10,
+        "the two overlap patterns are too similar to discriminate ({differ} of {OVERLAP})"
+    );
+
+    let overlap_path = base.join("overlap.bin");
+    File::create(&overlap_path).expect("overlap file creates");
+    let gate = Barrier::new(2);
+    let failures: Vec<String> = std::thread::scope(|scope| {
+        let workers: Vec<_> = [
+            ("left", &left, 0_usize, OVERLAP - QUARTER),
+            ("right", &right, QUARTER, OVERLAP),
+        ]
+        .into_iter()
+        .map(|(label, payload, from, to)| {
+            let gate = &gate;
+            let overlap_path = &overlap_path;
+            scope.spawn(move || {
+                let file = OpenOptions::new()
+                    .write(true)
+                    .open(overlap_path)
+                    .expect("writer opens its own descriptor");
+                let mut failures = Vec::new();
+                gate.wait();
+                for round in 0..ROUNDS {
+                    if let Err(error) = file.write_all_at(&payload[from..to], from as u64) {
+                        failures.push(format!("{label} round {round}: {error:?}"));
+                    }
+                }
+                if let Err(error) = file.sync_all() {
+                    failures.push(format!("{label} fsync: {error:?}"));
+                }
+                failures
+            })
+        })
+        .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| worker.join().expect("writers do not panic"))
+            .collect()
+    });
+    assert!(
+        failures.is_empty(),
+        "an overlapping concurrent writer was refused: {failures:?}"
+    );
+
+    mount.unmount();
+    assert!(!mounted_here(&mountpoint), "unmount leaves a clean table");
+
+    // Everything above must be a COMMITTED fact, not overlay state: the whole
+    // check runs again against a fresh mount of the same store.
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let base = mount.mountpoint();
+    assert_eq!(
+        fs::read(base.join("disjoint.bin")).expect("disjoint reread"),
+        expected,
+        "disjoint concurrent writes must survive a remount byte-exact"
+    );
+
+    let landed = fs::read(base.join("overlap.bin")).expect("overlap reread");
+    assert_eq!(landed.len(), OVERLAP, "the overlapped extent changed size");
+    // The exclusive ends: neither writer may be lost, whatever order they ran.
+    assert_eq!(
+        &landed[..QUARTER],
+        &left[..QUARTER],
+        "the left writer's exclusive head did not land"
+    );
+    assert_eq!(
+        &landed[OVERLAP - QUARTER..],
+        &right[OVERLAP - QUARTER..],
+        "the right writer's exclusive tail did not land"
+    );
+    // The contested middle: any order is legal, a third value is not.
+    let mut from_left = 0_usize;
+    let mut from_right = 0_usize;
+    let mut torn = Vec::new();
+    for index in QUARTER..OVERLAP - QUARTER {
+        let byte = landed[index];
+        if byte == left[index] {
+            from_left += 1;
+        } else if byte == right[index] {
+            from_right += 1;
+        } else if torn.len() < 8 {
+            torn.push(index);
+        }
+    }
+    assert!(
+        torn.is_empty(),
+        "the contested extent holds bytes belonging to NEITHER writer at {torn:?} \
+         ({from_left} left, {from_right} right of {})",
+        OVERLAP - 2 * QUARTER
+    );
+    println!(
+        "overlapping {} MiB writers: exclusive ends both landed; contested middle \
+         {from_left} left / {from_right} right, 0 torn",
+        OVERLAP / MIB as usize
+    );
+
+    mount.unmount();
+    assert!(
+        !mounted_here(&mountpoint),
+        "final unmount leaves a clean table"
+    );
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+#[test]
+fn an_unlinked_open_file_keeps_serving_until_close() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("unlink-root");
+    let mountpoint = unique_dir("unlink-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let base = mount.mountpoint();
+    let payload = pattern(13, (MIB / 2) as usize);
+    let path = base.join("doomed.bin");
+    fs::write(&path, &payload).expect("write works");
+
+    let mut handle = File::open(&path).expect("open works");
+    fs::remove_file(&path).expect("unlink works");
+    assert!(
+        fs::metadata(&path).is_err(),
+        "the name is gone the moment unlink returns"
+    );
+
+    let mut served = Vec::new();
+    handle
+        .read_to_end(&mut served)
+        .expect("the open handle still reads");
+    assert_eq!(served, payload, "unlink-open serves the exact bytes");
+    drop(handle);
+
+    mount.unmount();
+    assert!(!mounted_here(&mountpoint), "unmount leaves a clean table");
+
+    let meta = WorkspaceStore::open(&root).expect("store reopens");
+    let tree = meta.head_tree("main").expect("head tree builds");
+    assert!(
+        tree.entries().iter().all(|(path, _)| path != "doomed.bin"),
+        "the committed tree no longer names the unlinked file"
+    );
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// The compose path's inheritance rule, asserted on the bytes it governs.
+///
+/// A slot the overlay covers end to end inherits nothing, because reading the
+/// superseded object under bytes that are all about to be overwritten is pure
+/// read amplification. A slot the overlay covers only in PART must inherit
+/// every committed byte it did not write. Nothing asserted the second half:
+/// every pre-existing arm either overwrote a whole slot or never read back the
+/// untouched remainder, so deleting the inheritance entirely — and separately,
+/// deleting the gap check from `Dirty::covers`, which is what decides "end to
+/// end" — left the whole suite green while a partial overwrite silently zeroed
+/// every byte it did not touch.
+///
+/// The two patches are deliberately placed: one starts exactly at the slot's
+/// first byte (so the coverage lookup finds a range and must still notice it
+/// stops short), one is an island in the middle.
+#[test]
+fn a_partial_overwrite_inherits_every_committed_byte_it_did_not_write() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("inherit-root");
+    let mountpoint = unique_dir("inherit-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let base = pattern(23, (2 * MIB) as usize);
+    let head_patch = pattern(29, 4096);
+    let island_patch = pattern(31, 4096);
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let path = mount.mountpoint().join("inherit.bin");
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&path)
+        .expect("create works");
+    file.write_all_at(&base, 0).expect("baseline write works");
+    file.sync_all().expect("baseline fsync works");
+    drop(file);
+
+    // Reopened, so the overlay starts empty and every untouched byte can only
+    // come from the committed object.
+    let file = OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("reopen works");
+    file.write_all_at(&head_patch, 0)
+        .expect("head patch writes");
+    file.write_all_at(&island_patch, MIB)
+        .expect("island patch writes");
+    file.sync_all().expect("patch fsync works");
+    drop(file);
+
+    mount.unmount();
+    assert!(!mounted_here(&mountpoint), "unmount leaves a clean table");
+
+    let mut expected = base.clone();
+    expected[..head_patch.len()].copy_from_slice(&head_patch);
+    expected[MIB as usize..MIB as usize + island_patch.len()].copy_from_slice(&island_patch);
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let served = fs::read(mount.mountpoint().join("inherit.bin")).expect("patched file reads");
+    assert_eq!(
+        served.len(),
+        expected.len(),
+        "a partial overwrite does not change the length"
+    );
+    // Report the first divergence rather than dumping two megabytes.
+    let divergence = served
+        .iter()
+        .zip(&expected)
+        .position(|(got, want)| got != want);
+    assert_eq!(
+        divergence, None,
+        "a partially overwritten slot must inherit every committed byte it did not write; \
+         first wrong byte at offset {divergence:?}"
+    );
+    mount.unmount();
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// A dirty range that starts exactly on a 64 MiB grid boundary must not hide
+/// the writes in the slot BELOW it.
+///
+/// `Dirty::overlaps` asks the range list for the last range starting strictly
+/// before the slot's end. Widening that to an inclusive bound picks up the
+/// range that starts exactly AT the boundary — which belongs to the next slot —
+/// concludes the slot below has no dirty bytes, and reuses its committed
+/// record verbatim. The writes into it are then dropped on the floor at fsync,
+/// with no error anywhere. Every pre-existing arm writes one contiguous run, so
+/// no range ever started on a boundary and the bound was never exercised.
+///
+/// The committed shape is a 64 MiB hole plus a small tail, so the arm proves
+/// the boundary property without paying to write 64 MiB of real bytes first.
+#[test]
+fn a_write_at_a_grid_boundary_does_not_hide_the_slot_below_it() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("boundary-root");
+    let mountpoint = unique_dir("boundary-mnt");
+    let slot = 64 * MIB;
+    let tail = pattern(37, 8192);
+    {
+        let meta = WorkspaceStore::open(&root).expect("store opens");
+        meta.create_workspace("main").expect("workspace creates");
+        let tail_object = meta.store().put_bytes(&tail).expect("tail admits");
+        meta.commit_generation(
+            "main",
+            &[Mutation::CreateFile {
+                path: "boundary.bin".into(),
+                executable: false,
+                planner: PlannerId::RawFixed64mV1,
+                records: vec![
+                    FileRecord::Hole { length: slot },
+                    FileRecord::Data {
+                        digest: tail_object.digest(),
+                        length: tail.len() as u64,
+                    },
+                ],
+            }],
+        )
+        .expect("file commits");
+    }
+
+    let below = pattern(43, 8192);
+    let above = pattern(47, 8192);
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let file = OpenOptions::new()
+        .write(true)
+        .open(mount.mountpoint().join("boundary.bin"))
+        .expect("open works");
+    // Two disjoint dirty ranges: one inside the first slot, one starting on
+    // the boundary exactly. They never coalesce, so the range list holds both.
+    file.write_all_at(&below, 0)
+        .expect("sub-boundary write works");
+    file.write_all_at(&above, slot)
+        .expect("on-boundary write works");
+    file.sync_all().expect("fsync works");
+    drop(file);
+    mount.unmount();
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let served = OpenOptions::new()
+        .read(true)
+        .open(mount.mountpoint().join("boundary.bin"))
+        .expect("reopen works");
+    let mut sample = vec![0_u8; below.len()];
+    served
+        .read_exact_at(&mut sample, 0)
+        .expect("sub-boundary read works");
+    assert_eq!(
+        sample, below,
+        "a write below a grid boundary survives a write that starts exactly on it"
+    );
+    served
+        .read_exact_at(&mut sample, slot)
+        .expect("on-boundary read works");
+    assert_eq!(sample, above, "the on-boundary write survives");
+    // The hole between them is still a hole.
+    served
+        .read_exact_at(&mut sample, 8 * MIB)
+        .expect("hole read works");
+    assert!(
+        sample.iter().all(|byte| *byte == 0),
+        "the untouched interior of the slot still reads as zeros"
+    );
+    drop(served);
+    mount.unmount();
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// An incomplete slot is never admitted out of RAM, however full its buffer is.
+///
+/// `admit_if_complete` requires BOTH a full-size buffer and dirty ranges that
+/// cover the slot end to end. Dropping the coverage half admits a buffer whose
+/// gaps are zero padding — bytes no reader ever consults, so the file stays
+/// byte-exact and nothing fails — while paying a whole extra 64 MiB object for
+/// a slot that then gets composed anyway. Pure write amplification on exactly
+/// the sparse workload the assembly budget exists to protect, and the store's
+/// object count is the only thing that can see it.
+///
+/// The gap must hold real committed bytes for the count to discriminate: with
+/// a hole there, the zero-padded eager admission and the composed object are
+/// byte-identical, and content addressing folds them into one object. That is
+/// what made the first version of this arm pass under the very mutation it was
+/// written for.
+#[test]
+fn an_incomplete_slot_is_never_admitted_out_of_ram() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("incomplete-root");
+    let mountpoint = unique_dir("incomplete-mnt");
+    let slot = 64 * MIB;
+    let committed = pattern(53, slot as usize);
+    {
+        let meta = WorkspaceStore::open(&root).expect("store opens");
+        meta.create_workspace("main").expect("workspace creates");
+        let object = meta.store().put_bytes(&committed).expect("slot admits");
+        meta.commit_generation(
+            "main",
+            &[Mutation::CreateFile {
+                path: "incomplete.bin".into(),
+                executable: false,
+                planner: PlannerId::RawFixed64mV1,
+                records: vec![FileRecord::Data {
+                    digest: object.digest(),
+                    length: slot,
+                }],
+            }],
+        )
+        .expect("file commits");
+    }
+    assert_eq!(count_store_objects(&root), 1, "the fixture is one object");
+
+    let head = pattern(59, 8192);
+    let foot = pattern(61, 8192);
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let file = OpenOptions::new()
+        .write(true)
+        .open(mount.mountpoint().join("incomplete.bin"))
+        .expect("open works");
+    // Both ends of one whole grid slot, nothing in between: the slot buffer
+    // reaches full size, so only the coverage half of the completeness test
+    // can refuse to admit it.
+    file.write_all_at(&head, 0).expect("head write works");
+    file.write_all_at(&foot, slot - foot.len() as u64)
+        .expect("foot write works");
+    file.sync_all().expect("fsync works");
+    drop(file);
+    mount.unmount();
+
+    assert_eq!(
+        count_store_objects(&root),
+        2,
+        "an incomplete slot is composed once and never also admitted out of RAM; \
+         a third object means a whole 64 MiB was written for nothing"
+    );
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let served = OpenOptions::new()
+        .read(true)
+        .open(mount.mountpoint().join("incomplete.bin"))
+        .expect("reopen works");
+    let mut sample = vec![0_u8; head.len()];
+    served.read_exact_at(&mut sample, 0).expect("head reads");
+    assert_eq!(sample, head, "the head of the incomplete slot is exact");
+    served
+        .read_exact_at(&mut sample, slot - foot.len() as u64)
+        .expect("foot reads");
+    assert_eq!(sample, foot, "the foot of the incomplete slot is exact");
+    served
+        .read_exact_at(&mut sample, 32 * MIB)
+        .expect("middle reads");
+    assert_eq!(
+        sample,
+        &committed[(32 * MIB) as usize..(32 * MIB) as usize + sample.len()],
+        "the untouched middle still serves its committed bytes"
+    );
+    drop(served);
+    mount.unmount();
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// Truncating down and back up must read as zeros, not as the old bytes.
+///
+/// `shrink_to` clips the range that straddles the new end, which is what keeps
+/// the discarded tail out of the dirty overlay. Without the clip the bytes are
+/// still in the slot buffer and still marked readable, so growing the file back
+/// resurrects them — a POSIX violation that leaks whatever the file used to
+/// hold. The pre-existing truncate arms only ever shrink, so the resurrection
+/// path was never walked.
+#[test]
+fn truncating_down_and_back_up_reads_the_regrown_bytes_as_zeros() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("regrow-root");
+    let mountpoint = unique_dir("regrow-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let secret = pattern(61, MIB as usize);
+    let kept = 1000_u64;
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let path = mount.mountpoint().join("regrown.bin");
+    let file = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("create works");
+    file.write_all_at(&secret, 0).expect("write works");
+    file.set_len(kept).expect("truncate-shrink works");
+    file.set_len(MIB).expect("truncate-grow works");
+    file.sync_all().expect("fsync works");
+    drop(file);
+    mount.unmount();
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let served = fs::read(mount.mountpoint().join("regrown.bin")).expect("regrown file reads");
+    assert_eq!(served.len() as u64, MIB, "the regrown length is served");
+    assert_eq!(
+        &served[..kept as usize],
+        &secret[..kept as usize],
+        "the surviving prefix is exact"
+    );
+    let leaked = served[kept as usize..]
+        .iter()
+        .position(|byte| *byte != 0)
+        .map(|at| at as u64 + kept);
+    assert_eq!(
+        leaked, None,
+        "bytes discarded by a truncate must not come back when the file grows again; \
+         first resurrected byte at offset {leaked:?}"
+    );
+    mount.unmount();
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// `open(O_TRUNC)` on a file that already has committed bytes discards them.
+///
+/// Every pre-existing arm that opens truncating opens a file that does not
+/// exist yet, so the truncation branch was only ever reached with nothing to
+/// discard. A mount that ignores the flag serves the old tail past the end of
+/// the new content — the classic "shorter rewrite leaves the previous version's
+/// suffix behind" corruption.
+#[test]
+fn opening_an_existing_file_truncating_discards_its_committed_bytes() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("otrunc-root");
+    let mountpoint = unique_dir("otrunc-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let long = pattern(71, MIB as usize);
+    let short = b"short\n";
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let path = mount.mountpoint().join("rewritten.bin");
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&path)
+        .expect("create works");
+    file.write_all_at(&long, 0).expect("long write works");
+    file.sync_all().expect("long fsync works");
+    drop(file);
+
+    // The truncating reopen is the whole point: it must reach the mount as a
+    // real length change, not as a no-op that leaves a megabyte behind.
+    let file = OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .expect("truncating reopen works");
+    file.write_all_at(short, 0).expect("short write works");
+    file.sync_all().expect("short fsync works");
+    drop(file);
+    mount.unmount();
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let served = fs::read(mount.mountpoint().join("rewritten.bin")).expect("rewritten file reads");
+    assert_eq!(
+        served, short,
+        "a truncating open discards every committed byte, leaving no tail of the old content"
+    );
+    mount.unmount();
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// An unlinked file with an open handle keeps its objects until the last close,
+/// and stops keeping them the moment that close lands.
+///
+/// The mount pins the inode with an `Unlinked` lease, which is what holds the
+/// inode's object map in the root set: without it the unlink orphans the inode
+/// immediately and the collector deletes bytes the open handle is still
+/// serving. The pre-existing unlink arm never runs a collection, so it passes
+/// with the lease removed entirely; and nothing at all asserted the other
+/// edge — that the lease is RELEASED on the last close, without which every
+/// unlinked-open file leaks its objects for the life of the store.
+///
+/// The daemon is a separate process here so the collector genuinely runs
+/// against a live mount rather than beside it in the same connection.
+#[test]
+fn an_unlink_open_lease_holds_objects_exactly_until_the_last_close() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("lease-root");
+    let mountpoint = unique_dir("lease-mnt");
+    {
+        let meta = WorkspaceStore::open(&root).expect("store opens");
+        if !meta.supports_multiprocess() {
+            eprintln!("skipping: this store root cannot be opened by two processes");
+            return;
+        }
+        meta.create_workspace("main").expect("workspace creates");
+    }
+
+    let payload = pattern(67, (256 * 1024) as usize);
+    let daemon = BinMount::spawn(&root, "main", &mountpoint);
+    // fsync, not just close: RELEASE composes best-effort and `close(2)`
+    // returns before the daemon has processed it, so seeding through
+    // `fs::write` would race the SIGTERM below for the object's existence.
+    let seed = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(mountpoint.join("doomed.bin"))
+        .expect("seed file creates");
+    seed.write_all_at(&payload, 0).expect("seed write works");
+    seed.sync_all().expect("seed fsync works");
+    drop(seed);
+    daemon.sigterm_and_wait();
+    assert_eq!(
+        count_store_objects(&root),
+        1,
+        "the seeded file admitted exactly one object"
+    );
+
+    // A fresh mount, so the open handle below reads through the daemon rather
+    // than out of page cache left over from writing the file.
+    let daemon = BinMount::spawn(&root, "main", &mountpoint);
+    let doomed = mountpoint.join("doomed.bin");
+    let handle = File::open(&doomed).expect("open works");
+    fs::remove_file(&doomed).expect("unlink works");
+
+    // Enough passes to clear the two-epoch quarantine several times over.
+    let meta = WorkspaceStore::open(&root).expect("store opens beside the daemon");
+    for _ in 0..4 {
+        meta.collect().expect("collection runs");
+    }
+    assert_eq!(
+        count_store_objects(&root),
+        1,
+        "the unlink-open lease keeps the inode's objects out of the collector's reach"
+    );
+    let mut served = Vec::new();
+    (&handle)
+        .read_to_end(&mut served)
+        .expect("the unlinked handle still reads after a collection");
+    assert_eq!(
+        served, payload,
+        "an unlinked open file serves its exact bytes across a collection"
+    );
+
+    // The last close releases the lease, which orphans the inode and lets the
+    // collector reclaim the bytes. RELEASE is asynchronous, so poll rather
+    // than assume it has landed.
+    drop(handle);
+    let mut collected = false;
+    for _ in 0..100 {
+        std::thread::sleep(Duration::from_millis(100));
+        meta.collect().expect("collection runs");
+        if count_store_objects(&root) == 0 {
+            collected = true;
+            break;
+        }
+    }
+    assert!(
+        collected,
+        "the last close must release the unlink-open lease, or the file's objects \
+         are unreachable garbage for the life of the store"
+    );
+    drop(meta);
+    daemon.sigterm_and_wait();
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+#[test]
+fn readdir_serves_exactly_the_live_namespace_on_a_writable_mount() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("readdir-root");
+    let mountpoint = unique_dir("readdir-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let base = mount.mountpoint();
+    let root_ino = fs::metadata(base).expect("root metadata reads").ino();
+
+    // An empty writable root still serves the two synthetic entries and
+    // nothing else.
+    let listing = raw_dirents(base);
+    assert_eq!(
+        dirent_names(&listing),
+        [".", ".."],
+        "an empty root is empty"
+    );
+    assert_eq!(dirent(&listing, ".").ino, root_ino, "`.` names itself");
+    assert_eq!(
+        dirent(&listing, "..").ino,
+        root_ino,
+        "the mount root is its own parent"
+    );
+
+    fs::create_dir(base.join("models")).expect("mkdir works");
+    fs::write(base.join("notes.txt"), b"hello").expect("write works");
+    std::os::unix::fs::symlink("notes.txt", base.join("latest")).expect("symlink works");
+    fs::hard_link(base.join("notes.txt"), base.join("alias.txt")).expect("hardlink works");
+
+    // Every created name appears, once, with an honest type and inode.
+    let listing = raw_dirents(base);
+    assert_eq!(
+        dirent_names(&listing),
+        [".", "..", "alias.txt", "latest", "models", "notes.txt"],
+        "the listing is exactly the live namespace"
+    );
+    assert_eq!(dirent(&listing, "models").kind, libc::DT_DIR);
+    assert_eq!(dirent(&listing, "notes.txt").kind, libc::DT_REG);
+    assert_eq!(dirent(&listing, "alias.txt").kind, libc::DT_REG);
+    assert_eq!(dirent(&listing, "latest").kind, libc::DT_LNK);
+    for name in ["alias.txt", "latest", "models", "notes.txt"] {
+        let meta = fs::symlink_metadata(base.join(name)).expect("entry stats");
+        assert_eq!(
+            dirent(&listing, name).ino,
+            meta.ino(),
+            "the listed inode of {name} is the one stat reports"
+        );
+    }
+    assert_eq!(
+        dirent(&listing, "alias.txt").ino,
+        dirent(&listing, "notes.txt").ino,
+        "both links of a hardlink group list the same inode"
+    );
+
+    // A subdirectory names its real parent through `..`.
+    let models = base.join("models");
+    fs::create_dir(models.join("v1")).expect("nested mkdir works");
+    let nested = raw_dirents(&models);
+    assert_eq!(dirent_names(&nested), [".", "..", "v1"]);
+    assert_eq!(
+        dirent(&nested, ".").ino,
+        fs::metadata(&models).expect("subdir stats").ino(),
+        "`.` names the directory itself"
+    );
+    assert_eq!(
+        dirent(&nested, "..").ino,
+        root_ino,
+        "`..` names the parent directory, not the directory itself"
+    );
+
+    // Entries disappear the moment their name does.
+    fs::remove_file(base.join("alias.txt")).expect("unlink works");
+    fs::remove_dir(models.join("v1")).expect("rmdir works");
+    assert_eq!(
+        dirent_names(&raw_dirents(base)),
+        [".", "..", "latest", "models", "notes.txt"],
+        "an unlinked name leaves the listing at once"
+    );
+    assert_eq!(dirent_names(&raw_dirents(&models)), [".", ".."]);
+
+    // An unlinked-but-open file is not a directory entry, and is still a
+    // readable file.
+    let payload = pattern(23, 4096);
+    fs::write(base.join("doomed.bin"), &payload).expect("doomed write works");
+    let mut handle = File::open(base.join("doomed.bin")).expect("doomed opens");
+    fs::remove_file(base.join("doomed.bin")).expect("doomed unlinks");
+    let listing = dirent_names(&raw_dirents(base));
+    assert!(
+        !listing.iter().any(|name| name == "doomed.bin"),
+        "an unlinked-open file is never listed, got {listing:?}"
+    );
+    let mut served = Vec::new();
+    handle
+        .read_to_end(&mut served)
+        .expect("the open handle still reads");
+    assert_eq!(served, payload, "the unlisted file still serves its bytes");
+    drop(handle);
+
+    // A directory far larger than one readdir reply lists completely: the
+    // kernel re-issues the call at the last offset the mount handed back, and
+    // every entry must survive that resume exactly once. The names are long
+    // deliberately — a 24-byte `fuse_dirent` header plus a 246-byte name puts
+    // 162 entries at ~44 KiB against the ~32 KiB reply this kernel asks for,
+    // so the listing takes two calls. Measured 2026-08-16: the first reply
+    // fills at entry 118 and the second resumes there. Short names do not
+    // force the split — 202 entries of ~80 bytes arrive in one reply and the
+    // resume path is never entered.
+    let bulk = base.join("bulk");
+    fs::create_dir(&bulk).expect("bulk mkdir works");
+    let mut expected: Vec<String> = (0..160)
+        .map(|index| format!("entry-{index:04}-{}", "p".repeat(240)))
+        .collect();
+    for name in &expected {
+        fs::write(bulk.join(name), b"x").expect("bulk write works");
+    }
+    expected.push("..".to_owned());
+    expected.push(".".to_owned());
+    expected.sort();
+    // The padding is identical across names, so a failure prints only the
+    // distinguishing prefix instead of 44 KiB of `p`.
+    let stems = |names: &[String]| -> Vec<String> {
+        names
+            .iter()
+            .map(|name| name.chars().take(11).collect())
+            .collect()
+    };
+    let expected_stems = stems(&expected);
+    assert_eq!(
+        stems(&dirent_names(&raw_dirents(&bulk))),
+        expected_stems,
+        "a multi-reply directory lists every entry exactly once"
+    );
+
+    mount.unmount();
+    assert!(!mounted_here(&mountpoint), "unmount leaves a clean table");
+
+    // The namespace a fresh mount rebuilds lists the same way.
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let base = mount.mountpoint();
+    assert_eq!(
+        dirent_names(&raw_dirents(base)),
+        [".", "..", "bulk", "latest", "models", "notes.txt"],
+        "a remounted namespace lists exactly what was committed"
+    );
+    assert_eq!(
+        stems(&dirent_names(&raw_dirents(&base.join("bulk")))),
+        expected_stems,
+        "the large directory survives a remount entry for entry"
+    );
+    let nested = raw_dirents(&base.join("models"));
+    assert_eq!(
+        dirent(&nested, "..").ino,
+        fs::metadata(base).expect("root stats").ino(),
+        "`..` still names the parent after a remount"
+    );
+    mount.unmount();
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+#[test]
+fn rmdir_removes_empty_directories_and_refuses_populated_ones() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("rmdir-root");
+    let mountpoint = unique_dir("rmdir-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace mounts");
+    let base = mount.mountpoint();
+
+    // The simple case: an empty directory goes away.
+    fs::create_dir(base.join("empty")).expect("mkdir works");
+    fs::remove_dir(base.join("empty")).expect("an empty directory removes");
+    assert!(
+        fs::metadata(base.join("empty")).is_err(),
+        "the removed name is gone the moment rmdir returns"
+    );
+
+    // A directory holding a file refuses, and loses nothing.
+    fs::create_dir(base.join("full")).expect("mkdir works");
+    let kept = pattern(31, 8192);
+    fs::write(base.join("full").join("keep.bin"), &kept).expect("child write works");
+    let refused = fs::remove_dir(base.join("full")).expect_err("a populated directory refuses");
+    assert_eq!(
+        refused.raw_os_error(),
+        Some(libc::ENOTEMPTY),
+        "a directory holding a file refuses with ENOTEMPTY"
+    );
+    assert_eq!(
+        fs::read(base.join("full").join("keep.bin")).expect("child reads"),
+        kept,
+        "a refused rmdir touches nothing"
+    );
+
+    // A directory holding only a subdirectory refuses just the same.
+    fs::create_dir(base.join("full").join("nested")).expect("nested mkdir works");
+    assert_eq!(
+        fs::remove_dir(base.join("full"))
+            .expect_err("a directory holding two children refuses")
+            .raw_os_error(),
+        Some(libc::ENOTEMPTY)
+    );
+    fs::remove_file(base.join("full").join("keep.bin")).expect("child unlinks");
+    assert_eq!(
+        fs::remove_dir(base.join("full"))
+            .expect_err("a directory holding a subdirectory refuses")
+            .raw_os_error(),
+        Some(libc::ENOTEMPTY),
+        "a subdirectory alone is still not empty"
+    );
+    fs::remove_dir(base.join("full").join("nested")).expect("nested rmdir works");
+    fs::remove_dir(base.join("full")).expect("an emptied directory removes");
+
+    // Names that are not empty directories.
+    assert_eq!(
+        fs::remove_dir(base.join("never"))
+            .expect_err("a missing name refuses")
+            .raw_os_error(),
+        Some(libc::ENOENT)
+    );
+    fs::write(base.join("plain.bin"), b"x").expect("plain write works");
+    assert_eq!(
+        fs::remove_dir(base.join("plain.bin"))
+            .expect_err("a regular file refuses rmdir")
+            .raw_os_error(),
+        Some(libc::ENOTDIR)
+    );
+
+    // POSIX: unlink removes the entry, not the file. A directory whose only
+    // child was unlinked while open holds no entries, so rmdir must succeed —
+    // and the surviving handle outlives the directory it was named in.
+    fs::create_dir(base.join("holding")).expect("holding mkdir works");
+    let doomed = pattern(37, (MIB / 4) as usize);
+    fs::write(base.join("holding").join("doomed.bin"), &doomed).expect("doomed write works");
+    let mut handle = File::open(base.join("holding").join("doomed.bin")).expect("doomed opens");
+    fs::remove_file(base.join("holding").join("doomed.bin")).expect("doomed unlinks");
+    fs::remove_dir(base.join("holding"))
+        .expect("a directory whose only entry was unlinked is empty and removes");
+    let mut served = Vec::new();
+    handle
+        .read_to_end(&mut served)
+        .expect("the open handle still reads");
+    assert_eq!(
+        served, doomed,
+        "an unlinked-open file outlives the directory that named it"
+    );
+    drop(handle);
+
+    mount.unmount();
+    assert!(!mounted_here(&mountpoint), "unmount leaves a clean table");
+
+    // Every removal was its own durable generation.
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let base = mount.mountpoint();
+    assert_eq!(
+        dirent_names(&raw_dirents(base)),
+        [".", "..", "plain.bin"],
+        "only the names that survived rmdir come back"
+    );
+    mount.unmount();
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+/// One append record: self-describing, so a reader can tell which writer wrote
+/// it, in what order, and whether it arrived whole.
+const APPEND_RECORD: usize = 1024;
+const APPEND_RECORDS: u32 = 1024;
+
+fn append_record(writer: u8, seq: u32) -> Vec<u8> {
+    let mut record = vec![0_u8; APPEND_RECORD];
+    record[0] = writer;
+    record[1..5].copy_from_slice(&seq.to_le_bytes());
+    for (index, byte) in record[5..].iter_mut().enumerate() {
+        *byte = (index as u8)
+            .wrapping_mul(31)
+            .wrapping_add(writer)
+            .wrapping_add(seq as u8);
+    }
+    record
+}
+
+#[test]
+fn two_o_append_writers_never_overwrite_each_other() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("append-root");
+    let mountpoint = unique_dir("append-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    // A real daemon process: the appenders are then genuinely foreign to the
+    // filesystem serving them.
+    let daemon = BinMount::spawn(&root, "main", &mountpoint);
+    let path = mountpoint.join("appended.log");
+    drop(File::create(&path).expect("the log creates"));
+
+    // Two independent O_APPEND descriptors, released together and each writing
+    // its own records. Nothing coordinates their offsets: every write lands
+    // wherever the append contract says the end of the file is at that instant.
+    let barrier = Barrier::new(2);
+    let spans: [(Instant, Instant); 2] = std::thread::scope(|scope| {
+        let writers = [1_u8, 2_u8].map(|writer| {
+            let barrier = &barrier;
+            let path = path.as_path();
+            scope.spawn(move || {
+                let mut file = OpenOptions::new()
+                    .append(true)
+                    .open(path)
+                    .expect("the log opens for append");
+                barrier.wait();
+                let started = Instant::now();
+                for seq in 0..APPEND_RECORDS {
+                    file.write_all(&append_record(writer, seq))
+                        .expect("append write works");
+                }
+                file.sync_all().expect("append fsync works");
+                (started, Instant::now())
+            })
+        });
+        writers.map(|writer| writer.join().expect("append writers do not panic"))
+    });
+    assert!(
+        spans[0].0 < spans[1].1 && spans[1].0 < spans[0].1,
+        "the two writers were in flight at the same time: {spans:?}"
+    );
+
+    let total = 2 * APPEND_RECORDS as usize * APPEND_RECORD;
+    let bytes = fs::read(&path).expect("the log reads");
+    assert_eq!(
+        bytes.len(),
+        total,
+        "the file is exactly the sum of both writers' payloads; anything shorter \
+         means one writer's appends landed on top of the other's"
+    );
+
+    // Every record must be whole, in its own writer's order, and present once.
+    // A torn or interleaved write breaks the record alignment and the header
+    // check below fails on the very first misaligned byte.
+    let mut order: Vec<u8> = Vec::with_capacity(2 * APPEND_RECORDS as usize);
+    let mut seen: [Vec<u32>; 2] = [Vec::new(), Vec::new()];
+    for (index, chunk) in bytes.chunks(APPEND_RECORD).enumerate() {
+        let writer = chunk[0];
+        assert!(
+            writer == 1 || writer == 2,
+            "record {index} starts with a writer tag, got {writer}"
+        );
+        let seq = u32::from_le_bytes(chunk[1..5].try_into().expect("four header bytes"));
+        assert_eq!(
+            chunk,
+            append_record(writer, seq).as_slice(),
+            "record {index} (writer {writer}, seq {seq}) arrived whole and unmodified"
+        );
+        order.push(writer);
+        seen[usize::from(writer) - 1].push(seq);
+    }
+    for (index, sequence) in seen.iter().enumerate() {
+        assert_eq!(
+            sequence,
+            &(0..APPEND_RECORDS).collect::<Vec<u32>>(),
+            "writer {} landed every record exactly once, in the order it wrote them",
+            index + 1
+        );
+    }
+    // Evidence that the two writers were interleaved in the file itself, not
+    // merely overlapping in wall-clock time.
+    let transitions = order.windows(2).filter(|pair| pair[0] != pair[1]).count();
+    println!("O_APPEND: {transitions} writer transitions across {total} bytes");
+    assert!(
+        transitions > 0,
+        "the writers' records interleave; a run with zero transitions means the \
+         test serialized them and proved nothing"
+    );
+
+    daemon.sigterm_and_wait();
+
+    // The same bytes, from the committed generation.
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let committed = fs::read(mount.mountpoint().join("appended.log")).expect("the log rereads");
+    assert_eq!(
+        committed, bytes,
+        "the fsynced appends survive a remount byte for byte"
+    );
+    mount.unmount();
+    assert!(!mounted_here(&mountpoint), "unmount leaves a clean table");
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+#[test]
+fn fsyncdir_succeeds_and_the_namespace_it_acknowledged_survives_a_sigkill() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("fsyncdir-root");
+    let mountpoint = unique_dir("fsyncdir-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let daemon = BinMount::spawn(&root, "main", &mountpoint);
+    let models = mountpoint.join("models");
+    fs::create_dir(&models).expect("mkdir works");
+    fs::create_dir(models.join("nested")).expect("nested mkdir works");
+    std::os::unix::fs::symlink("weights.bin", models.join("latest")).expect("symlink works");
+    let payload = pattern(41, (MIB / 2) as usize);
+    let weights = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(models.join("weights.bin"))
+        .expect("weights create works");
+    weights
+        .write_all_at(&payload, 0)
+        .expect("weights write works");
+    weights.sync_all().expect("weights fsync works");
+    drop(weights);
+
+    // fsync and fdatasync on a directory descriptor are FSYNCDIR and
+    // FSYNCDIR(datasync) — the only way to reach the operation from userspace.
+    let handle = File::open(&models).expect("the directory opens");
+    handle.sync_all().expect("fsyncdir succeeds");
+    handle.sync_data().expect("fsyncdir with datasync succeeds");
+    drop(handle);
+    let handle = File::open(&mountpoint).expect("the mount root opens");
+    handle
+        .sync_all()
+        .expect("fsyncdir on the mount root succeeds");
+    drop(handle);
+
+    // Whatever fsyncdir acknowledged must be on disk: no orderly shutdown runs
+    // after this point.
+    daemon.sigkill_and_reap();
+
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let base = mount.mountpoint();
+    assert_eq!(
+        dirent_names(&raw_dirents(base)),
+        [".", "..", "models"],
+        "the root fsyncdir acknowledged survived the kill"
+    );
+    assert_eq!(
+        dirent_names(&raw_dirents(&base.join("models"))),
+        [".", "..", "latest", "nested", "weights.bin"],
+        "every entry fsyncdir acknowledged survived the kill"
+    );
+    assert_eq!(
+        fs::read(base.join("models").join("weights.bin")).expect("weights read"),
+        payload,
+        "the fsynced file content survived alongside its directory entry"
+    );
+    assert_eq!(
+        fs::read_link(base.join("models").join("latest")).expect("readlink works"),
+        PathBuf::from("weights.bin"),
+        "the symlink survived"
+    );
+    mount.unmount();
+    assert!(!mounted_here(&mountpoint), "unmount leaves a clean table");
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}
+
+#[test]
+fn dirty_bytes_die_with_the_daemon_and_committed_generations_do_not() {
+    let _serial = serial();
+    if !fuse_available() {
+        return;
+    }
+    let root = unique_dir("crash-root");
+    let mountpoint = unique_dir("crash-mnt");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace creates");
+    drop(meta);
+
+    let daemon = BinMount::spawn(&root, "main", &mountpoint);
+
+    // Durable arm: fsync returns only after the compose committed.
+    let durable = pattern(17, (2 * MIB) as usize);
+    let durable_file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(mountpoint.join("durable.bin"))
+        .expect("durable file creates");
+    durable_file
+        .write_all_at(&durable, 0)
+        .expect("durable write works");
+    durable_file.sync_all().expect("durable fsync works");
+
+    // Lost arm: dirty bytes with no fsync and the handle deliberately open.
+    let lost_file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(mountpoint.join("lost.bin"))
+        .expect("lost file creates");
+    lost_file
+        .write_all_at(&pattern(19, MIB as usize), 0)
+        .expect("lost write works");
+
+    daemon.sigkill_and_reap();
+    drop(lost_file);
+    drop(durable_file);
+
+    // Recovery exposes exactly the committed generations: the fsynced bytes,
+    // and the created-but-never-flushed file at its committed (empty) state —
+    // never a hybrid.
+    let mount = mount_workspace(&root, "main", &mountpoint).expect("workspace remounts");
+    let base = mount.mountpoint();
+    assert_eq!(
+        fs::read(base.join("durable.bin")).expect("durable read"),
+        durable,
+        "fsynced bytes survive the SIGKILL"
+    );
+    let lost = fs::metadata(base.join("lost.bin")).expect("lost metadata reads");
+    assert_eq!(
+        lost.len(),
+        0,
+        "un-fsynced dirty bytes die with the daemon; the committed create remains"
+    );
+    mount.unmount();
+    assert!(
+        !mounted_here(&mountpoint),
+        "final unmount leaves a clean table"
+    );
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&mountpoint).ok();
+}

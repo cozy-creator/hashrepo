@@ -1,0 +1,205 @@
+=== tensorfs pod benchmark: 2026-08-15T21:57:17Z ===
+--- FUSE availability ---
+/dev/fuse: present
+capabilities:
+CapEff:	00000000a80405fb
+CapBnd:	00000000a80405fb
+Current: cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_net_bind_service,cap_sys_chroot,cap_mknod,cap_audit_write,cap_setfcap=ep
+fusermount3: MISSING (will try to install)
+/dev/fuse not writable by root; mount arms will be skipped
+FUSE_OK=0
+
+--- hardware profile ---
+## cpu
+model name	: AMD EPYC 4564P 16-Core Processor
+cores(nproc): 16
+siblings: 32
+sha_ni: sha_ni
+
+## memory
+MemTotal:       130963916 kB
+MemAvailable:   120064992 kB
+
+## block devices
+NAME          SIZE TYPE ROTA MODEL
+loop0       115.3M loop    0 
+loop1        63.8M loop    0 
+loop2        50.1M loop    0 
+loop3        50.1M loop    0 
+loop5        63.8M loop    0 
+loop7          74M loop    0 
+loop8       115.1M loop    0 
+nvme0n1       1.8T disk    0 Samsung SSD 990 EVO Plus 2TB            
+|-nvme0n1p1     1G part    0 
+|-nvme0n1p2     2G part    0 
+`-nvme0n1p3   1.8T part    0 
+/sys/block/dm-0/queue/rotational = 0
+/sys/block/dm-1/queue/rotational = 0
+/sys/block/loop0/queue/rotational = 0
+/sys/block/loop1/queue/rotational = 0
+/sys/block/loop2/queue/rotational = 0
+/sys/block/loop3/queue/rotational = 0
+/sys/block/loop4/queue/rotational = 0
+/sys/block/loop5/queue/rotational = 0
+/sys/block/loop6/queue/rotational = 0
+/sys/block/loop7/queue/rotational = 0
+/sys/block/loop8/queue/rotational = 0
+/sys/block/nvme0n1/queue/rotational = 0
+
+## filesystem under /workspace/bench
+Filesystem     Type     Size  Used Avail Use% Mounted on
+overlay        overlay  100G  124M  100G   1% /
+overlay on / type overlay (rw,relatime,lowerdir=/var/lib/docker/overlay2/l/Z2UMIW354ONG3KOM44AGNKIBP5:/var/lib/docker/overlay2/l/BAQO3UZJT3377DIRVILQDWSSO7:/var/lib/docker/overlay2/l/VPDFMJ63LLFW6QRYQIUR4DHBT2:/var/lib/docker/overlay2/l/MEWJH32SQAINDSHQ6EG4USXG7W:/var/lib/docker/overlay2/l/FSVVBFWLOQTN5DR57I2XDQKHEL:/var/lib/docker/overlay2/l/PUZNGDLV4QNLAZINZZW6YL2JU3:/var/lib/docker/overlay2/l/RTETQKWFKJB4E6U5RGWL4VK735:/var/lib/docker/overlay2/l/BRJMT2RLXTOKAC734TWBVHE4JR:/var/lib/docker/overlay2/l/DVMAFGVOKDZNB7OHW7YZ3GI37U:/var/lib/docker/overlay2/l/VW5PCGRQUYFU4LQ6KFC6VBUXKQ:/var/lib/docker/overlay2/l/UIKH7OZNH7WCSLJMAH57NJQOTK:/var/lib/docker/overlay2/l/7NFQLX46HW5U2OFUR3FUYJ3KFH:/var/lib/docker/overlay2/l/BN37ALFLP4W256BGTCSLATZ4BY:/var/lib/docker/overlay2/l/TDKPUZS7AUT3VIEMPQGZHEY42H:/var/lib/docker/overlay2/l/64U3Y6ET22KLMGUSZZAZGMAIMT:/var/lib/docker/overlay2/l/ACVT3HYBTNKI7MHLC2WXOE6RHI:/var/lib/docker/overlay2/l/SRRXLCODWVDYVC6FXPTV5ILVL3:/var/lib/docker/overlay2/l/B4XAPGPTRMFVXEXGVROC2LPWEO:/var/lib/docker/overlay2/l/F4VEOWEWZRCTQHBW5UGP6WN6BF:/var/lib/docker/overlay2/l/UBM7LEL4YBHC7HYH4AWTLDW7UV:/var/lib/docker/overlay2/l/WYRED4DRAOR2FJE4IEYTWBOVT4:/var/lib/docker/overlay2/l/GGIQLZQEK4C7IIT3Q7HUADPV7C:/var/lib/docker/overlay2/l/GL7GBQVQ3XQ7UNLKZ5UISFVUW5:/var/lib/docker/overlay2/l/YW7SKQ7SW4V5VDCHVDRJTWJABV:/var/lib/docker/overlay2/l/7BC7WRXHNU3FSN2SG7WKPUNXRM:/var/lib/docker/overlay2/l/QNUV5T5THXZ3YI6ZA3K47KYTMG:/var/lib/docker/overlay2/l/DCK7GCSPY3APIZR6BVAGR54VUR:/var/lib/docker/overlay2/l/NXXXOEBQI7NPMXKH2O755OAY7K:/var/lib/docker/overlay2/l/KVSMDUC32QTEUEBDNRCKNKBMP5:/var/lib/docker/overlay2/l/PF4QUWQC5V5EXREGSSFUAENC7A:/var/lib/docker/overlay2/l/C7TS2NV5H4BLAF3CZW2ID7BCVA,upperdir=/var/lib/docker/overlay2/19e7aab322d3cee925e8c8a0683eb01201825ac39d98e07ecc24d285006cc5df/diff,workdir=/var/lib/docker/overlay2/19e7aab322d3cee925e8c8a0683eb01201825ac39d98e07ecc24d285006cc5df/work,nouserxattr)
+
+## load at profile time
+1.24 2.26 2.21 1/1265 1043
+
+--- raw dd reference (1 GiB, direct where supported) ---
+1073741824 bytes (1.1 GB, 1.0 GiB) copied, 0.265323 s, 4.0 GB/s
+1073741824 bytes (1.1 GB, 1.0 GiB) copied, 0.300414 s, 3.6 GB/s
+
+--- rust toolchain ---
+info: downloading installer
+warn: It looks like you have an existing rustup settings file at:
+warn: /root/.rustup/settings.toml
+warn: Rustup will install the default toolchain as specified in the settings file,
+warn: instead of the one inferred from the default host triple.
+info: profile set to minimal
+info: default host triple is x86_64-unknown-linux-gnu
+info: syncing channel updates for stable-x86_64-unknown-linux-gnu
+info: latest update on 2026-07-16 for version 1.97.1 (8bab26f4f 2026-07-14)
+info: downloading 3 components
+info: default toolchain set to stable-x86_64-unknown-linux-gnu
+
+  stable-x86_64-unknown-linux-gnu installed - rustc 1.97.1 (8bab26f4f 2026-07-14)
+
+
+Rust is installed now. Great!
+
+To get started you may need to restart your current shell.
+This would reload your PATH environment variable to include
+Cargo's bin directory ($HOME/.cargo/bin).
+
+To configure your current shell, you need to source
+the corresponding env file under $HOME/.cargo.
+
+This is usually done by running one of the following (note the leading DOT):
+. "$HOME/.cargo/env"            # For sh/bash/zsh/ash/dash/pdksh
+source "$HOME/.cargo/env.fish"  # For fish
+source "~/.cargo/env.nu"  # For nushell
+source "$HOME/.cargo/env.tcsh"  # For tcsh
+. "$HOME/.cargo/env.ps1"        # For pwsh
+source "$HOME/.cargo/env.xsh"   # For xonsh
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+cargo 1.97.1 (c980f4866 2026-06-30)
+
+--- build ---
+2db59ab pgw#1256: create /dev/fuse on pods that ship without it
+   Compiling ureq v2.12.1
+   Compiling rusqlite v0.40.2
+   Compiling tensorfs-core v0.1.0 (/workspace/bench/tensorfs/crates/tensorfs-core)
+   Compiling tensorfsd v0.1.0 (/workspace/bench/tensorfs/crates/tensorfsd)
+    Finished `release` profile [optimized] target(s) in 27.89s
+   Compiling ureq v2.12.1
+   Compiling tensorfs-core v0.1.0 (/workspace/bench/tensorfs/crates/tensorfs-core)
+    Finished `release` profile [optimized] target(s) in 6.33s
+
+--- fixture (1024 MiB) ---
+SNAPSHOT=d013b491a262fe4e5d4d2f1b7ae0042eb1189a5236e14aa62072e006227c7711
+SIZE_BYTES=1073741824
+OBJ=/workspace/bench/work/store/objects/sha256/d9/8f/d98f7fcaf45b18062c746c32abd96c05fcb9a32d2df357d62b667daf5ab87577
+OBJ=/workspace/bench/work/store/objects/sha256/d6/79/d679ebf1b0cd1c6cb2ca57fedbf80d981e4423f99519c0737805f17d68b6c46c
+OBJ=/workspace/bench/work/store/objects/sha256/67/e2/67e22e91578fe2cfe23441509fb679e7d6d7777d6a6464a15856aa6d6bd883f1
+OBJ=/workspace/bench/work/store/objects/sha256/a8/26/a826c7666fc1f7726b5511fccec1449c6aa2bfbd4d05c4dfcf29d5d804c9709d
+OBJ=/workspace/bench/work/store/objects/sha256/d9/8f/d98f7fcaf45b18062c746c32abd96c05fcb9a32d2df357d62b667daf5ab87577
+OBJ=/workspace/bench/work/store/objects/sha256/d6/79/d679ebf1b0cd1c6cb2ca57fedbf80d981e4423f99519c0737805f17d68b6c46c
+OBJ=/workspace/bench/work/store/objects/sha256/67/e2/67e22e91578fe2cfe23441509fb679e7d6d7777d6a6464a15856aa6d6bd883f1
+OBJ=/workspace/bench/work/store/objects/sha256/a8/26/a826c7666fc1f7726b5511fccec1449c6aa2bfbd4d05c4dfcf29d5d804c9709d
+OBJ=/workspace/bench/work/store/objects/sha256/d9/8f/d98f7fcaf45b18062c746c32abd96c05fcb9a32d2df357d62b667daf5ab87577
+OBJ=/workspace/bench/work/store/objects/sha256/d6/79/d679ebf1b0cd1c6cb2ca57fedbf80d981e4423f99519c0737805f17d68b6c46c
+OBJ=/workspace/bench/work/store/objects/sha256/67/e2/67e22e91578fe2cfe23441509fb679e7d6d7777d6a6464a15856aa6d6bd883f1
+OBJ=/workspace/bench/work/store/objects/sha256/a8/26/a826c7666fc1f7726b5511fccec1449c6aa2bfbd4d05c4dfcf29d5d804c9709d
+OBJ=/workspace/bench/work/store/objects/sha256/d9/8f/d98f7fcaf45b18062c746c32abd96c05fcb9a32d2df357d62b667daf5ab87577
+OBJ=/workspace/bench/work/store/objects/sha256/d6/79/d679ebf1b0cd1c6cb2ca57fedbf80d981e4423f99519c0737805f17d68b6c46c
+OBJ=/workspace/bench/work/store/objects/sha256/67/e2/67e22e91578fe2cfe23441509fb679e7d6d7777d6a6464a15856aa6d6bd883f1
+OBJ=/workspace/bench/work/store/objects/sha256/a8/26/a826c7666fc1f7726b5511fccec1449c6aa2bfbd4d05c4dfcf29d5d804c9709d
+snapshot=d013b491a262fe4e5d4d2f1b7ae0042eb1189a5236e14aa62072e006227c7711  objects=16
+NOTE: mount arms unavailable on this pod; native + bypass only.
+
+=================== READ (load-controlled, round-robin) ===================
+payload=1024 MiB  objects=16  reps=5
+start load: 5.47
+
+rep  path     phase          MiB/s   load
+  1  native   cold      19955 MiB/s   load  5.51 ->  5.51
+  1  native   warm      20235 MiB/s   load  5.51 ->  5.51
+  1  bypass   cold       6863 MiB/s   load  5.51 ->  5.51
+  1  bypass   warm      13921 MiB/s   load  5.51 ->  5.51
+  1  mount    cold       3300 MiB/s   load  5.51 ->  5.51
+  1  mount    warm      15795 MiB/s   load  5.51 ->  5.51
+  2  native   cold       3108 MiB/s   load  5.51 ->  5.51
+  2  native   warm      16115 MiB/s   load  5.51 ->  5.51
+  2  bypass   cold       7815 MiB/s   load  5.51 ->  5.51
+  2  bypass   warm      16661 MiB/s   load  5.51 ->  5.51
+  2  mount    cold       3256 MiB/s   load  5.51 ->  5.51
+  2  mount    warm      18650 MiB/s   load  5.51 ->  5.51
+  3  native   cold       3365 MiB/s   load  5.51 ->  5.51
+  3  native   warm      18583 MiB/s   load  5.51 ->  5.51
+  3  bypass   cold       7832 MiB/s   load  5.51 ->  5.51
+  3  bypass   warm      15942 MiB/s   load  5.51 ->  5.51
+  3  mount    cold       3352 MiB/s   load  5.51 ->  5.51
+  3  mount    warm      18204 MiB/s   load  5.51 ->  5.51
+  4  native   cold       3382 MiB/s   load  5.51 ->  5.51
+  4  native   warm      18175 MiB/s   load  5.51 ->  5.51
+  4  bypass   cold       7767 MiB/s   load  5.51 ->  5.51
+  4  bypass   warm      16223 MiB/s   load  5.51 ->  5.51
+  4  mount    cold       3390 MiB/s   load  5.51 ->  5.51
+  4  mount    warm      18663 MiB/s   load  5.51 ->  5.51
+  5  native   cold       3425 MiB/s   load  5.51 ->  5.51
+  5  native   warm      18636 MiB/s   load  5.51 ->  5.51
+  5  bypass   cold       7882 MiB/s   load  5.51 ->  5.51
+  5  bypass   warm      15773 MiB/s   load  5.51 ->  5.51
+  5  mount    cold       3215 MiB/s   load  5.51 ->  5.51
+  5  mount    warm      18651 MiB/s   load  5.51 ->  5.51
+
+end load: 5.51
+
+=== summary (median of reps, [min-max] spread) ===
+path     phase   median MiB/s                 spread
+native   cold            3382         [3108 - 19955]
+native   warm           18582        [16115 - 20235]
+bypass   cold            7816          [6863 - 7882]
+bypass   warm           15942        [13921 - 16661]
+mount    cold            3300          [3215 - 3390]
+mount    warm           18650        [15795 - 18663]
+
+cold bypass/mount ratio: 2.37x
+cold bypass/native ratio:  2.31x
+cold mount/native ratio:  0.98x
+
+rows written to /workspace/bench/results/reads.json
+
+============= WRITE (load-controlled, round-robin) =============
+payload=1024 MiB   reps=3   arms=native,direct-ingest
+daemon pid for mount amplification: n/a
+start load 5.51
+
+rep  arm               throughput      MiB              MiB     amp   load
+  1  native             3213 MiB/s     1024 logical      1024 written    1.00x   load  5.95 ->  5.95  
+  1  direct-ingest       421 MiB/s     1024 logical      1024 written    1.00x   load  5.95 ->  5.95  
+  2  native             3151 MiB/s     1024 logical      1024 written    1.00x   load  6.03 ->  6.03  
+  2  direct-ingest       390 MiB/s     1024 logical      1024 written    1.00x   load  6.03 ->  6.03  
+  3  native             3096 MiB/s     1024 logical      1024 written    1.00x   load  6.27 ->  6.27  
+  3  direct-ingest       355 MiB/s     1024 logical      1024 written    1.00x   load  6.27 ->  6.27  
+
+end load 6.27
+
+=== summary (median of reps, [min-max] spread) ===
+arm             median MiB/s             spread   median amp         amp spread
+native                  3151      [3096 - 3214]        1.00x      [1.00 - 1.00]
+direct-ingest            390        [355 - 421]        1.00x      [1.00 - 1.00]
+
+rows written to /workspace/bench/results/writes.json
+
+=== done: 2026-08-15T21:58:27Z ===
+results in /workspace/bench/results

@@ -1,0 +1,79 @@
+[project]
+name = "tensorfs"
+version = "0.1.0"
+description = "Content-addressed local storage with direct per-tensor reads and writes"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Paul Fidika", email = "paul@fidika.com" }]
+# 3.11 is the abi3 floor, and the floor is 3.11 rather than 3.10 because the
+# C buffer protocol (`Py_buffer`, `Py_bf_getbuffer`, `PyMemoryView_FromBuffer`)
+# entered CPython's stable ABI in 3.11 -- see Misc/stable_abi.toml, bpo-45459.
+# A zero-copy `memoryview` over a CAS object is the point of the extension, so
+# the ABI floor has to be able to express one.
+requires-python = ">=3.11"
+dependencies = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    # No Windows: `local.py` locks with `fcntl` and `tensors.py` maps with
+    # POSIX mmap flags, so the facade cannot be imported there. macOS has
+    # flock and is tested.
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+]
+
+[project.urls]
+Repository = "https://github.com/cozy-creator/tensorfs"
+Issues = "https://github.com/cozy-creator/tensorfs/issues"
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.10",
+    "pytest>=9.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+# One distribution, two halves: the Python facade under `python-source` and
+# the compiled extension built from the binding crate.
+manifest-path = "crates/tensorfs-py/Cargo.toml"
+python-source = "python/src"
+module-name = "tensorfs._tensorfs"
+strip = true
+# The wheel carries the facade and the compiled extension and nothing else.
+# `tensorfsd` is deliberately NOT shipped: RunPod pods cannot mount FUSE at
+# all -- opening /dev/fuse is denied by the device cgroup even for root, and
+# CAP_SYS_ADMIN is absent from the container's bounding set with no API field
+# to grant it. The daemon stays in-repo for local and development use.
+include = [
+    { path = "Cargo.toml", format = "sdist" },
+    { path = "Cargo.lock", format = "sdist" },
+    { path = "crates/**/*", format = "sdist" },
+    { path = "spec/v1/**/*", format = "sdist" },
+    { path = "scripts/**/*", format = "sdist" },
+    { path = "LICENSE", format = "sdist" },
+]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["python/src", "python/tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

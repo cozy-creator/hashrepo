@@ -1,0 +1,14 @@
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+dist/
+*.egg-info/
+/target/
+
+# maturin puts the compiled extension inside the package directory for an
+# editable install.
+python/src/tensorfs/*.so
+python/src/tensorfs/*.pyd
+python/src/tensorfs/*.dylib

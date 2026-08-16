@@ -1,0 +1,122 @@
+{
+  "$schema": "tfp1-vectors.schema.json",
+  "format": 1,
+  "hash": "sha256",
+  "max_object_size": 67108864,
+  "fixture_encoding": "lowercase-hex-lf-v1",
+  "golden": [
+    {
+      "name": "single-object",
+      "fixture": "fixtures/single-object.hex",
+      "fixture_sha256": "bf15794d512b0039665cfa56510f7c0893c7db99c2bb4101d5e3a2da5b7ec0eb",
+      "description": "one small object; the smallest canonical pack"
+    },
+    {
+      "name": "three-objects",
+      "fixture": "fixtures/three-objects.hex",
+      "fixture_sha256": "ee4a521f37b896d87af64d18f35be5a09d49a3d5ba4d727d1f95ec928085ffe6",
+      "description": "three objects whose canonical digest order differs from any size order"
+    },
+    {
+      "name": "eight-objects",
+      "fixture": "fixtures/eight-objects.hex",
+      "fixture_sha256": "9d27637e75bdd03d889676e044d44cab6958bf328da91604a36202c58f5b9325",
+      "description": "a deeper index walk with mixed small object sizes"
+    }
+  ],
+  "generated_golden": [
+    {
+      "name": "full-payload-single-object",
+      "objects": [
+        {
+          "ramp_seed": 165,
+          "length": 67108864
+        }
+      ],
+      "pack_sha256": "29b46710fd57b08b8e139ee64410abb2c1122cc0e7a800dc919208541dcae6d8",
+      "description": "one object at the 64 MiB bound; the payload cap equals the object cap, so this pack is exactly full"
+    }
+  ],
+  "refusals": [
+    {
+      "name": "bad-magic",
+      "fixture": "fixtures/refusal-bad-magic.hex",
+      "reason": "bad-magic"
+    },
+    {
+      "name": "zero-objects",
+      "fixture": "fixtures/refusal-zero-objects.hex",
+      "reason": "zero-objects"
+    },
+    {
+      "name": "object-limit",
+      "fixture": "fixtures/refusal-object-limit.hex",
+      "reason": "object-limit"
+    },
+    {
+      "name": "count-exceeds-input",
+      "fixture": "fixtures/refusal-count-exceeds-input.hex",
+      "reason": "count-exceeds-input"
+    },
+    {
+      "name": "truncated-header",
+      "fixture": "fixtures/refusal-truncated-header.hex",
+      "reason": "truncated"
+    },
+    {
+      "name": "truncated-payload",
+      "fixture": "fixtures/refusal-truncated-payload.hex",
+      "reason": "truncated"
+    },
+    {
+      "name": "index-order",
+      "fixture": "fixtures/refusal-index-order.hex",
+      "reason": "index-order"
+    },
+    {
+      "name": "duplicate-digest",
+      "fixture": "fixtures/refusal-duplicate-digest.hex",
+      "reason": "duplicate-digest"
+    },
+    {
+      "name": "zero-length-object",
+      "fixture": "fixtures/refusal-zero-length-object.hex",
+      "reason": "zero-length-object"
+    },
+    {
+      "name": "object-too-large",
+      "fixture": "fixtures/refusal-object-too-large.hex",
+      "reason": "object-too-large"
+    },
+    {
+      "name": "payload-too-large",
+      "fixture": "fixtures/refusal-payload-too-large.hex",
+      "reason": "payload-too-large"
+    },
+    {
+      "name": "offset-mismatch-start",
+      "fixture": "fixtures/refusal-offset-mismatch-start.hex",
+      "reason": "offset-mismatch"
+    },
+    {
+      "name": "offset-mismatch-gap",
+      "fixture": "fixtures/refusal-offset-mismatch-gap.hex",
+      "reason": "offset-mismatch"
+    },
+    {
+      "name": "offset-overlap",
+      "fixture": "fixtures/refusal-offset-overlap.hex",
+      "reason": "offset-mismatch"
+    },
+    {
+      "name": "trailing-bytes",
+      "fixture": "fixtures/refusal-trailing-bytes.hex",
+      "reason": "trailing-bytes"
+    },
+    {
+      "name": "digest-mismatch",
+      "fixture": "fixtures/refusal-digest-mismatch.hex",
+      "reason": "digest-mismatch"
+    }
+  ]
+}

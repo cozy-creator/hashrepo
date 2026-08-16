@@ -1,0 +1,49 @@
+[package]
+name = "tensorfs-core"
+version = "0.1.0"
+description = "Canonical formats and storage engine for TensorFS"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+# The formats and the planner are unconditional; everything that needs a real
+# filesystem, an HTTP client or a SQL engine is a feature.
+#
+# This exists so the Python extension module can link the object store and the
+# committed-records byte source WITHOUT linking `ureq`/`rustls`/`ring` and the
+# Turso engine, neither of which it calls. That is a smaller wheel and, more
+# importantly, far less C-toolchain surface to cross-compile for the eight
+# platform wheels the release builds.
+[features]
+default = ["store", "sync", "workspace"]
+store = ["dep:fs4"]
+sync = ["store", "dep:base64", "dep:ureq"]
+workspace = ["store", "dep:turso"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+unicode-normalization.workspace = true
+
+[target.'cfg(any(unix, windows))'.dependencies]
+base64 = { version = "0.22", optional = true }
+fs4 = { version = "0.8", default-features = false, features = ["sync"], optional = true }
+turso = { version = "0.7.2", default-features = false, optional = true }
+ureq = { version = "2.12", default-features = false, features = [
+    "tls",
+    "json",
+], optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# rusqlite is kept ONLY to prove the escape hatch: tests/engine_reopen.rs
+# opens the same metadata file under both engines. It is gated to the
+# platforms that module targets so a wasm build never resolves its
+# sqlite-wasm-rs backend.
+[target.'cfg(any(unix, windows))'.dev-dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }
