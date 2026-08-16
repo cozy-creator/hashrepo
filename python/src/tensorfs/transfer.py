@@ -302,10 +302,38 @@ def _run_parallel(
             except Exception as exc:
                 results[index] = ("failed", f"{type(exc).__name__}: {exc}")
 
+    # `progress` answers "is this transfer advancing toward readiness", so a
+    # RESIDENT object advances it exactly as a fetched one does: verifying an
+    # object already on disk is completed work toward readiness, and callers
+    # size their denominator over every planned object. Counting only fetched
+    # bytes made a resumed transfer — where the previous attempt already landed
+    # most objects — look identical to a dead one, which is how a healthy pod
+    # gets condemned. `bytes_transferred` still counts only what actually moved.
+    #
+    # `progress` fires as each object lands, NOT from the report loop below.
+    # Emitting after the drain means a multi-gigabyte transfer reports nothing
+    # until its last object is on disk, and a caller that watches the counter
+    # for liveness — tensorhub's transfer freshness window, and the worker's
+    # own stall detector — condemns a download that is proceeding correctly.
+    # Objects are capped at 64 MiB, so a live transfer now advances at least
+    # once per 64 MiB.
+    #
+    # It still runs on the CALLER's thread, from the completion loop rather
+    # than from inside `run`. Callers hand this callback shared state that is
+    # not theirs to lock, so moving it onto the pool's threads would fix the
+    # timing by breaking the contract.
     with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix="tensorfs") as pool:
-        futures = [pool.submit(run, index, grant) for index, grant in enumerate(ordered)]
+        futures = {
+            pool.submit(run, index, grant): index
+            for index, grant in enumerate(ordered)
+        }
         for future in as_completed(futures):
             future.result()
+            index = futures[future]
+            result = results[index]
+            assert result is not None
+            if result[0] in ("succeeded", "skipped") and progress is not None:
+                progress(ordered[index].digest, ordered[index].size_bytes)
 
     report = TransferReport(examined=len(ordered))
     for grant, result in zip(ordered, results, strict=True):
@@ -314,8 +342,6 @@ def _run_parallel(
         if status == "succeeded":
             report.succeeded += 1
             report.bytes_transferred += grant.size_bytes
-            if progress is not None:
-                progress(grant.digest, grant.size_bytes)
         elif status == "skipped":
             report.skipped_resident += 1
         elif status == "expired":

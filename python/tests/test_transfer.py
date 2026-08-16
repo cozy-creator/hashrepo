@@ -142,6 +142,113 @@ def test_progress_runs_once_on_the_caller_thread_after_success(tmp_path: Path) -
     assert callbacks == [caller]
 
 
+def test_progress_reports_a_landed_object_before_the_batch_finishes(tmp_path: Path) -> None:
+    """A live transfer must be visible WHILE it is live, not only once it ends.
+
+    pgw#1287: `progress` used to be called from the report-assembly loop, which
+    runs after every future has drained. A 31.6 GB snapshot therefore reported
+    `0 / total` for its entire duration, and the hub — whose transfer freshness
+    window is six minutes — condemned the pod while the download was proceeding
+    correctly. A test that only checks the final callback set cannot see this:
+    the totals were always right, only their timing was wrong.
+
+    So this asserts the timing directly. The second object refuses to finish
+    until the first object's callback has been observed, which is impossible if
+    callbacks wait for the batch. If the emission regresses, the second worker
+    times out and the report carries its failure instead of hanging the suite.
+    """
+
+    first = CASRef.digest_bytes(b"first")
+    second = CASRef.digest_bytes(b"second")
+    first_reported = threading.Event()
+
+    class GatedTransport(MemoryTransport):
+        def download(self, grant: TransferGrant, destination: Path) -> None:
+            if grant.digest == second and not first_reported.wait(timeout=10):
+                raise AssertionError(
+                    "no progress was reported for the first object while the "
+                    "second was still in flight — the whole transfer is "
+                    "invisible until it ends"
+                )
+            super().download(grant, destination)
+
+    transport = GatedTransport({first: b"first", second: b"second"})
+    beats: list[CASRef] = []
+
+    def progress(ref: CASRef, _size: int) -> None:
+        beats.append(ref)
+        if ref == first:
+            first_reported.set()
+
+    report = _download(
+        [grant(first, 5), grant(second, 6)],
+        LocalCAS(tmp_path / "destination"),
+        transport=transport,
+        parallel=2,
+        progress=progress,
+    )
+
+    assert report.failures == []
+    assert report.ok
+    assert set(beats) == {first, second}
+
+
+def test_a_resident_object_advances_progress_before_the_batch_finishes(tmp_path: Path) -> None:
+    """A resumed transfer must look alive, not dead.
+
+    pgw#1287: an object already on disk was `skipped` and reported nothing, so
+    a resume whose previous attempt landed most objects was indistinguishable
+    from one making no headway at all — and a caller that brakes on two
+    consecutive zero-progress attempts would condemn the healthiest possible
+    pod. Residency is not free either: `contains` REHASHES every byte, so a
+    mostly-resident snapshot can spend minutes verifying while reporting
+    nothing.
+
+    `progress` answers "is this advancing toward readiness", and a verified
+    resident object is completed work toward readiness. Same arrival-style
+    gate as the fetched case, so the emission must be incremental too.
+    """
+
+    resident = CASRef.digest_bytes(b"already here")
+    fetched = CASRef.digest_bytes(b"still remote")
+    resident_reported = threading.Event()
+
+    class GatedTransport(MemoryTransport):
+        def download(self, grant: TransferGrant, destination: Path) -> None:
+            if not resident_reported.wait(timeout=10):
+                raise AssertionError(
+                    "the resident object reported no progress while the "
+                    "fetched one was still in flight — a resume that is "
+                    "mostly complete reads as a transfer making no headway"
+                )
+            super().download(grant, destination)
+
+    cas = LocalCAS(tmp_path / "destination")
+    cas.put_bytes(b"already here", expected=resident)
+    transport = GatedTransport({fetched: b"still remote"})
+    beats: list[CASRef] = []
+
+    def progress(ref: CASRef, _size: int) -> None:
+        beats.append(ref)
+        if ref == resident:
+            resident_reported.set()
+
+    report = _download(
+        [grant(resident, 12), grant(fetched, 12)],
+        cas,
+        transport=transport,
+        parallel=2,
+        progress=progress,
+    )
+
+    assert report.failures == []
+    assert report.skipped_resident == 1
+    assert report.succeeded == 1
+    # Only the fetched object moved bytes, but BOTH advanced readiness.
+    assert report.bytes_transferred == 12
+    assert set(beats) == {resident, fetched}
+
+
 def test_python_consumes_and_reproduces_shared_go_grant_vector() -> None:
     path = Path("spec/v1/vectors/upload_grant.json")
     raw = path.read_bytes().strip()
