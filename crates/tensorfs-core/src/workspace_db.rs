@@ -225,9 +225,41 @@ impl fmt::Debug for Connection {
 }
 
 impl Connection {
+    /// Opens the metadata database in MULTIPROCESS mode.
+    ///
+    /// This is not optional and it is not a tuning knob. Turso's default is a
+    /// whole-file exclusive lock taken at open, so a second process fails with
+    /// `Failed locking file. File is locked by another process` — it cannot
+    /// open the store at all, let alone contend for a write. `tensorfsd serve`
+    /// holds the store for its lifetime, so under that default a CLI `seal`, a
+    /// `mount-snapshot`, a direct-ingest writer and an out-of-band GC pass are
+    /// all locked out.
+    ///
+    /// `experimental_multiprocess_wal` swaps that whole-file lock for shared
+    /// WAL coordination (turso adds `OpenFlags::NoLock` and coordinates through
+    /// a side file instead) — SQLite's WAL/`-shm` design. The engine decides
+    /// this AT OPEN, which is why it is a builder call: setting
+    /// `journal_mode=WAL` afterwards is too late to change the lock already
+    /// taken.
+    ///
+    /// Every opener must agree — turso rejects a legacy open against a live
+    /// multiprocess database and vice versa. That is safe here because this is
+    /// the ONLY place the engine is opened; `workspace.rs` funnels every
+    /// `WorkspaceStore::open` through it.
+    ///
+    /// Turso refuses multiprocess mode on network filesystems (NFS, CIFS/SMB,
+    /// Ceph, Lustre, GFS2, OCFS2, AFS, Coda, NCP, 9p). We take that refusal
+    /// rather than falling back, because a silent fallback restores the
+    /// single-process bug invisibly, and because the store's crash boundary
+    /// already assumes POSIX semantics those filesystems do not reliably give
+    /// (no-clobber `hard_link`, honest `fsync`, advisory leases).
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref().to_string_lossy().into_owned();
-        let database = block_on(turso::Builder::new_local(&path).build())?;
+        let database = block_on(
+            turso::Builder::new_local(&path)
+                .experimental_multiprocess_wal(true)
+                .build(),
+        )?;
         let inner = database.connect()?;
         Ok(Self {
             _database: database,
