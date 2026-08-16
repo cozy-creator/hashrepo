@@ -61,7 +61,14 @@ fn transport(url: &str, org: &str, repo: &str, token: &str) -> HttpTransport {
 
 /// A deterministic safetensors file whose tensors straddle the 64 MiB grid, so
 /// the planner produces several independent objects per file.
+///
+/// The nonce must ride the PAYLOAD, not only the tensor names: names live in
+/// the header object alone, so constant-fill tensors produce byte-identical
+/// data objects every run and a hub that saw an earlier run reports them
+/// resident. Without this, the "fresh content must upload" assertion below
+/// passes once and is vacuous on every later run against the same hub.
 fn safetensors(nonce: &str, tensors: &[(&str, usize, u8)]) -> Vec<u8> {
+    let seed = *SnapshotId::of(nonce.as_bytes()).as_bytes();
     let mut header = String::from("{");
     let mut offset = 0_usize;
     for (index, (name, length, _)) in tensors.iter().enumerate() {
@@ -80,7 +87,7 @@ fn safetensors(nonce: &str, tensors: &[(&str, usize, u8)]) -> Vec<u8> {
     file.extend_from_slice(&(header.len() as u64).to_le_bytes());
     file.extend_from_slice(header.as_bytes());
     for (_, length, fill) in tensors {
-        file.extend(std::iter::repeat_n(*fill, *length));
+        file.extend((0..*length).map(|index| fill ^ seed[index % seed.len()]));
     }
     file
 }

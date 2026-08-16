@@ -17,6 +17,7 @@
 use std::collections::HashSet;
 use std::io::Read;
 use std::io::Write as _;
+use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -29,6 +30,10 @@ use crate::workspace::{WorkspaceError, WorkspaceStore};
 
 /// One bounded download-grant batch, per the wire contract.
 pub const DOWNLOAD_GRANT_BATCH: usize = 256;
+
+/// Bounded transient retries per object fetch. Pull carries no options
+/// struct, so this is the contract rather than a caller's choice.
+const DOWNLOAD_ATTEMPTS: u32 = 4;
 
 /// One presigned authorization to PUT one exact TFP1 staging pack. The signed
 /// headers bind the client-declared pack checksum; they are replayed verbatim.
@@ -356,6 +361,11 @@ pub fn push_snapshot<T: SyncTransport>(
                         if attempt >= options.max_upload_attempts {
                             return Err(TransportError::Io(detail).into());
                         }
+                        // A carrier that just reset the connection is rarely
+                        // ready again the same millisecond. Retrying without a
+                        // pause spends the whole budget inside one outage and
+                        // turns a transient reset into a terminal push.
+                        back_off(attempt);
                     }
                     Err(TransportError::Expired(_)) => {
                         refresh_early = true;
@@ -392,6 +402,39 @@ pub fn push_snapshot<T: SyncTransport>(
                 }
             }
             CompleteStatus::Failed { code } => return Err(SyncError::HeadRefused { code }),
+        }
+    }
+}
+
+/// Bounded exponential backoff before retrying a transient carrier failure.
+/// Capped so a long outage still fails in bounded time rather than hanging.
+fn back_off(attempt: u32) {
+    const BASE: Duration = Duration::from_millis(250);
+    const CEILING: Duration = Duration::from_secs(8);
+    let delay = BASE.saturating_mul(1_u32 << attempt.min(6)).min(CEILING);
+    std::thread::sleep(delay);
+}
+
+/// Fetches one object, retrying only genuinely transient carrier failures. A
+/// refusal or an expired grant is never retried here: the first is terminal
+/// and the second belongs to the caller's replan.
+fn download_with_retry<T: SyncTransport>(
+    transport: &T,
+    grant: &DownloadGrant,
+    attempts: u32,
+) -> Result<Vec<u8>, TransportError> {
+    let mut attempt = 0;
+    loop {
+        match transport.download(grant) {
+            Ok(bytes) => return Ok(bytes),
+            Err(TransportError::Io(detail)) => {
+                attempt += 1;
+                if attempt >= attempts {
+                    return Err(TransportError::Io(detail));
+                }
+                back_off(attempt);
+            }
+            Err(error) => return Err(error),
         }
     }
 }
@@ -485,7 +528,10 @@ pub fn pull_snapshot<T: SyncTransport>(
                 .iter()
                 .find(|grant| grant.digest == *digest)
                 .ok_or(SyncError::GrantOmitted(*digest))?;
-            let bytes = transport.download(grant)?;
+            // A single transient reset must not abandon a whole pull: a
+            // multi-gigabyte fetch crosses too many packets for one-shot
+            // transfer to be a defensible contract.
+            let bytes = download_with_retry(transport, grant, DOWNLOAD_ATTEMPTS)?;
             let mut writer = meta.store().writer()?;
             writer
                 .write_all(&bytes)
