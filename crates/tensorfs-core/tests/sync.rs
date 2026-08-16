@@ -737,6 +737,141 @@ fn completion_retries_through_incompleteness_and_surfaces_terminal_refusal() {
     ));
 }
 
+/// A hub that fires one shot of local mischief the instant a push has
+/// declared and is therefore in flight, then behaves exactly like the real
+/// fake for the rest of the transfer.
+struct SaboteurHub<'meta> {
+    inner: FakeHub,
+    meta: &'meta WorkspaceStore,
+    snapshot: SnapshotId,
+    fired: RefCell<bool>,
+}
+
+impl<'meta> SaboteurHub<'meta> {
+    fn new(meta: &'meta WorkspaceStore, snapshot: SnapshotId) -> Self {
+        Self {
+            inner: FakeHub::new(),
+            meta,
+            snapshot,
+            fired: RefCell::new(false),
+        }
+    }
+
+    /// Deletes the snapshot under the push and runs GC to completion: mark,
+    /// hold, delete is three epochs, so this is a collector that has fully
+    /// made up its mind while the transfer is still running.
+    fn sabotage(&self) {
+        if std::mem::replace(&mut *self.fired.borrow_mut(), true) {
+            return;
+        }
+        self.meta
+            .delete_snapshot(&self.snapshot)
+            .expect("the snapshot deletes mid-push");
+        for _ in 0..3 {
+            self.meta.collect().expect("collection runs");
+        }
+    }
+}
+
+impl SyncTransport for SaboteurHub<'_> {
+    fn declare(
+        &self,
+        tfm1_bytes: &[u8],
+        expected_head: Option<&SnapshotId>,
+    ) -> Result<SyncPlan, TransportError> {
+        let plan = self.inner.declare(tfm1_bytes, expected_head)?;
+        self.sabotage();
+        Ok(plan)
+    }
+
+    fn pack_grants(
+        &self,
+        session: &str,
+        claims: &[PackClaim],
+    ) -> Result<GrantsPlan, TransportError> {
+        self.inner.pack_grants(session, claims)
+    }
+
+    fn upload_pack(&self, grant: &PackGrant, pack: &[u8]) -> Result<(), TransportError> {
+        self.inner.upload_pack(grant, pack)
+    }
+
+    fn complete(&self, session: &str) -> Result<CompleteStatus, TransportError> {
+        self.inner.complete(session)
+    }
+
+    fn head(&self) -> Result<Option<SnapshotId>, TransportError> {
+        self.inner.head()
+    }
+
+    fn download_grants(
+        &self,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<DownloadGrant>, TransportError> {
+        self.inner.download_grants(digests)
+    }
+
+    fn download(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError> {
+        self.inner.download(grant)
+    }
+}
+
+/// A push in flight is the ONLY thing keeping its bytes alive once the
+/// workspace has moved on: the sealed snapshot row is their last root.
+/// Deleting that snapshot mid-transfer strips the root, and `collect` then
+/// takes the objects the push is still streaming — the push dies reading
+/// bytes that existed when it started.
+///
+/// The pending-sync lease exists exactly for this window: it pins the
+/// snapshot's closure for the transfer's exact lifetime, and not one epoch
+/// longer, which the tail of this test also proves.
+#[test]
+fn a_snapshot_deleted_mid_push_keeps_its_objects_until_the_push_ends() {
+    let root = scratch("pending-sync-lease");
+    let (meta, id) = sealed_workspace(
+        &root,
+        "publisher",
+        &[("model.bin", vec![vec![0xA1_u8; 4096], vec![0xC3_u8; 2048]])],
+    );
+    // Drop the workspace's own reference, so the sealed snapshot is the only
+    // root these objects have. Without this the object map would pin them
+    // and the race could not be constructed at all.
+    meta.commit_generation(
+        "publisher",
+        &[Mutation::Unlink {
+            path: "model.bin".to_owned(),
+        }],
+    )
+    .expect("the workspace forgets the file");
+
+    let closure = data_digests(&meta, &id);
+    assert_eq!(closure.len(), 2, "the fixture must have objects to lose");
+
+    let hub = SaboteurHub::new(&meta, id);
+    let report = push_snapshot(&meta, &hub, &id, None, PushOptions::default())
+        .expect("a push whose snapshot is deleted mid-flight still finishes");
+    assert_eq!(report.uploaded_objects, closure.len() as u64);
+    assert_eq!(hub.inner.state.borrow().head, Some(id));
+    for digest in &closure {
+        assert!(
+            meta.store().verify(digest).is_ok(),
+            "{digest} was collected out from under the push that was sending it"
+        );
+    }
+
+    // The pin ends with the push. Nothing roots these objects now, so the
+    // ordinary two-epoch protocol must reclaim them.
+    for _ in 0..3 {
+        meta.collect().expect("collection runs");
+    }
+    for digest in &closure {
+        assert!(
+            matches!(meta.store().verify(digest), Err(StoreError::Missing { .. })),
+            "{digest} outlived the push that pinned it"
+        );
+    }
+}
+
 fn data_digests(meta: &WorkspaceStore, id: &SnapshotId) -> Vec<ObjectDigest> {
     let snapshot = meta.load_snapshot(id).expect("snapshot loads");
     let mut digests = Vec::new();

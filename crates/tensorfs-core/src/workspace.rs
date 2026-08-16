@@ -32,20 +32,27 @@ const KIND_DIRECTORY: i64 = 1;
 const KIND_FILE: i64 = 2;
 const KIND_SYMLINK: i64 = 3;
 
+/// What a lease pins, as stored in `leases.kind`.
+///
+/// The two shapes are disjoint and each has exactly one constructor, so a
+/// lease can never claim a lifetime it does not hold: an [`Unlinked`] lease
+/// names an inode and keeps its object map alive, a [`PendingSync`] lease
+/// names the digests an in-flight transfer is reading. A merely open or
+/// mmapped file needs neither — its dirent is already a root — so there is
+/// no variant for it.
+///
+/// [`Unlinked`]: LeaseKind::Unlinked
+/// [`PendingSync`]: LeaseKind::PendingSync
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LeaseKind {
-    Open,
+enum LeaseKind {
     Unlinked,
-    Mmap,
     PendingSync,
 }
 
 impl LeaseKind {
     const fn to_row(self) -> i64 {
         match self {
-            Self::Open => 1,
             Self::Unlinked => 2,
-            Self::Mmap => 3,
             Self::PendingSync => 4,
         }
     }
@@ -206,6 +213,11 @@ impl WorkspaceStore {
                  holder TEXT NOT NULL,
                  workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
                  inode INTEGER REFERENCES inodes(id)
+             );
+             CREATE TABLE IF NOT EXISTS lease_objects (
+                 lease INTEGER NOT NULL REFERENCES leases(id) ON DELETE CASCADE,
+                 digest BLOB NOT NULL,
+                 PRIMARY KEY (lease, digest)
              );
              CREATE TABLE IF NOT EXISTS gc_state (
                  id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -659,12 +671,13 @@ impl WorkspaceStore {
         Ok(())
     }
 
-    /// Pins one path's inode (and therefore its object map) for the holder.
-    pub fn acquire_lease(
+    /// Pins one path's inode (and therefore its object map) for the holder,
+    /// so a file unlinked while still open keeps its bytes until the last
+    /// descriptor closes.
+    pub fn acquire_unlinked_lease(
         &self,
         workspace: &str,
         path: &str,
-        kind: LeaseKind,
         holder: &str,
     ) -> Result<LeaseId, WorkspaceError> {
         let mut connection = self.connection.lock().expect("metadata mutex is healthy");
@@ -674,15 +687,76 @@ impl WorkspaceStore {
             .ok_or_else(|| WorkspaceError::Missing(path.to_owned()))?;
         tx.execute(
             "INSERT INTO leases (kind, holder, workspace_id, inode) VALUES (?1, ?2, ?3, ?4)",
-            params![kind.to_row(), holder, row.id, inode.id],
+            params![LeaseKind::Unlinked.to_row(), holder, row.id, inode.id],
         )?;
         let lease = LeaseId(tx.last_insert_rowid());
         tx.commit()?;
         Ok(lease)
     }
 
-    /// Releases one lease. An orphaned inode whose last lease is released is
-    /// removed together with its object map.
+    /// Pins every object one sealed snapshot names for the exact lifetime of
+    /// an in-flight transfer, and hands back the snapshot the caller will
+    /// send.
+    ///
+    /// Until a push lands, the `snapshots` row is often the ONLY root its
+    /// objects have — the workspace has usually moved on. A `delete_snapshot`
+    /// racing the transfer would strip that root and let [`collect`] take the
+    /// bytes still being streamed. The pin is a first-class root instead of a
+    /// second copy of the closure, so nothing is duplicated and nothing
+    /// outlives the release.
+    ///
+    /// Reading the manifest and taking the pin happen in ONE transaction, so
+    /// there is no window between them: a concurrent delete either wins
+    /// outright (`UnknownSnapshot`, before a byte moves) or loses until the
+    /// lease is released.
+    ///
+    /// [`collect`]: Self::collect
+    pub fn acquire_pending_sync_lease(
+        &self,
+        snapshot: &SnapshotId,
+        holder: &str,
+    ) -> Result<(LeaseId, Snapshot), WorkspaceError> {
+        let mut connection = self.connection.lock().expect("metadata mutex is healthy");
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let blob: Option<Vec<u8>> = tx
+            .query_row(
+                "SELECT blob FROM snapshots WHERE id = ?1",
+                params![snapshot.as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let blob = blob.ok_or(WorkspaceError::UnknownSnapshot(*snapshot))?;
+        if SnapshotId::of(&blob) != *snapshot {
+            return Err(WorkspaceError::SnapshotCorrupt);
+        }
+        let decoded = decode(&blob)?;
+        tx.execute(
+            "INSERT INTO leases (kind, holder, workspace_id, inode)
+                 VALUES (?1, ?2, NULL, NULL)",
+            params![LeaseKind::PendingSync.to_row(), holder],
+        )?;
+        let lease = LeaseId(tx.last_insert_rowid());
+        for (_path, entry) in decoded.entries() {
+            if let Entry::File { records, .. } = entry {
+                for record in records {
+                    if let FileRecord::Data { digest, .. } = record {
+                        tx.execute(
+                            "INSERT OR IGNORE INTO lease_objects (lease, digest)
+                                 VALUES (?1, ?2)",
+                            params![lease.0, digest.as_bytes().as_slice()],
+                        )?;
+                    }
+                }
+            }
+        }
+        tx.commit()?;
+        Ok((lease, decoded))
+    }
+
+    /// Releases one lease and everything it pinned. An orphaned inode whose
+    /// last lease is released is removed together with its object map, and a
+    /// pending-sync lease's pinned digests stop being roots in the same
+    /// transaction.
     pub fn release_lease(&self, lease: LeaseId) -> Result<(), WorkspaceError> {
         let mut connection = self.connection.lock().expect("metadata mutex is healthy");
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -696,6 +770,12 @@ impl WorkspaceStore {
         let Some(inode) = inode else {
             return Err(WorkspaceError::UnknownLease(lease.0));
         };
+        // Children first: the pin must not be able to outlive its lease even
+        // where the engine declines to cascade.
+        tx.execute(
+            "DELETE FROM lease_objects WHERE lease = ?1",
+            params![lease.0],
+        )?;
         tx.execute("DELETE FROM leases WHERE id = ?1", params![lease.0])?;
         if let Some(inode) = inode {
             drop_inode_if_orphaned(&tx, inode)?;
@@ -749,6 +829,19 @@ impl WorkspaceStore {
                         }
                     }
                 }
+            }
+        }
+
+        // Leases are the third root source, and the only one that is not a
+        // committed fact: a pending-sync lease pins the closure a transfer is
+        // still reading, whose snapshot row may already have been deleted out
+        // from under it. Read inside the same transaction as the other two,
+        // so the whole root set is one consistent instant.
+        {
+            let mut pinned = tx.prepare("SELECT digest FROM lease_objects")?;
+            let mut rows = pinned.query([])?;
+            while let Some(row) = rows.next()? {
+                roots.insert(digest_from_row(row.get::<_, Vec<u8>>(0)?)?);
             }
         }
 

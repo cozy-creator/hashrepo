@@ -26,7 +26,7 @@ use crate::object::ObjectDigest;
 use crate::store::StoreError;
 use crate::tfm1::{Entry, FileRecord, Snapshot, SnapshotId, Tfm1Error, decode};
 use crate::tfp1::{MAX_PACK_OBJECTS, MAX_PACK_PAYLOAD, Tfp1Error};
-use crate::workspace::{WorkspaceError, WorkspaceStore};
+use crate::workspace::{LeaseId, WorkspaceError, WorkspaceStore};
 
 /// One bounded download-grant batch, per the wire contract.
 pub const DOWNLOAD_GRANT_BATCH: usize = 256;
@@ -250,6 +250,25 @@ pub fn manifest_object_digest(id: &SnapshotId) -> ObjectDigest {
     ObjectDigest::from_bytes(*id.as_bytes())
 }
 
+/// Who the pending-sync lease belongs to, as recorded in the metadata store.
+const PUSH_LEASE_HOLDER: &str = "sync-push";
+
+/// Releases a push's pending-sync lease on every exit — the `?` on any of the
+/// two dozen fallible steps below, and a panic just as much.
+struct PendingSyncPin<'meta> {
+    meta: &'meta WorkspaceStore,
+    lease: LeaseId,
+}
+
+impl Drop for PendingSyncPin<'_> {
+    fn drop(&mut self) {
+        // A failed release leaks one lease row, which only delays collection
+        // of objects the caller already has; there is no second thing to try
+        // and nothing to unwind into.
+        let _ = self.meta.release_lease(self.lease);
+    }
+}
+
 /// Pushes one sealed local snapshot: declare, pack and upload only missing
 /// objects under claim-bound grants, then drive `complete` to a terminal
 /// answer. Within a run, replans re-probe the session and never retransmit a
@@ -262,9 +281,15 @@ pub fn push_snapshot<T: SyncTransport>(
     expected_head: Option<&SnapshotId>,
     options: PushOptions,
 ) -> Result<PushReport, SyncError> {
-    // `load_snapshot` re-verifies the stored blob against its id, and TFM1
-    // re-encoding is byte-exact, so these are the canonical bytes.
-    let decoded = meta.load_snapshot(snapshot)?;
+    // The transfer reads local object bytes for as long as it runs, and until
+    // it lands the snapshot row is usually the only thing rooting them. The
+    // pending-sync lease pins that exact closure for the transfer's exact
+    // lifetime, so a `delete_snapshot` racing this push cannot let a
+    // collection pass take bytes still being streamed. Acquiring it also
+    // re-verifies the stored blob against its id, and TFM1 re-encoding is
+    // byte-exact, so these are the canonical bytes.
+    let (lease, decoded) = meta.acquire_pending_sync_lease(snapshot, PUSH_LEASE_HOLDER)?;
+    let _pin = PendingSyncPin { meta, lease };
     let tfm1_bytes = decoded.to_bytes();
 
     let mut report = PushReport::default();
