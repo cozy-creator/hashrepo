@@ -3,20 +3,29 @@
 
 #![cfg(target_os = "linux")]
 
-use std::io::{Read, Write};
+use std::cell::RefCell;
+use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
-use std::time::{Duration, Instant};
+use std::process::{Child, Command, ExitStatus};
+use std::time::Duration;
 
 use serde_json::{Value, json};
+use tensorfsd::rpc::ACCEPT_POLL;
 
 const FRAME_BOUND: u32 = 1024 * 1024;
 
-/// How long a client waits for a response before calling the daemon wedged.
-/// See `Daemon::connect` — an anti-hang bound, deliberately not a latency gate.
-const RESPONSE_BOUND: Duration = Duration::from_secs(120);
+/// How often a client that is waiting stops to ask whether the daemon is still
+/// alive.
+///
+/// This is a polling TICK, not a bound on how long an answer may take: every
+/// expiry re-asks the only question that matters — is the daemon's process
+/// still running? — and keeps waiting while it is. No value of this constant
+/// can turn a slow-but-healthy daemon into a failure, which is the whole
+/// difference between it and the wall-clock bound it replaced.
+const LIVENESS_POLL: Duration = Duration::from_millis(100);
 
 fn fuse_available() -> bool {
     if !Path::new("/dev/fuse").exists() {
@@ -36,8 +45,12 @@ fn fuse_available() -> bool {
 
 /// The daemon under test. Dropping it SIGKILLs and reaps the child, so no
 /// test path leaks a daemon or, through it, a mount.
+///
+/// The child is the harness's health oracle, so it sits behind a `RefCell`:
+/// every place that would otherwise consult a clock instead asks this process
+/// whether it is still running.
 struct Daemon {
-    child: Child,
+    child: RefCell<Child>,
     root: PathBuf,
     socket: PathBuf,
 }
@@ -57,41 +70,64 @@ impl Daemon {
             ])
             .spawn()
             .expect("the daemon binary spawns");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !socket.exists() {
-            assert!(
-                Instant::now() < deadline,
-                "the control socket never appeared"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        Self {
-            child,
+        let daemon = Self {
+            child: RefCell::new(child),
             root: root.to_path_buf(),
             socket,
+        };
+        // A daemon that is still starting is making progress, however loaded
+        // the box is; a daemon that has EXITED will never create the socket,
+        // and that is observable directly rather than inferred from a clock.
+        while !daemon.socket.exists() {
+            daemon.assert_alive("the control socket to appear");
+            std::thread::sleep(LIVENESS_POLL);
+        }
+        daemon
+    }
+
+    /// The child's exit status, or `None` while it is still running.
+    fn exited(&self) -> Option<ExitStatus> {
+        self.child
+            .borrow_mut()
+            .try_wait()
+            .expect("the daemon's status reads")
+    }
+
+    /// Fail the test if the daemon has died, naming the exit. A daemon that is
+    /// alive is working — the harness has no business guessing how long that
+    /// is allowed to take.
+    fn assert_alive(&self, awaited: &str) {
+        if let Some(status) = self.exited() {
+            panic!("the daemon exited ({status}) while the test waited for {awaited}");
         }
     }
 
-    fn connect(&self) -> UnixStream {
+    fn connect(&self) -> Client<'_> {
         let stream = UnixStream::connect(&self.socket).expect("the control socket accepts");
-        // A daemon that stops answering must fail the test, never hang it.
+        // The read timeout is this client's polling tick, NOT a verdict: when
+        // it expires, `Client::read` asks whether the daemon is alive and, if
+        // it is, waits again.
         //
-        // The bound is generous ON PURPOSE. It exists to convert a wedged
-        // daemon into a failure, not to assert how fast a mount is: several
-        // of these requests mount a real filesystem, and this suite shares a
-        // machine whose wall-clock for the same work swings by more than an
-        // order of magnitude under load. At 10s that made the harness itself
-        // flaky — `receive` timed out mid-mount and the test read it as a
-        // daemon that never answered. A timeout tight enough to measure
-        // performance is a performance assertion, and this is not one.
+        // What that buys is a gate on the real condition. A daemon that DIED
+        // fails the test at the next tick, naming the exit — faster and
+        // clearer than any bound. A daemon that is merely slow is never
+        // accused of anything, which is the failure the bound this replaced
+        // actually produced: at 10s `receive` expired mid-mount under load and
+        // the test read it as a daemon that never answered. A daemon that is
+        // alive but has stopped answering hangs, deliberately — that is a
+        // livelock, and the CI job timeout reports it as the hang it is
+        // instead of dressing it up as an assertion about milliseconds.
         stream
-            .set_read_timeout(Some(RESPONSE_BOUND))
+            .set_read_timeout(Some(LIVENESS_POLL))
             .expect("the read timeout installs");
-        stream
+        Client {
+            stream,
+            daemon: self,
+        }
     }
 
-    fn shutdown(mut self) {
-        let pid = self.child.id();
+    fn shutdown(self) {
+        let pid = self.child.borrow().id();
         assert_eq!(
             Command::new("kill")
                 .args(["-TERM", &pid.to_string()])
@@ -100,7 +136,7 @@ impl Daemon {
                 .code(),
             Some(0)
         );
-        let status = self.child.wait().expect("the daemon exits");
+        let status = self.child.borrow_mut().wait().expect("the daemon exits");
         assert!(status.success(), "graceful shutdown exits cleanly");
         assert_no_mounts_under(&self.root);
         // Forget the child so Drop does not double-reap.
@@ -110,8 +146,9 @@ impl Daemon {
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let child = self.child.get_mut();
+        let _ = child.kill();
+        let _ = child.wait();
         // A SIGKILLed daemon cannot unmount; sweep so nothing leaks.
         if let Ok(entries) = std::fs::read_dir(self.root.join("mnt")) {
             for entry in entries.flatten() {
@@ -121,6 +158,67 @@ impl Drop for Daemon {
                     .output();
             }
         }
+    }
+}
+
+/// A control connection together with the daemon that owns it.
+///
+/// The pairing is the point: when a read produces nothing, the honest question
+/// is not "how long has this taken?" but "is the daemon still there?", and only
+/// a client that can see the child process can ask it.
+struct Client<'a> {
+    stream: UnixStream,
+    daemon: &'a Daemon,
+}
+
+impl Client<'_> {
+    /// Report a failed read against what the daemon is actually doing.
+    ///
+    /// The read has already failed, so the test fails either way; this only
+    /// decides which message it carries. `try_wait` can lose a moment's race
+    /// with the child's own exit path — the kernel closes the socket before
+    /// the status is reapable — so an unresolved status gets one tick of
+    /// grace. That changes the wording, never the verdict.
+    fn diagnose(&self, error: &io::Error, context: &str) -> ! {
+        if self.daemon.exited().is_none() {
+            std::thread::sleep(LIVENESS_POLL);
+        }
+        match self.daemon.exited() {
+            Some(status) => panic!("the daemon exited ({status}) while {context}: {error}"),
+            None => panic!("the daemon is still alive, but {context} failed: {error}"),
+        }
+    }
+}
+
+impl Read for Client<'_> {
+    /// An expired read timeout is not an answer, so it is not treated as one:
+    /// it is a chance to check the daemon's pulse and go back to waiting. A
+    /// slow-but-healthy daemon is therefore waited on indefinitely, and a dead
+    /// one fails the test at the next tick.
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            match self.stream.read(buffer) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    self.daemon.assert_alive("a response");
+                }
+                outcome => return outcome,
+            }
+        }
+    }
+}
+
+impl Write for Client<'_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.stream.write(buffer)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
     }
 }
 
@@ -142,31 +240,38 @@ fn assert_no_mounts_under(root: &Path) {
     );
 }
 
-fn send(stream: &mut UnixStream, value: &Value) {
+fn send(stream: &mut Client, value: &Value) {
     let bytes = serde_json::to_vec(value).expect("request serializes");
     let length = u32::try_from(bytes.len()).expect("request fits a frame");
-    stream
+    // A dead daemon breaks the pipe under the writer as readily as it starves
+    // the reader, so the write side reports the same diagnosis rather than a
+    // bare EPIPE.
+    if let Err(error) = stream
         .write_all(&length.to_le_bytes())
         .and_then(|()| stream.write_all(&bytes))
-        .expect("request frame writes");
+    {
+        stream.diagnose(&error, "writing a request frame");
+    }
 }
 
-fn receive(stream: &mut UnixStream) -> Value {
+fn receive(stream: &mut Client) -> Value {
     let mut length = [0_u8; 4];
-    stream
-        .read_exact(&mut length)
-        .expect("response length reads");
+    if let Err(error) = stream.read_exact(&mut length) {
+        stream.diagnose(&error, "waiting for a response length");
+    }
     let length = u32::from_le_bytes(length);
     assert!(
         length > 0 && length <= FRAME_BOUND,
         "bounded response frame"
     );
     let mut bytes = vec![0_u8; length as usize];
-    stream.read_exact(&mut bytes).expect("response body reads");
+    if let Err(error) = stream.read_exact(&mut bytes) {
+        stream.diagnose(&error, "waiting for a response body");
+    }
     serde_json::from_slice(&bytes).expect("response parses")
 }
 
-fn call(stream: &mut UnixStream, id: u64, method: &str, params: Value) -> Value {
+fn call(stream: &mut Client, id: u64, method: &str, params: Value) -> Value {
     send(
         stream,
         &json!({"id": id, "method": method, "params": params}),
@@ -176,7 +281,7 @@ fn call(stream: &mut UnixStream, id: u64, method: &str, params: Value) -> Value 
     response
 }
 
-fn ok(stream: &mut UnixStream, id: u64, method: &str, params: Value) -> Value {
+fn ok(stream: &mut Client, id: u64, method: &str, params: Value) -> Value {
     let response = call(stream, id, method, params);
     assert!(
         response.get("error").is_none(),
@@ -185,7 +290,7 @@ fn ok(stream: &mut UnixStream, id: u64, method: &str, params: Value) -> Value {
     response["ok"].clone()
 }
 
-fn error_code(stream: &mut UnixStream, id: u64, method: &str, params: Value) -> String {
+fn error_code(stream: &mut Client, id: u64, method: &str, params: Value) -> String {
     let response = call(stream, id, method, params);
     response["error"]["code"]
         .as_str()
@@ -352,8 +457,8 @@ fn an_oversized_frame_is_refused_before_allocation() {
 /// This is the condition `fill_frame_bytes` exists for and the one no test
 /// reached: every other request in this file is one `write_all`, which the
 /// kernel delivers in a single `read`, so the retry path never runs.
-fn write_across_a_poll_tick(stream: &mut UnixStream, bytes: &[u8], at: usize) {
-    // The daemon's accept loop polls on the same 200ms tick, so a split
+fn write_across_a_poll_tick(stream: &mut Client, bytes: &[u8], at: usize) {
+    // The daemon's accept loop polls on the same ACCEPT_POLL tick, so a split
     // written immediately after connect can land entirely BEFORE the
     // connection is accepted — both halves then arrive in one read and the
     // test silently proves nothing. One completed round trip guarantees the
@@ -365,8 +470,13 @@ fn write_across_a_poll_tick(stream: &mut UnixStream, bytes: &[u8], at: usize) {
         .write_all(&bytes[..at])
         .and_then(|()| stream.flush())
         .expect("the first half writes");
-    // ACCEPT_POLL is 200ms; overshoot so the daemon definitely sees WouldBlock.
-    std::thread::sleep(Duration::from_millis(350));
+    // This sleep FORCES the condition under test; it does not wait for one to
+    // be met. The daemon's read loop must see a WouldBlock between the halves,
+    // so the pause has to outlast its poll window — derived from the daemon's
+    // own ACCEPT_POLL so the two can never drift apart, and overshot so the
+    // tick definitely expires. A longer pause only makes the condition surer;
+    // nothing here fails because something took too long.
+    std::thread::sleep(ACCEPT_POLL + ACCEPT_POLL / 2);
     stream
         .write_all(&bytes[at..])
         .and_then(|()| stream.flush())
@@ -540,7 +650,12 @@ fn a_closed_connection_releases_every_mount_it_opened() {
     // empty mount table does not yet imply an unmounted mountpoint. Asserting
     // the mountpoint immediately after the table went empty raced that
     // ordering and failed under load.
-    let deadline = Instant::now() + Duration::from_secs(60);
+    //
+    // The loop has no deadline, and needs none: every `status` round trip is
+    // itself gated on the daemon being alive, so a daemon that dies fails here
+    // immediately and says so. One that lives but never reaps hangs — which is
+    // the honest report of "never reaped", where a clock would instead accuse
+    // a merely slow unmount of leaking.
     loop {
         let status = ok(&mut second, 1, "status", json!({}));
         let reaped = status["mounts"]
@@ -551,11 +666,7 @@ fn a_closed_connection_releases_every_mount_it_opened() {
         if reaped {
             break;
         }
-        assert!(
-            Instant::now() < deadline,
-            "the daemon must reap a hung-up connection's mounts: {status}"
-        );
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(LIVENESS_POLL);
     }
 
     daemon.shutdown();
@@ -645,6 +756,66 @@ fn one_connection_cannot_release_another_connections_lease() {
     drop(intruder);
     drop(owner);
     daemon.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The harness's own red: a daemon that dies with a request outstanding must
+/// fail the test at once, naming the exit.
+///
+/// This is the guard on the gate that replaced a wall-clock bound. The bound
+/// was a bad instrument in both directions — it accused a slow-but-healthy
+/// daemon of never answering, and it made a dead one wait out the full bound
+/// before saying anything. Liveness answers the real question, but only while
+/// this stays true: if the diagnosis ever degrades to a bare I/O error, the
+/// suite silently loses its ability to tell "dead" from "busy", and nothing
+/// else in this file would notice.
+///
+/// No mount, so no FUSE dependency.
+#[test]
+fn a_dead_daemon_fails_the_read_at_once_and_names_the_exit() {
+    let root = tempdir("rpc-dead-daemon");
+    let daemon = Daemon::spawn(&root);
+    let mut stream = daemon.connect();
+    // One completed round trip, so the connection is genuinely established and
+    // the failure below cannot be an artefact of a half-open socket.
+    ok(&mut stream, 1, "hello", json!({}));
+
+    let pid = daemon.child.borrow().id();
+    assert_eq!(
+        Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status()
+            .expect("kill runs")
+            .code(),
+        Some(0)
+    );
+
+    // Either half of the round trip may be the one that notices: a dead peer
+    // breaks the pipe under the write, and ends the read at EOF. Both must
+    // arrive at the same diagnosis, so both are under the guard.
+    let failure = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        send(
+            &mut stream,
+            &json!({"id": 2, "method": "status", "params": {}}),
+        );
+        receive(&mut stream)
+    }))
+    .expect_err("a response that can never arrive must fail the test");
+    let message = failure
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_else(|| String::from("<non-string panic>"));
+    assert!(
+        message.contains("the daemon exited"),
+        "the failure must name the daemon's death, not merely a failed read: {message}"
+    );
+    assert!(
+        message.contains("signal: 9"),
+        "the failure must name the exit itself, so the reader never has to \
+         guess whether the daemon died or was slow: {message}"
+    );
+
+    drop(stream);
     let _ = std::fs::remove_dir_all(&root);
 }
 
