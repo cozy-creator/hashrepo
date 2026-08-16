@@ -223,6 +223,21 @@ impl WorkspaceStore {
         })
     }
 
+    /// Whether this store root can be opened by several processes at once.
+    ///
+    /// True everywhere production runs (Linux, ext4/xfs/btrfs/overlayfs). False
+    /// only where the platform or filesystem cannot support shared WAL
+    /// coordination — Windows' default IO backend, or a network filesystem —
+    /// in which case the store still opens, single-process. Cross-process
+    /// tests should skip on false rather than fail.
+    #[must_use]
+    pub fn supports_multiprocess(&self) -> bool {
+        self.connection
+            .lock()
+            .expect("metadata mutex is healthy")
+            .is_multiprocess()
+    }
+
     #[must_use]
     pub const fn store(&self) -> &ObjectStore {
         &self.store

@@ -216,6 +216,17 @@ impl Statement {
 pub struct Connection {
     _database: turso::Database,
     inner: turso::Connection,
+    multiprocess: bool,
+}
+
+/// True for turso's refusal to run multiprocess WAL in this environment — an
+/// in-memory path, an IO backend without shared WAL coordination (Windows'
+/// default), or a network filesystem. Deliberately does NOT match a locking
+/// error: those must surface, never trigger a downgrade.
+fn is_multiprocess_unsupported(error: &turso::Error) -> bool {
+    error
+        .to_string()
+        .contains("multiprocess WAL is not supported")
 }
 
 impl fmt::Debug for Connection {
@@ -225,14 +236,69 @@ impl fmt::Debug for Connection {
 }
 
 impl Connection {
+    /// Opens the metadata database in MULTIPROCESS mode.
+    ///
+    /// This is not optional and it is not a tuning knob. Turso's default is a
+    /// whole-file exclusive lock taken at open, so a second process fails with
+    /// `Failed locking file. File is locked by another process` — it cannot
+    /// open the store at all, let alone contend for a write. `tensorfsd serve`
+    /// holds the store for its lifetime, so under that default a CLI `seal`, a
+    /// `mount-snapshot`, a direct-ingest writer and an out-of-band GC pass are
+    /// all locked out.
+    ///
+    /// `experimental_multiprocess_wal` swaps that whole-file lock for shared
+    /// WAL coordination (turso adds `OpenFlags::NoLock` and coordinates through
+    /// a side file instead) — SQLite's WAL/`-shm` design. The engine decides
+    /// this AT OPEN, which is why it is a builder call: setting
+    /// `journal_mode=WAL` afterwards is too late to change the lock already
+    /// taken.
+    ///
+    /// Every opener must agree — turso rejects a legacy open against a live
+    /// multiprocess database and vice versa. That is safe here because this is
+    /// the ONLY place the engine is opened; `workspace.rs` funnels every
+    /// `WorkspaceStore::open` through it.
+    ///
+    /// Some environments cannot provide it, and turso says so at open rather
+    /// than degrading: Windows' default IO backend does not implement shared
+    /// WAL coordination, and network filesystems are refused outright (NFS,
+    /// CIFS/SMB, Ceph, Lustre, GFS2, OCFS2, AFS, Coda, NCP, 9p). There we fall
+    /// back to the single-process open, because refusing to open the store at
+    /// all is strictly worse than opening it single-process.
+    ///
+    /// That fallback is deliberately NARROW: it triggers only on turso's
+    /// "multiprocess WAL is not supported" refusal, which is a deterministic
+    /// property of the platform and filesystem, and NEVER on a locking error.
+    /// On Linux/ext4 — production — it is unreachable, so the single-process
+    /// regression cannot silently come back the way it arrived. Callers that
+    /// need to know can ask [`Connection::is_multiprocess`].
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref().to_string_lossy().into_owned();
-        let database = block_on(turso::Builder::new_local(&path).build())?;
+        let (database, multiprocess) = match block_on(
+            turso::Builder::new_local(&path)
+                .experimental_multiprocess_wal(true)
+                .build(),
+        ) {
+            Ok(database) => (database, true),
+            Err(error) if is_multiprocess_unsupported(&error) => {
+                (block_on(turso::Builder::new_local(&path).build())?, false)
+            }
+            Err(error) => return Err(error.into()),
+        };
         let inner = database.connect()?;
         Ok(Self {
             _database: database,
             inner,
+            multiprocess,
         })
+    }
+
+    /// Whether this store root supports concurrent access from several
+    /// processes. False only where the platform or filesystem cannot support
+    /// it; tests that assert cross-process behaviour should skip on false
+    /// rather than fail.
+    #[must_use]
+    pub const fn is_multiprocess(&self) -> bool {
+        self.multiprocess
     }
 
     pub fn pragma_update(&self, _schema: Option<()>, name: &str, value: &str) -> Result<(), Error> {
