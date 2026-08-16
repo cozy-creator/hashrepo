@@ -58,7 +58,8 @@ fn build_safetensors(tensors: &[(&str, u64, u8)]) -> Vec<u8> {
     file
 }
 
-/// The 64 MiB grid records the COW mount's fsync compose produces.
+/// The 64 MiB grid records a fixed-grid writer produces (originally the
+/// shelved COW mount's fsync compose).
 fn grid_records(store: &WorkspaceStore, bytes: &[u8]) -> Vec<FileRecord> {
     bytes
         .chunks(MAX_OBJECT_SIZE as usize)
@@ -241,8 +242,8 @@ fn an_edited_clone_reseals_reusing_every_untouched_tensor_object() {
         .expect("grid records commit");
     let sealed = store.seal_snapshot("w", None).expect("seal");
 
-    // The mount's compose path re-grids the whole edited file; the edit sits
-    // inside the first tensor's SECOND tensor-relative subdivision.
+    // A grid writer re-grids the whole edited file; the edit sits inside the
+    // first tensor's SECOND tensor-relative subdivision.
     store
         .create_workspace_from_snapshot("edited", &sealed)
         .expect("clone");

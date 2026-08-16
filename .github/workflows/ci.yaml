@@ -31,21 +31,9 @@ jobs:
       # carrying an HTTP stack and a SQL engine it never calls -- and the
       # cross-compile surface grows a C toolchain requirement with it.
       - run: cargo check -p tensorfs-core --no-default-features --features store --lib
-      # The mount tests hand a mounted path to the real safetensors library.
-      # Without this they skip loudly rather than pass vacuously.
-      - name: Install the safetensors reader
-        run: |
-          python3 -m venv /tmp/safetensors-reader
-          /tmp/safetensors-reader/bin/pip install --quiet 'safetensors>=0.4' 'numpy>=1.26'
       - run: cargo test --workspace --all-features --exclude tensorfs-py
-        env:
-          TENSORFS_TEST_PYTHON: /tmp/safetensors-reader/bin/python3
       # PyO3 has no wasm target, so the extension crate is excluded here too.
       - run: cargo check --workspace --all-targets --all-features --exclude tensorfs-py --target wasm32-unknown-unknown
-      # Linux is the only runner that executes a daemon test. A tensorfsd test
-      # that loses its Linux gate would compile where nothing runs it.
-      - name: Daemon tests stay Linux-gated
-        run: scripts/check-daemon-linux-gate.sh
 
   # macOS and Windows build ONE crate on purpose.
   #
@@ -53,12 +41,6 @@ jobs:
   # O_NOFOLLOW on Unix and pays a symlink stat on Windows because Windows
   # cannot refuse traversal at open, and fsync_dir seals a rename on POSIX
   # only -- so running it on both runners is genuine coverage.
-  #
-  # tensorfsd is Linux-only and is deliberately absent. Its FUSE dependencies
-  # are cfg(target_os = "linux"), every module in lib.rs is gated, and every
-  # file in tests/ opens with `#![cfg(target_os = "linux")]`. Building it here
-  # produced nine test binaries reporting "running 0 tests" in 62 ms, which a
-  # green check made look like macOS mount coverage. It is not.
   core-cross-platform:
     strategy:
       fail-fast: false
@@ -79,18 +61,14 @@ jobs:
             awk '{ total += $1 } END { print total + 0 }')
           echo "tensorfs-core: ${passed} tests passed on ${RUNNER_OS}"
           # A floor, not an exact count. It catches this job going vacuously
-          # green the way the daemon matrix did -- a new cfg gate emptying it
-          # rather than ordinary test churn.
+          # green the way the (since-shelved) daemon matrix once did -- a new
+          # cfg gate emptying it rather than ordinary test churn.
           if [ "${passed}" -lt 100 ]; then
             echo "::error::only ${passed} tensorfs-core tests ran on ${RUNNER_OS}; the floor is 100"
             echo "This job exists to execute real cross-platform code. If a cfg gate just"
             echo "emptied it, fix the gate rather than lowering the floor."
             exit 1
           fi
-      # Proves only that the non-Linux stub still builds, so `cargo build`
-      # works on a contributor's Mac. It mounts nothing and tests nothing.
-      - name: tensorfsd off-Linux stub compiles
-        run: cargo check -p tensorfsd --all-targets --all-features
 
   python:
     runs-on: ubuntu-latest

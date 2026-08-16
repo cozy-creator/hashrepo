@@ -118,8 +118,9 @@ jobs:
           assert "tensorfs/_tensorfs.pyi" in names, "the extension stub did not ship"
 
           # Every platform ships the same thing. The FUSE daemon is not in it:
-          # pods cannot mount FUSE, so it stays in-repo and unshipped. A stray
-          # binary from a dirty build tree would otherwise ride along unseen.
+          # pods cannot mount FUSE, and the daemon is shelved on the
+          # `shelf/tensorfsd` branch. A stray binary from a dirty build tree
+          # would otherwise ride along unseen.
           strays = sorted(n for n in names if n.startswith("tensorfs/_bin/"))
           assert not strays, f"the wheel carries an unshipped binary: {strays}"
           print(f"{wheel}: abi3, py.typed, stub, no daemon")
@@ -281,7 +282,8 @@ jobs:
               assert reader.read_at(0, reader.length) == b"native-smoke"
 
           # Every platform ships the same thing, and the FUSE daemon is not
-          # part of it -- pods cannot mount FUSE, so it stays in-repo.
+          # part of it -- pods cannot mount FUSE; the daemon is shelved on
+          # the `shelf/tensorfsd` branch.
           assert not (extension.parent / "_bin").exists(), "the wheel carries an unshipped binary"
           print("wheel smoke passed")
           PY

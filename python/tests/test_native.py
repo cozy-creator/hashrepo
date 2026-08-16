@@ -394,9 +394,10 @@ def test_the_wheel_ships_no_daemon_and_no_console_script() -> None:
 
     Pods cannot mount FUSE — opening `/dev/fuse` is denied by the device
     cgroup even for root and `CAP_SYS_ADMIN` is not in the container's
-    bounding set — so the wheel ships native reads instead and the daemon
-    stays in-repo, unshipped. Asserted rather than assumed: a stray `_bin/`
-    from an old build would otherwise ride into a wheel unnoticed.
+    bounding set — so the wheel ships native reads and the daemon lives on
+    the `shelf/tensorfsd` branch (tag `shelf/tensorfsd-split`). Asserted
+    rather than assumed: a stray `_bin/` from an old build would otherwise
+    ride into a wheel unnoticed.
     """
     package = _module_directory()
     assert not (package / "_bin").exists(), "an unshipped daemon directory reached the package"

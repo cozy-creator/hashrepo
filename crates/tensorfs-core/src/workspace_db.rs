@@ -241,10 +241,10 @@ impl Connection {
     /// This is not optional and it is not a tuning knob. Turso's default is a
     /// whole-file exclusive lock taken at open, so a second process fails with
     /// `Failed locking file. File is locked by another process` — it cannot
-    /// open the store at all, let alone contend for a write. `tensorfsd serve`
-    /// holds the store for its lifetime, so under that default a CLI `seal`, a
-    /// `mount-snapshot`, a direct-ingest writer and an out-of-band GC pass are
-    /// all locked out.
+    /// open the store at all, let alone contend for a write. Any long-lived
+    /// holder — the shelved `tensorfsd serve` was the original example — would
+    /// under that default lock out a CLI `seal`, a direct-ingest writer and an
+    /// out-of-band GC pass.
     ///
     /// `experimental_multiprocess_wal` swaps that whole-file lock for shared
     /// WAL coordination (turso adds `OpenFlags::NoLock` and coordinates through

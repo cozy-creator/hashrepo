@@ -50,10 +50,11 @@ python-source = "python/src"
 module-name = "tensorfs._tensorfs"
 strip = true
 # The wheel carries the facade and the compiled extension and nothing else.
-# `tensorfsd` is deliberately NOT shipped: RunPod pods cannot mount FUSE at
-# all -- opening /dev/fuse is denied by the device cgroup even for root, and
-# CAP_SYS_ADMIN is absent from the container's bounding set with no API field
-# to grant it. The daemon stays in-repo for local and development use.
+# There is no `tensorfsd`: RunPod pods cannot mount FUSE at all -- opening
+# /dev/fuse is denied by the device cgroup even for root, and CAP_SYS_ADMIN
+# is absent from the container's bounding set with no API field to grant it.
+# The daemon is shelved on the `shelf/tensorfsd` branch (tag
+# `shelf/tensorfsd-split`).
 include = [
     { path = "Cargo.toml", format = "sdist" },
     { path = "Cargo.lock", format = "sdist" },

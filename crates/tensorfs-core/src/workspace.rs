@@ -405,9 +405,10 @@ impl WorkspaceStore {
     }
 
     /// Builds (without storing) the canonical snapshot value of the committed
-    /// head tree. This is the one tree-read seam the daemon mounts through:
-    /// the snapshot value already carries every fact a filesystem surface
-    /// needs, in the exact vocabulary TFM1 freezes.
+    /// head tree. This is the one tree-read seam a filesystem surface reads
+    /// through (the shelved daemon mounted via it): the snapshot value
+    /// already carries every fact such a surface needs, in the exact
+    /// vocabulary TFM1 freezes.
     pub fn head_tree(&self, name: &str) -> Result<Snapshot, WorkspaceError> {
         let connection = self.connection.lock().expect("metadata mutex is healthy");
         let workspace = workspace_row(&connection, name)?;

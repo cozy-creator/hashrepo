@@ -2,9 +2,10 @@
 //!
 //! The Turso swap (PR #28) landed with the engine's default whole-file
 //! exclusive lock, which made the store single-process: a second process could
-//! not even open it. `tensorfsd serve` holds the store for its lifetime, so
-//! that default locked out the CLI `seal`, the mounts, an out-of-band GC pass
-//! and the direct-ingest writer — every one of which is a separate process.
+//! not even open it. Any long-lived holder — the shelved `tensorfsd serve`
+//! was the original one — locked out the CLI `seal`, an out-of-band GC pass
+//! and the direct-ingest writer under that default, every one of which is a
+//! separate process.
 //!
 //! These arms are the executable proof that multiprocess coordination is on.
 //! They deliberately assert the CAPABILITY rather than the limitation, so they
@@ -130,8 +131,8 @@ fn multiprocess_child_role() {
 fn a_second_process_can_write_while_the_first_holds_the_store() {
     let scratch = Scratch::new("write");
 
-    // The parent holds the store open for the whole test, exactly as
-    // `tensorfsd serve` holds it for its lifetime.
+    // The parent holds the store open for the whole test, exactly as a
+    // long-lived server process would for its lifetime.
     let held = WorkspaceStore::open(scratch.path()).expect("the first opener succeeds");
     if !held.supports_multiprocess() {
         eprintln!(
@@ -171,8 +172,8 @@ fn a_second_process_can_write_while_the_first_holds_the_store() {
     );
 }
 
-/// The read direction, which is what a CLI `seal` or a mount does against a
-/// running daemon.
+/// The read direction, which is what a CLI `seal` does against a process
+/// already holding the store.
 #[test]
 fn a_second_process_can_read_what_the_first_committed() {
     let scratch = Scratch::new("read");
