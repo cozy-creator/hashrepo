@@ -105,7 +105,8 @@ fn multiprocess_child_role() {
     match role.as_str() {
         // Prove a second process can WRITE while the first holds the store.
         "write" => {
-            meta.create_workspace(&workspace).expect("workspace creates");
+            meta.create_workspace(&workspace)
+                .expect("workspace creates");
             commit_one(&meta, &workspace, 0xC2);
         }
         // Prove a second process can READ a workspace the first one committed.
