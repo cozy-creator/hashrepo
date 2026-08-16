@@ -16,13 +16,14 @@ The case classifications are deliberately narrow:
 
 - `semantic` means a valid safetensors or GGUF source selected its built-in
   semantic planner.
-- `raw` means ordinary input selected `raw-fixed-64m-v1` without resembling a
+- `raw` means ordinary input selected `blob-v1` without resembling a
   supported semantic format.
 - `fallback` means a malformed or unsupported safetensors/GGUF candidate fell
-  back atomically to `raw-fixed-64m-v1`.
+  back atomically to `blob-v1`.
 
 `fallback` is not a refusal. Every stable in-memory byte stream has an
-automatic plan; format parse failure chooses the raw plan. Source I/O/change
+automatic plan; format parse failure chooses the whole-blob plan — one
+unchunked object of any size, never a grid. Source I/O/change
 errors cannot be represented by immutable fixture bytes and remain native
 unit tests. Refusal of a forged planner claim or alternate partition belongs
 to the later HRM1/Hub verifier specified by pgw#1259 and th#1960. This corpus

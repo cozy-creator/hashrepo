@@ -13,10 +13,10 @@ hex and every other algorithm are refused.
 ## Files
 
 Files stored as one object use their whole-file digest and have no `chunks`
-member; this representation is limited to 64 MiB. A present `chunks` member is
-never null or empty. Each chunk is 1 through 64 MiB and the ordered lengths sum
-exactly to `size_bytes`. Files larger than 64 MiB therefore require chunks, but
-readers do not impose fixed offsets. A one-chunk list is valid, including for a
+member; this whole-blob representation carries ANY size. A present `chunks`
+member is never null or empty. Each chunk is 1 through 64 MiB — the tensor
+chunk grid constant — and the ordered lengths sum exactly to `size_bytes`.
+Readers do not impose fixed offsets. A one-chunk list is valid, including for a
 small header-only safetensors file; because that chunk is the whole file, its
 digest must equal the file digest.
 
@@ -67,14 +67,14 @@ argument. Exactly these profile identifiers exist in v1:
   expected padded offsets and exact file coverage. Header, directory and
   padding bytes remain explicit, while every nonempty tensor uses the same
   natural-size or tensor-relative 64 MiB rule.
-- `raw-fixed-64m-v1` splits every other byte stream at file-relative 64 MiB
-  offsets.
+- `blob-v1` stores every other byte stream as ONE whole unchunked blob of any
+  size, named by its own SHA-256. There is no raw grid.
 
 Malformed, unsupported, future-format or ambiguous semantic input falls back
-as a whole to raw planning. It never produces a partial semantic partition.
+as a whole to blob planning. It never produces a partial semantic partition.
 The generic core independently validates zero-free, gap-free, overlap-free,
-ordered complete coverage, a 1,000,000-object cardinality ceiling, and hashes
-the planned bytes itself. Canonical
+ordered complete coverage, a 1,000,000-object cardinality ceiling for tensor
+plans, and hashes the planned bytes itself. Canonical
 identity never packs neighboring small tensors; batching belongs only to the
 transfer protocol. Consequently insertion, deletion, reordering, resharing or
 absolute-offset movement changes header/manifest bytes but does not re-key an

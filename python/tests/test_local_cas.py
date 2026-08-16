@@ -289,7 +289,7 @@ def test_concurrent_adoptions_are_idempotent_and_consume_every_temp(tmp_path: Pa
     assert cas.verify_object(expected, size=len(payload)).read_bytes() == payload
 
 
-def test_file_above_chunk_boundary_round_trips(tmp_path: Path) -> None:
+def test_a_non_tensor_file_above_the_grid_is_one_whole_blob(tmp_path: Path) -> None:
     source = tmp_path / "large.bin"
     block = b"tensorfs" * 95325
     with source.open("wb") as handle:
@@ -302,7 +302,8 @@ def test_file_above_chunk_boundary_round_trips(tmp_path: Path) -> None:
     cas = LocalCAS(tmp_path / "cas")
     entry = ingest_file(cas, source)
     assert entry.size_bytes == MAX_CHUNK_SIZE + 3
-    assert [chunk.length for chunk in entry.chunks] == [MAX_CHUNK_SIZE, 3]
+    assert entry.chunks == (), "the raw grid is dead: one blob, no chunks"
+    assert entry.objects() == ((entry.digest, entry.size_bytes),)
 
     assert read_entry(cas, entry) == source.read_bytes()
 

@@ -58,7 +58,7 @@ fn crash_child_role() {
                         &[Mutation::CreateFile {
                             path: format!("file-{index:06}.bin"),
                             executable: false,
-                            planner: PlannerId::RawFixed64mV1,
+                            planner: PlannerId::BlobV1,
                             records: vec![record],
                         }],
                     )
@@ -74,7 +74,7 @@ fn crash_child_role() {
                     &[Mutation::CreateFile {
                         path: "durable.bin".into(),
                         executable: false,
-                        planner: PlannerId::RawFixed64mV1,
+                        planner: PlannerId::BlobV1,
                         records: vec![record],
                     }],
                 )
@@ -148,8 +148,8 @@ fn assert_live_objects_verify(store: &WorkspaceStore, workspace: &str) {
     let tree = store.load_snapshot(&sealed).expect("the seal round-trips");
     assert_eq!(tree.snapshot_id(), sealed);
     for (path, entry) in tree.entries() {
-        if let Entry::File { records, .. } = entry {
-            for record in records {
+        if let Entry::File { body, .. } = entry {
+            for record in body.records().iter() {
                 if let FileRecord::Data { digest, .. } = record {
                     store
                         .store()
@@ -237,7 +237,7 @@ fn a_kill_inside_gc_never_deletes_a_live_object() {
                 &[Mutation::CreateFile {
                     path: "live.bin".into(),
                     executable: false,
-                    planner: PlannerId::RawFixed64mV1,
+                    planner: PlannerId::BlobV1,
                     records: vec![FileRecord::Data {
                         digest: live_digest,
                         length: 19,

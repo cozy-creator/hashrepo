@@ -12,33 +12,45 @@
       "description": "no parent and no entries; the smallest canonical manifest"
     },
     {
-      "name": "single-file",
-      "fixture": "fixtures/single-file.hex",
-      "snapshot_id": "46c0d86a44a7c496ef5ed409bdc36ee4d86856ad5f889661a0f9f7923bb5b6cc",
-      "description": "one raw-planned regular file with one data record"
+      "name": "single-blob",
+      "fixture": "fixtures/single-blob.hex",
+      "snapshot_id": "27a3c27d37afdddf5fc069e904a4bcc491d6c29883bdaf366a143cb13fbc7e6d",
+      "description": "one whole-blob regular file: logical size and whole-file digest, no records"
+    },
+    {
+      "name": "large-blob",
+      "fixture": "fixtures/large-blob.hex",
+      "snapshot_id": "c7f3e50aa2ea8eb543419f9b1770b99e3224ecd045639b3e35f8f84855663c79",
+      "description": "a blob declaring 5 GiB + 3 bytes, inexpressible as one record in the retired grammar"
+    },
+    {
+      "name": "empty-blob",
+      "fixture": "fixtures/empty-blob.hex",
+      "snapshot_id": "c6d502e325c42aa413a466635f96cb03d1c154e290c9c5a380922fcc945a4cf9",
+      "description": "a zero-size blob carrying the digest of the empty byte string"
     },
     {
       "name": "tree",
       "fixture": "fixtures/tree.hex",
-      "snapshot_id": "16adf8c18c1a8e07a5cebc5ce2418132eb5aeea4622aa70cb7dbdd1326ff65d7",
-      "description": "nested explicit directories, safetensors provenance, and an executable file"
+      "snapshot_id": "ccc398d28e55aa17fd574573dc4bc0ad026592ac8fefed0333c05764cbcb0b94",
+      "description": "a mixed tree: explicit directories, safetensors records, a config blob, an executable blob"
     },
     {
-      "name": "sparse-file",
-      "fixture": "fixtures/sparse-file.hex",
-      "snapshot_id": "5aa22d0a296c14d208562b94339a2cee5a80cbc17309cff6014de2a66057d658",
-      "description": "hole, data, and a beyond-object-size trailing hole"
+      "name": "sparse-tensor",
+      "fixture": "fixtures/sparse-tensor.hex",
+      "snapshot_id": "cbd5d5b0d83d912b05504535735708b8912ff12bb48e2aaef6bab94a18463033",
+      "description": "hole, data, and a beyond-object-size trailing hole in a tensor body"
     },
     {
       "name": "hardlink-group",
       "fixture": "fixtures/hardlink-group.hex",
-      "snapshot_id": "2e8b14539f9b34fe8304557db60b036581dbfaa2505cdbcebc054a0f7cde6a60",
-      "description": "a three-path link group re-rooted onto its first sorted path"
+      "snapshot_id": "0f2aec3c5316027120e7f25a8472d0f7dad77971ceabf5665cade86838e9528b",
+      "description": "a three-path link group over a blob, re-rooted onto its first sorted path"
     },
     {
       "name": "symlink",
       "fixture": "fixtures/symlink.hex",
-      "snapshot_id": "a7803a12794a04ace6394064affd594010c8f252424459fc7889aac0e44fd0d3",
+      "snapshot_id": "0077e6803b7837907350fe9b550ea31968d7939146f9a533750aadcdcf27fcf3",
       "description": "a symlink whose target is stored bytes, not a resolved path"
     },
     {
@@ -50,20 +62,20 @@
     {
       "name": "boundary-objects",
       "fixture": "fixtures/boundary-objects.hex",
-      "snapshot_id": "f4d792b531b50c325b73788c35e9600d99958c0140af9f8246cfb3dc6bf17a85",
-      "description": "data record lengths 1, 64 MiB minus one, and exactly 64 MiB, plus an empty file"
+      "snapshot_id": "d4e6c960840848b0a28ee9f71aa7fd1e23272a041fe21e146778fa8209855401",
+      "description": "tensor data record lengths 1, 64 MiB minus one, and exactly 64 MiB, plus an empty blob"
     },
     {
       "name": "with-parent",
       "fixture": "fixtures/with-parent.hex",
-      "snapshot_id": "2a760bb2a5e3f0e59f01489a8d26cba76468fc728531d1dd2571307b63165c68",
+      "snapshot_id": "c45f7c587a958245a825318a9dbe162d49857ff5ad7b7a9972053e894c974ecd",
       "description": "names the empty snapshot as its explicit parent history"
     },
     {
       "name": "gguf-provenance",
       "fixture": "fixtures/gguf-provenance.hex",
       "snapshot_id": "7fee109aa9cec7c36a2109ce5d1c99be9d2e4cde8d37c5c2e8a76003dce978bd",
-      "description": "a gguf-v1 planned file pinning the remaining planner tag"
+      "description": "a gguf-v1 planned file pinning the remaining tensor planner tag"
     }
   ],
   "refusals": [
@@ -168,6 +180,11 @@
       "reason": "unknown-planner"
     },
     {
+      "name": "retired-raw-planner",
+      "fixture": "fixtures/refusal-retired-raw-planner.hex",
+      "reason": "unknown-planner"
+    },
+    {
       "name": "unknown-record-tag",
       "fixture": "fixtures/refusal-unknown-record-tag.hex",
       "reason": "unknown-record-tag"
@@ -216,6 +233,21 @@
       "name": "symlink-target",
       "fixture": "fixtures/refusal-symlink-target.hex",
       "reason": "symlink-target"
+    },
+    {
+      "name": "blob-trailing-records",
+      "fixture": "fixtures/refusal-blob-trailing-records.hex",
+      "reason": "trailing-bytes"
+    },
+    {
+      "name": "blob-truncated-digest",
+      "fixture": "fixtures/refusal-blob-truncated-digest.hex",
+      "reason": "truncated"
+    },
+    {
+      "name": "empty-blob-digest",
+      "fixture": "fixtures/refusal-empty-blob-digest.hex",
+      "reason": "empty-blob-digest"
     }
   ]
 }

@@ -64,7 +64,7 @@ fn a_generation_commit_is_atomic_and_ordered() {
                 Mutation::CreateFile {
                     path: "model/weights.bin".into(),
                     executable: false,
-                    planner: PlannerId::RawFixed64mV1,
+                    planner: PlannerId::BlobV1,
                     records: vec![weights],
                 },
             ],
@@ -85,7 +85,7 @@ fn a_generation_commit_is_atomic_and_ordered() {
                 Mutation::CreateFile {
                     path: "absent/child.bin".into(),
                     executable: false,
-                    planner: PlannerId::RawFixed64mV1,
+                    planner: PlannerId::BlobV1,
                     records: vec![],
                 },
             ],
@@ -117,7 +117,7 @@ fn a_commit_refuses_unresident_and_corrupt_object_references() {
             &[Mutation::CreateFile {
                 path: "phantom.bin".into(),
                 executable: false,
-                planner: PlannerId::RawFixed64mV1,
+                planner: PlannerId::BlobV1,
                 records: vec![phantom],
             }],
         )
@@ -201,7 +201,7 @@ fn renames_move_dirents_without_touching_object_identity() {
                 Mutation::CreateFile {
                     path: "a/file.bin".into(),
                     executable: true,
-                    planner: PlannerId::RawFixed64mV1,
+                    planner: PlannerId::BlobV1,
                     records: vec![payload],
                 },
             ],
@@ -228,7 +228,7 @@ fn renames_move_dirents_without_touching_object_identity() {
         .find(|(path, _)| path == "b/renamed.bin")
         .expect("the renamed file exists");
     match &entry.1 {
-        tensorfs_core::tfm1::Entry::File { records, .. } => match &records[0] {
+        tensorfs_core::tfm1::Entry::File { body, .. } => match &body.records()[0] {
             FileRecord::Data { digest: kept, .. } => {
                 assert_eq!(*kept, digest, "renames never move object digests")
             }
@@ -263,7 +263,7 @@ fn truncate_cuts_at_record_boundaries_shrinks_holes_and_refuses_mid_data() {
             &[Mutation::CreateFile {
                 path: "sparse.bin".into(),
                 executable: false,
-                planner: PlannerId::RawFixed64mV1,
+                planner: PlannerId::BlobV1,
                 records: vec![
                     first.clone(),
                     FileRecord::Hole { length: 30 },
@@ -315,20 +315,44 @@ fn truncate_cuts_at_record_boundaries_shrinks_holes_and_refuses_mid_data() {
         .unwrap_err();
     assert!(matches!(error, WorkspaceError::MidRecordTruncate { .. }));
 
-    let sealed = store.seal_snapshot("main", None).unwrap();
-    let tree = store.load_snapshot(&sealed).unwrap();
+    // The staged head keeps the truncate's exact record shape…
+    let tree = store.head_tree("main").unwrap();
     match &tree.entries()[0].1 {
-        tensorfs_core::tfm1::Entry::File {
-            logical_size,
-            records,
-            ..
-        } => {
-            assert_eq!(*logical_size, 100);
+        tensorfs_core::tfm1::TreeEntry::File { records, .. } => {
             assert_eq!(
                 records,
                 &vec![first, FileRecord::Hole { length: 90 }],
                 "10 data bytes, then one merged 90-byte hole"
             );
+        }
+        _ => panic!("expected a file entry"),
+    }
+
+    // …and sealing materializes it as ONE blob: a hole in a blob is
+    // unrepresentable, so the 90 zero bytes enter the whole-file digest.
+    let sealed = store.seal_snapshot("main", None).unwrap();
+    let tree = store.load_snapshot(&sealed).unwrap();
+    match &tree.entries()[0].1 {
+        tensorfs_core::tfm1::Entry::File { body, .. } => {
+            assert_eq!(body.logical_size(), 100);
+            assert_eq!(body.planner_id(), PlannerId::BlobV1);
+            let mut expected = b"0123456789".to_vec();
+            expected.extend(std::iter::repeat_n(0_u8, 90));
+            let expected_digest = {
+                use sha2::Digest as _;
+                tensorfs_core::object::ObjectDigest::from_bytes(
+                    sha2::Sha256::digest(&expected).into(),
+                )
+            };
+            match body {
+                tensorfs_core::tfm1::FileBody::Blob { digest, .. } => {
+                    assert_eq!(
+                        *digest, expected_digest,
+                        "the blob digest covers the materialized zeros"
+                    );
+                }
+                tensorfs_core::tfm1::FileBody::Tensor { .. } => panic!("expected a blob body"),
+            }
         }
         _ => panic!("expected a file entry"),
     }
@@ -377,7 +401,7 @@ fn gc_needs_two_full_epochs_and_rescues_rereferenced_objects() {
             &[Mutation::CreateFile {
                 path: "kept.bin".into(),
                 executable: false,
-                planner: PlannerId::RawFixed64mV1,
+                planner: PlannerId::BlobV1,
                 records: vec![keep],
             }],
         )
@@ -413,7 +437,7 @@ fn gc_needs_two_full_epochs_and_rescues_rereferenced_objects() {
             &[Mutation::CreateFile {
                 path: "rescued.bin".into(),
                 executable: false,
-                planner: PlannerId::RawFixed64mV1,
+                planner: PlannerId::BlobV1,
                 records: vec![FileRecord::Data {
                     digest: rescue.digest(),
                     length: 13,
@@ -443,7 +467,7 @@ fn snapshot_and_lease_roots_pin_objects_against_collection() {
             &[Mutation::CreateFile {
                 path: "pinned.bin".into(),
                 executable: false,
-                planner: PlannerId::RawFixed64mV1,
+                planner: PlannerId::BlobV1,
                 records: vec![sealed_bytes],
             }],
         )
@@ -474,7 +498,7 @@ fn snapshot_and_lease_roots_pin_objects_against_collection() {
             &[Mutation::CreateFile {
                 path: "open.bin".into(),
                 executable: false,
-                planner: PlannerId::RawFixed64mV1,
+                planner: PlannerId::BlobV1,
                 records: vec![leased_bytes],
             }],
         )
@@ -534,7 +558,7 @@ fn deleting_a_workspace_unreferences_its_objects() {
             &[Mutation::CreateFile {
                 path: "payload.bin".into(),
                 executable: false,
-                planner: PlannerId::RawFixed64mV1,
+                planner: PlannerId::BlobV1,
                 records: vec![payload],
             }],
         )
@@ -668,7 +692,7 @@ fn a_corrupt_generation_is_isolated_and_the_last_known_good_snapshot_survives() 
                 &[Mutation::CreateFile {
                     path: "early.bin".into(),
                     executable: false,
-                    planner: PlannerId::RawFixed64mV1,
+                    planner: PlannerId::BlobV1,
                     records: vec![early],
                 }],
             )
@@ -684,7 +708,7 @@ fn a_corrupt_generation_is_isolated_and_the_last_known_good_snapshot_survives() 
                 &[Mutation::CreateFile {
                     path: "late.bin".into(),
                     executable: false,
-                    planner: PlannerId::RawFixed64mV1,
+                    planner: PlannerId::BlobV1,
                     records: vec![late],
                 }],
             )

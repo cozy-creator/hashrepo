@@ -16,7 +16,7 @@ fn data(seed: u8, length: u64) -> FileRecord {
 }
 
 fn small_file(builder: &mut SnapshotBuilder, path: &str, seed: u8) {
-    builder.file(path, false, PlannerId::RawFixed64mV1, vec![data(seed, 8)]);
+    builder.file(path, false, PlannerId::BlobV1, vec![data(seed, 8)]);
 }
 
 /// Assembles manifest bytes by hand, mirroring the documented grammar. This
@@ -83,12 +83,18 @@ fn the_hand_assembled_grammar_matches_the_builder_byte_for_byte() {
         PlannerId::SafetensorsV1,
         vec![data(0xAA, 10), FileRecord::Hole { length: 5 }],
     );
+    builder.file(
+        "video.webm",
+        false,
+        PlannerId::BlobV1,
+        vec![data(0xBB, 5 * 1024 * 1024 * 1024)],
+    );
     let snapshot = decoded(builder);
 
     let raw = Raw::default()
         .magic()
         .no_parent()
-        .entry_count(1)
+        .entry_count(2)
         .path("model.safetensors")
         .bytes(&[2, 1, 1]) // file, executable, safetensors-v1
         .u64(15) // logical size
@@ -97,7 +103,11 @@ fn the_hand_assembled_grammar_matches_the_builder_byte_for_byte() {
         .bytes(&[0xAA; 32])
         .u64(10)
         .bytes(&[2]) // hole tag
-        .u64(5);
+        .u64(5)
+        .path("video.webm")
+        .bytes(&[2, 0, 4]) // file, not executable, blob-v1
+        .u64(5 * 1024 * 1024 * 1024) // logical size: far beyond one record
+        .bytes(&[0xBB; 32]); // the whole-file digest; no record list exists
 
     assert_eq!(snapshot.to_bytes(), raw.0);
 }
@@ -142,7 +152,7 @@ fn renaming_a_file_changes_identity_but_never_the_referenced_digests() {
         builder.file(
             name,
             false,
-            PlannerId::RawFixed64mV1,
+            PlannerId::SafetensorsV1,
             vec![data(7, 100), data(8, 200)],
         );
         decoded(builder)
@@ -157,7 +167,7 @@ fn renaming_a_file_changes_identity_but_never_the_referenced_digests() {
             .entries()
             .iter()
             .filter_map(|(_, entry)| match entry {
-                Entry::File { records, .. } => Some(records.clone()),
+                Entry::File { body, .. } => Some(body.records().into_owned()),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -292,7 +302,7 @@ fn case_fold_collisions_and_missing_parents_refuse() {
 fn record_rules_refuse_at_the_builder() {
     let refuse = |records: Vec<FileRecord>, expected: &str| {
         let mut builder = SnapshotBuilder::new(None);
-        builder.file("f", false, PlannerId::RawFixed64mV1, records);
+        builder.file("f", false, PlannerId::SafetensorsV1, records);
         assert_eq!(reason(builder.finish().unwrap_err()), expected);
     };
 
@@ -318,12 +328,47 @@ fn record_rules_refuse_at_the_builder() {
     over_limit.file(
         "f",
         false,
-        PlannerId::RawFixed64mV1,
+        PlannerId::SafetensorsV1,
         (0..=MAX_FILE_RECORDS)
             .map(|_| data(1, 1))
             .collect::<Vec<_>>(),
     );
     assert_eq!(reason(over_limit.finish().unwrap_err()), "record-limit");
+}
+
+#[test]
+fn a_blob_body_is_exactly_one_whole_file_object_or_empty() {
+    // The canonical forms round-trip…
+    let mut canonical = SnapshotBuilder::new(None);
+    canonical.file("big.bin", false, PlannerId::BlobV1, vec![data(9, u64::MAX)]);
+    canonical.file("empty.bin", false, PlannerId::BlobV1, Vec::new());
+    let snapshot = decoded(canonical);
+    match &snapshot.entries()[1].1 {
+        Entry::File { body, .. } => {
+            assert_eq!(body.planner_id(), PlannerId::BlobV1);
+            assert_eq!(body.logical_size(), 0);
+            assert_eq!(
+                *body,
+                tensorfs_core::tfm1::FileBody::Blob {
+                    logical_size: 0,
+                    digest: tensorfs_core::tfm1::EMPTY_BLOB_DIGEST,
+                }
+            );
+        }
+        _ => panic!("expected a file entry"),
+    }
+
+    // …and every other record shape refuses: a chunked blob and a hole in a
+    // blob are unrepresentable, so the staging vocabulary cannot smuggle one
+    // through the builder.
+    let refuse = |records: Vec<FileRecord>| {
+        let mut builder = SnapshotBuilder::new(None);
+        builder.file("f", false, PlannerId::BlobV1, records);
+        assert_eq!(reason(builder.finish().unwrap_err()), "blob-records");
+    };
+    refuse(vec![data(1, 4), data(2, 4)]);
+    refuse(vec![FileRecord::Hole { length: 4 }]);
+    refuse(vec![data(1, 4), FileRecord::Hole { length: 4 }]);
 }
 
 #[test]
@@ -338,11 +383,11 @@ fn symlink_target_rules_refuse() {
 #[test]
 fn an_empty_file_and_an_all_hole_file_are_both_canonical() {
     let mut builder = SnapshotBuilder::new(None);
-    builder.file("empty", false, PlannerId::RawFixed64mV1, Vec::new());
+    builder.file("empty", false, PlannerId::BlobV1, Vec::new());
     builder.file(
-        "sparse",
+        "sparse.safetensors",
         false,
-        PlannerId::RawFixed64mV1,
+        PlannerId::SafetensorsV1,
         vec![FileRecord::Hole {
             length: 10 * MAX_OBJECT_SIZE,
         }],
@@ -425,7 +470,7 @@ fn decode_bounds_declared_counts_before_allocating() {
         .no_parent()
         .entry_count(1)
         .path("f")
-        .bytes(&[2, 0, 3]) // file, not executable, raw planner
+        .bytes(&[2, 0, 1]) // file, not executable, safetensors-v1
         .u64(0)
         .u64(u64::MAX)
         .0;
@@ -436,7 +481,7 @@ fn decode_bounds_declared_counts_before_allocating() {
         .no_parent()
         .entry_count(1)
         .path("f")
-        .bytes(&[2, 0, 3])
+        .bytes(&[2, 0, 1])
         .u64(9)
         .u64(1)
         .0;
@@ -472,7 +517,7 @@ fn decode_refuses_unknown_tags_and_invalid_flags() {
     assert_eq!(
         reason(
             decode(&file(&[
-                2, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+                2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
             ]))
             .unwrap_err()
         ),
@@ -493,7 +538,7 @@ fn decode_refuses_unknown_tags_and_invalid_flags() {
         .no_parent()
         .entry_count(1)
         .path("f")
-        .bytes(&[2, 0, 3])
+        .bytes(&[2, 0, 1])
         .u64(1)
         .u64(1)
         .bytes(&[9])
@@ -511,7 +556,7 @@ fn the_bounded_record_cardinality_is_exactly_the_planner_limit() {
     builder.file(
         "many",
         false,
-        PlannerId::RawFixed64mV1,
+        PlannerId::SafetensorsV1,
         (0..MAX_FILE_RECORDS).map(|_| data(1, 1)).collect(),
     );
     let snapshot = builder.finish().expect("the exact limit is valid");

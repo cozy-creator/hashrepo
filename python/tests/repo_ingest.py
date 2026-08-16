@@ -52,11 +52,20 @@ def ingest_with_grid(
 
 
 def ingest_file(cas: LocalCAS, source: Path, *, manifest_path: str | None = None) -> FileEntry:
-    """Commit one file under the Rust planner's grid."""
+    """Commit one file as the Rust planner shapes it.
+
+    Tensor containers land under the planner's record grid. Everything else is
+    ONE whole unchunked blob of any size — a chunkless entry whose digest is
+    the object's own name.
+    """
 
     plan = native.plan_file(source)
+    path = manifest_path or source.name
+    if plan.planner == "blob-v1":
+        ref = cas.put_file(source)
+        return FileEntry(path, source.stat().st_size, ref)
     lengths = [region.length for region in plan.regions]
-    return ingest_with_grid(cas, source, lengths, manifest_path=manifest_path or source.name)
+    return ingest_with_grid(cas, source, lengths, manifest_path=path)
 
 
 def ingest_repository(cas: LocalCAS, root: Path) -> RepositoryManifest:

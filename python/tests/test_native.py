@@ -268,17 +268,46 @@ def test_tfm1_refusal_vectors_are_refused(case: dict[str, object]) -> None:
 
 
 def test_decoded_file_entry_exposes_its_records() -> None:
-    data = _fixture_bytes(_TFM1_VECTORS.parent, "fixtures/sparse-file.hex")
+    data = _fixture_bytes(_TFM1_VECTORS.parent, "fixtures/sparse-tensor.hex")
     snapshot = native.decode_snapshot(data)
     files = [entry for entry in snapshot.entries if entry.kind == "file"]
-    assert files, "the sparse-file vector has at least one file entry"
+    assert files, "the sparse-tensor vector has at least one file entry"
 
     entry = files[0]
+    assert entry.planner == "safetensors-v1"
+    assert entry.digest is None, "tensor entries have no whole-file hash"
     assert entry.records is not None
     assert entry.logical_size == sum(record.length for record in entry.records)
     assert any(record.kind == "hole" for record in entry.records)
     assert snapshot.file_records(entry.path) is not None
     assert snapshot.file_records("no/such/path") is None
+
+
+def test_a_decoded_blob_entry_serves_one_whole_file_record() -> None:
+    data = _fixture_bytes(_TFM1_VECTORS.parent, "fixtures/single-blob.hex")
+    snapshot = native.decode_snapshot(data)
+    (entry,) = [entry for entry in snapshot.entries if entry.kind == "file"]
+
+    assert entry.planner == "blob-v1"
+    assert entry.logical_size == 18
+    assert entry.digest == "11" * 32
+    # The effective record run — ONE whole-file object — is what feeds
+    # RecordsReader, so blob extraction needs no special case.
+    records = entry.records
+    assert records is not None
+    assert [(record.kind, record.length, record.digest) for record in records] == [
+        ("data", 18, "11" * 32)
+    ]
+    assert snapshot.file_records(entry.path) is not None
+
+
+def test_a_decoded_empty_blob_has_no_effective_records() -> None:
+    data = _fixture_bytes(_TFM1_VECTORS.parent, "fixtures/empty-blob.hex")
+    snapshot = native.decode_snapshot(data)
+    (entry,) = [entry for entry in snapshot.entries if entry.kind == "file"]
+    assert entry.planner == "blob-v1"
+    assert entry.logical_size == 0
+    assert entry.records == []
 
 
 def test_pack_round_trip() -> None:

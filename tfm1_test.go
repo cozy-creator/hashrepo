@@ -30,9 +30,9 @@ type tfm1Corpus struct {
 	} `json:"refusals"`
 }
 
-// The exact reason vocabulary of the Rust decoder. Two Rust variants can
-// never reach Go: hardlink-target exists only in the authoring builder, and
-// resource-exhausted only on allocation failure.
+// The exact reason vocabulary of the Rust decoder. Three Rust variants can
+// never reach Go: hardlink-target and blob-records exist only in the
+// authoring builder, and resource-exhausted only on allocation failure.
 var tfm1KnownReasons = map[string]bool{
 	"truncated": true, "bad-magic": true, "parent-flag": true,
 	"count-exceeds-input": true, "trailing-bytes": true, "entry-order": true,
@@ -45,8 +45,8 @@ var tfm1KnownReasons = map[string]bool{
 	"unknown-planner": true, "unknown-record-tag": true,
 	"zero-length-record": true, "adjacent-holes": true,
 	"data-too-large": true, "record-limit": true,
-	"length-sum-mismatch": true, "symlink-target": true,
-	"hardlink-ordinal": true,
+	"length-sum-mismatch": true, "empty-blob-digest": true,
+	"symlink-target": true, "hardlink-ordinal": true,
 }
 
 func loadTFM1Corpus(t *testing.T) tfm1Corpus {
@@ -138,54 +138,89 @@ func TestSharedTFM1GoldenFactsMatchTheRustBuilder(t *testing.T) {
 		return snapshot
 	}
 
-	t.Run("single-file", func(t *testing.T) {
-		snapshot := decode(t, "fixtures/single-file.hex")
+	t.Run("single-blob", func(t *testing.T) {
+		snapshot := decode(t, "fixtures/single-blob.hex")
 		if len(snapshot.Entries) != 1 || snapshot.Parent != "" {
 			t.Fatalf("unexpected shape: %+v", snapshot)
 		}
 		entry := snapshot.Entries[0]
 		if entry.Path != "model.bin" || entry.Kind != TFM1File || entry.Executable ||
-			entry.Planner != TFM1PlannerRawFixed64mV1 || entry.LogicalSize != 18 {
+			entry.Planner != TFM1PlannerBlobV1 || entry.LogicalSize != 18 {
 			t.Fatalf("unexpected entry: %+v", entry)
 		}
-		if len(entry.Records) != 1 || entry.Records[0].Hole ||
-			entry.Records[0].Length != 18 ||
-			entry.Records[0].Digest.Hex() != strings.Repeat("11", 32) {
-			t.Fatalf("unexpected records: %+v", entry.Records)
+		if entry.Records != nil {
+			t.Fatalf("a blob body must carry no records: %+v", entry.Records)
+		}
+		if entry.Digest.Hex() != strings.Repeat("11", 32) {
+			t.Fatalf("unexpected blob digest: %s", entry.Digest.Hex())
 		}
 	})
 
-	t.Run("tree", func(t *testing.T) {
+	t.Run("large-blob is one recordless body of any size", func(t *testing.T) {
+		snapshot := decode(t, "fixtures/large-blob.hex")
+		entry := snapshot.Entries[0]
+		if entry.Planner != TFM1PlannerBlobV1 ||
+			entry.LogicalSize != 5*1024*1024*1024+3 || entry.Records != nil {
+			t.Fatalf("unexpected entry: %+v", entry)
+		}
+		if entry.Digest.Hex() != strings.Repeat("12", 32) {
+			t.Fatalf("unexpected blob digest: %s", entry.Digest.Hex())
+		}
+	})
+
+	t.Run("empty-blob carries the empty-string digest", func(t *testing.T) {
+		snapshot := decode(t, "fixtures/empty-blob.hex")
+		entry := snapshot.Entries[0]
+		if entry.Planner != TFM1PlannerBlobV1 || entry.LogicalSize != 0 {
+			t.Fatalf("unexpected entry: %+v", entry)
+		}
+		if entry.Digest.Hex() != tfm1EmptyBlobDigest {
+			t.Fatalf("empty blob digest %s", entry.Digest.Hex())
+		}
+	})
+
+	t.Run("tree mixes tensor records and blob bodies", func(t *testing.T) {
 		snapshot := decode(t, "fixtures/tree.hex")
 		var paths []string
+		byPath := map[string]TFM1Entry{}
 		for _, entry := range snapshot.Entries {
 			paths = append(paths, entry.Path)
+			byPath[entry.Path] = entry
 		}
 		want := []string{
-			"run.sh", "weights", "weights/model.safetensors",
+			"config.json", "run.sh", "weights", "weights/model.safetensors",
 			"weights/text-encoder", "weights/text-encoder/encoder.safetensors",
 		}
 		if strings.Join(paths, ",") != strings.Join(want, ",") {
 			t.Fatalf("paths %v, want %v", paths, want)
 		}
-		if !snapshot.Entries[0].Executable {
-			t.Fatal("run.sh must be executable")
+		if !byPath["run.sh"].Executable || byPath["run.sh"].Planner != TFM1PlannerBlobV1 {
+			t.Fatalf("run.sh must be an executable blob: %+v", byPath["run.sh"])
 		}
-		if snapshot.Entries[2].Planner != TFM1PlannerSafetensorsV1 {
-			t.Fatalf("planner %q", snapshot.Entries[2].Planner)
+		if byPath["config.json"].Planner != TFM1PlannerBlobV1 ||
+			byPath["config.json"].LogicalSize != 415 {
+			t.Fatalf("config.json must be a 415-byte blob: %+v", byPath["config.json"])
+		}
+		model := byPath["weights/model.safetensors"]
+		if model.Planner != TFM1PlannerSafetensorsV1 || len(model.Records) != 2 {
+			t.Fatalf("model.safetensors keeps its record list: %+v", model)
 		}
 	})
 
-	t.Run("sparse-file", func(t *testing.T) {
-		snapshot := decode(t, "fixtures/sparse-file.hex")
-		records := snapshot.Entries[0].Records
+	t.Run("sparse-tensor keeps hole records in a tensor body", func(t *testing.T) {
+		snapshot := decode(t, "fixtures/sparse-tensor.hex")
+		entry := snapshot.Entries[0]
+		if entry.Planner != TFM1PlannerSafetensorsV1 {
+			t.Fatalf("planner %q", entry.Planner)
+		}
+		records := entry.Records
 		if len(records) != 3 || !records[0].Hole || records[0].Length != 4096 ||
 			records[1].Hole || records[1].Length != 100 ||
 			!records[2].Hole || records[2].Length != 1<<40 {
 			t.Fatalf("unexpected records: %+v", records)
 		}
-		if snapshot.Entries[0].LogicalSize != 4096+100+1<<40 {
-			t.Fatalf("logical size %d", snapshot.Entries[0].LogicalSize)
+		if entry.LogicalSize != 4096+100+1<<40 {
+			t.Fatalf("logical size %d", entry.LogicalSize)
 		}
 	})
 
@@ -238,8 +273,9 @@ func TestSharedTFM1GoldenFactsMatchTheRustBuilder(t *testing.T) {
 			t.Fatalf("unexpected records: %+v", records)
 		}
 		empty := snapshot.Entries[1]
-		if empty.Path != "zero.bin" || empty.LogicalSize != 0 || len(empty.Records) != 0 {
-			t.Fatalf("unexpected empty file: %+v", empty)
+		if empty.Path != "zero.bin" || empty.Planner != TFM1PlannerBlobV1 ||
+			empty.LogicalSize != 0 || empty.Records != nil {
+			t.Fatalf("unexpected empty blob: %+v", empty)
 		}
 	})
 
@@ -275,22 +311,27 @@ func TestEverySharedTFM1RefusalIsRefusedWithItsReason(t *testing.T) {
 }
 
 func TestEverySingleByteTFM1MutationRefusesOrChangesTheID(t *testing.T) {
-	original := decodeTFM1Fixture(t, "fixtures/single-file.hex")
-	originalSum := sha256.Sum256(original)
-	for index := range original {
-		mutated := make([]byte, len(original))
-		copy(mutated, original)
-		mutated[index] ^= 0x01
-		snapshot, err := ParseTFM1(mutated)
-		if err != nil {
-			var refusal *TFM1Error
-			if !errors.As(err, &refusal) {
-				t.Fatalf("byte %d: refusal must be a TFM1Error, got %T", index, err)
+	corpus := loadTFM1Corpus(t)
+	for _, row := range corpus.Golden {
+		t.Run(row.Name, func(t *testing.T) {
+			original := decodeTFM1Fixture(t, row.Fixture)
+			originalSum := sha256.Sum256(original)
+			for index := range original {
+				mutated := make([]byte, len(original))
+				copy(mutated, original)
+				mutated[index] ^= 0x01
+				snapshot, err := ParseTFM1(mutated)
+				if err != nil {
+					var refusal *TFM1Error
+					if !errors.As(err, &refusal) {
+						t.Fatalf("byte %d: refusal must be a TFM1Error, got %T", index, err)
+					}
+					continue
+				}
+				if snapshot.SnapshotID == hex.EncodeToString(originalSum[:]) {
+					t.Fatalf("byte %d: an accepted mutation must change the identity", index)
+				}
 			}
-			continue
-		}
-		if snapshot.SnapshotID == hex.EncodeToString(originalSum[:]) {
-			t.Fatalf("byte %d: an accepted mutation must change the identity", index)
-		}
+		})
 	}
 }

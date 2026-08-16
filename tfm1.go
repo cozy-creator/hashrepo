@@ -42,13 +42,19 @@ const (
 	TFM1Hardlink  TFM1EntryKind = tfm1KindHardlink
 )
 
-// The closed planner provenance vocabulary. Readers reconstruct solely from
-// the ordered records; the planner name is provenance and is never executed.
+// The closed planner provenance vocabulary. Tensor planners carry a record
+// list; blob-v1 carries a logical size and the whole-file digest, nothing
+// else. Planner byte 3 — the retired raw-fixed-64m-v1 grid — refuses as an
+// unknown planner: retired, not aliased.
 const (
 	TFM1PlannerSafetensorsV1 = "safetensors-v1"
 	TFM1PlannerGgufV1        = "gguf-v1"
-	TFM1PlannerRawFixed64mV1 = "raw-fixed-64m-v1"
+	TFM1PlannerBlobV1        = "blob-v1"
 )
+
+// tfm1EmptyBlobDigest is the SHA-256 of the empty byte string: the one
+// canonical digest of a zero-size blob body.
+const tfm1EmptyBlobDigest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 // TFM1Record is one Data or Hole run of a regular file.
 type TFM1Record struct {
@@ -57,7 +63,9 @@ type TFM1Record struct {
 	Length uint64
 }
 
-// TFM1Entry is one decoded manifest entry. Field validity follows Kind.
+// TFM1Entry is one decoded manifest entry. Field validity follows Kind: a
+// tensor-planned file carries Records; a blob-v1 file carries Digest — the
+// whole-file SHA-256 — and never Records.
 type TFM1Entry struct {
 	Path        string
 	Kind        TFM1EntryKind
@@ -65,6 +73,7 @@ type TFM1Entry struct {
 	Planner     string
 	LogicalSize uint64
 	Records     []TFM1Record
+	Digest      Ref
 	Target      string
 	Ordinal     uint64
 }
@@ -376,13 +385,27 @@ func ParseTFM1(data []byte) (TFM1Snapshot, error) {
 				entry.Planner = TFM1PlannerSafetensorsV1
 			case 2:
 				entry.Planner = TFM1PlannerGgufV1
-			case 3:
-				entry.Planner = TFM1PlannerRawFixed64mV1
+			case 4:
+				entry.Planner = TFM1PlannerBlobV1
 			default:
 				return TFM1Snapshot{}, tfm1Refuse("unknown-planner")
 			}
 			if entry.LogicalSize, err = reader.takeU64(); err != nil {
 				return TFM1Snapshot{}, err
+			}
+			if entry.Planner == TFM1PlannerBlobV1 {
+				// A blob body is the whole-file digest — no record list is
+				// even representable after it.
+				digestBytes, err := reader.take(32)
+				if err != nil {
+					return TFM1Snapshot{}, err
+				}
+				entry.Digest = Ref{hex: hex.EncodeToString(digestBytes)}
+				if entry.LogicalSize == 0 && entry.Digest.hex != tfm1EmptyBlobDigest {
+					return TFM1Snapshot{}, tfm1Refuse("empty-blob-digest")
+				}
+				assignedOrdinals++
+				break
 			}
 			recordCount, err := reader.takeU64()
 			if err != nil {

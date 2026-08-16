@@ -149,7 +149,7 @@ const fn kind_name(kind: RegionKind) -> &'static str {
     match kind {
         RegionKind::Header => "header",
         RegionKind::Tensor => "tensor",
-        RegionKind::Raw => "raw",
+        RegionKind::Blob => "blob",
     }
 }
 
@@ -225,10 +225,10 @@ fn shared_planner_vectors_match_the_closed_automatic_registry() {
 
         match case.classification {
             Classification::Semantic => {
-                assert_ne!(planned.planner(), PlannerId::RawFixed64mV1, "{}", case.name);
+                assert_ne!(planned.planner(), PlannerId::BlobV1, "{}", case.name);
             }
             Classification::Raw | Classification::Fallback => {
-                assert_eq!(planned.planner(), PlannerId::RawFixed64mV1, "{}", case.name);
+                assert_eq!(planned.planner(), PlannerId::BlobV1, "{}", case.name);
             }
         }
 

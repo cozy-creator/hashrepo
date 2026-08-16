@@ -314,10 +314,10 @@ pub fn assert_snapshot_fully_backed(meta: &WorkspaceStore, id: &SnapshotId, cont
         "{context}: snapshot {id} re-encodes to a different identity"
     );
     for (path, entry) in snapshot.entries() {
-        let Entry::File { records, .. } = entry else {
+        let Entry::File { body, .. } = entry else {
             continue;
         };
-        for record in records {
+        for record in body.records().iter() {
             if let FileRecord::Data { digest, length } = record {
                 let resident = meta.store().verify(digest).unwrap_or_else(|error| {
                     panic!("{context}: {path} references unverifiable {digest}: {error}")
@@ -342,11 +342,11 @@ pub fn reconstruct(meta: &WorkspaceStore, id: &SnapshotId, path: &str) -> Vec<u8
         if entry_path.as_str() != path {
             continue;
         }
-        let Entry::File { records, .. } = entry else {
+        let Entry::File { body, .. } = entry else {
             panic!("{path} is not a regular file");
         };
         found = true;
-        for record in records {
+        for record in body.records().iter() {
             match record {
                 FileRecord::Hole { length } => {
                     bytes.extend(std::iter::repeat_n(0_u8, *length as usize));
@@ -412,7 +412,11 @@ pub fn mutations_for(meta: &WorkspaceStore, files: &[(&str, Vec<Vec<u8>>)]) -> V
             Mutation::CreateFile {
                 path: (*path).to_owned(),
                 executable: false,
-                planner: PlannerId::RawFixed64mV1,
+                // Tensor provenance: seal keeps a sparse tensor body's
+                // committed records verbatim, which is what preserves the
+                // multi-object closure these fixtures exist to exercise. A
+                // blob-planner file would materialize into ONE object.
+                planner: PlannerId::SafetensorsV1,
                 records,
             }
         }))
@@ -426,8 +430,8 @@ pub fn data_digests(meta: &WorkspaceStore, id: &SnapshotId) -> Vec<ObjectDigest>
     let mut seen = HashSet::new();
     let mut digests = Vec::new();
     for (_path, entry) in snapshot.entries() {
-        if let Entry::File { records, .. } = entry {
-            for record in records {
+        if let Entry::File { body, .. } = entry {
+            for record in body.records().iter() {
                 if let FileRecord::Data { digest, .. } = record
                     && seen.insert(*digest.as_bytes())
                 {
@@ -620,8 +624,8 @@ impl SyncTransport for FaultHub {
         let mut closure = Vec::new();
         let mut seen = HashSet::new();
         for (_path, entry) in snapshot.entries() {
-            if let Entry::File { records, .. } = entry {
-                for record in records {
+            if let Entry::File { body, .. } = entry {
+                for record in body.records().iter() {
                     if let FileRecord::Data { digest, length } = record
                         && seen.insert(*digest.as_bytes())
                     {
@@ -1377,8 +1381,8 @@ impl SyncTransport for DirTransport {
         let mut closure = Vec::new();
         let mut seen = HashSet::new();
         for (_path, entry) in snapshot.entries() {
-            if let Entry::File { records, .. } = entry {
-                for record in records {
+            if let Entry::File { body, .. } = entry {
+                for record in body.records().iter() {
                     if let FileRecord::Data { digest, length } = record
                         && seen.insert(*digest.as_bytes())
                     {

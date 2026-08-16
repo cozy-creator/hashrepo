@@ -175,15 +175,19 @@ new objects, and keep their digests, so the hub has nothing new to fetch for
 them. On a quantization that touches only the denoiser, the text encoder's
 objects are reused verbatim and uploaded not at all.
 
-`inherit` **does not** avoid hashing them. TFM1 identifies a file by the digest
-of its bytes, so `finish()` must read every byte of the composed file once, even
-for inherited tensors. Removing that pass needs a format change — identifying a
-file by its chunk list rather than its bytes — not an API change. That is a real
-limit and it is named rather than hidden.
+`inherit` **also avoids hashing them.** An earlier revision of this section
+claimed `finish()` must re-read every byte because "TFM1 identifies a file by
+the digest of its bytes" — that was true of the v0 JSON manifest
+(`FORMAT.md`'s whole-file `digest` field) and is **false of TFM1**: a tensor
+file's identity IS its record list (spec preamble — tensor files carry no
+whole-file hash), so composing a snapshot from inherited chunks costs zero
+hashing of inherited bytes. That is exactly the property the mixed-CAS dedup
+story relies on. Only what changed is hashed, once, at admission — and a
+`blob-v1` file likewise hashes once, at admission, never on inherit.
 
 Net against `load_file`/`save_file` per shard: the write of unchanged bytes is
-gone, the upload of unchanged objects is gone, and the multi-GB host buffer is
-gone. One hash pass over the composed file remains.
+gone, the upload of unchanged objects is gone, the multi-GB host buffer is
+gone, and no hash pass over inherited bytes remains.
 
 ## Zero-copy: what is free and what copies
 

@@ -4,7 +4,14 @@
 //! decoder refuses every deviation, so `decode(bytes)` followed by
 //! `Snapshot::to_bytes` reproduces the input exactly. `SnapshotId` is the
 //! SHA-256 of the canonical bytes; nothing platform-derived can enter them.
+//!
+//! File bodies come in exactly two shapes: tensor containers
+//! (`safetensors-v1`, `gguf-v1`) carry an ordered record list on the 64 MiB
+//! tensor grid, and everything else is ONE unchunked `blob-v1` whose body is
+//! its logical size and whole-file SHA-256. A chunked blob, a blob with a
+//! hole, or a multi-record blob is unrepresentable, not refused.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
@@ -13,12 +20,21 @@ use thiserror::Error;
 use unicode_normalization::is_nfc;
 
 use crate::object::ObjectDigest;
-use crate::planner::{MAX_OBJECT_SIZE, PlannerId};
+use crate::planner::{MAX_OBJECT_SIZE, PlannerId, TensorFormat};
 
 pub const MAX_PATH_BYTES: usize = 4096;
 pub const MAX_SYMLINK_TARGET_BYTES: usize = 4096;
 /// Mirrors the planner's bounded object cardinality for one regular file.
 pub const MAX_FILE_RECORDS: usize = 1_000_000;
+
+/// SHA-256 of the empty byte string: the one canonical digest of an empty
+/// blob, so every file body has the same shape and zero-size bodies cannot
+/// smuggle a second identity.
+pub const EMPTY_BLOB_DIGEST: ObjectDigest = ObjectDigest::from_bytes([
+    0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9,
+    0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52,
+    0xb8, 0x55,
+]);
 
 const MAGIC: [u8; 4] = *b"TFM1";
 const KIND_DIRECTORY: u8 = 1;
@@ -27,6 +43,9 @@ const KIND_SYMLINK: u8 = 3;
 const KIND_HARDLINK: u8 = 4;
 const RECORD_DATA: u8 = 1;
 const RECORD_HOLE: u8 = 2;
+const PLANNER_SAFETENSORS: u8 = 1;
+const PLANNER_GGUF: u8 = 2;
+const PLANNER_BLOB: u8 = 4;
 /// Minimum encoded sizes used to bound declared counts before allocation.
 const MIN_ENTRY_BYTES: u64 = 4 + 1 + 1;
 const MIN_RECORD_BYTES: u64 = 1 + 8;
@@ -104,13 +123,88 @@ impl FileRecord {
     }
 }
 
+/// One regular file's canonical content description.
+///
+/// Tensor containers carry their ordered record list; everything else is one
+/// whole blob named by its own SHA-256. The invalid combinations — a chunked
+/// blob, a record list without a tensor format — cannot be constructed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FileBody {
+    Tensor {
+        format: TensorFormat,
+        logical_size: u64,
+        records: Vec<FileRecord>,
+    },
+    Blob {
+        logical_size: u64,
+        digest: ObjectDigest,
+    },
+}
+
+impl FileBody {
+    #[must_use]
+    pub const fn logical_size(&self) -> u64 {
+        match self {
+            Self::Tensor { logical_size, .. } | Self::Blob { logical_size, .. } => *logical_size,
+        }
+    }
+
+    #[must_use]
+    pub const fn planner_id(&self) -> PlannerId {
+        match self {
+            Self::Tensor { format, .. } => format.planner_id(),
+            Self::Blob { .. } => PlannerId::BlobV1,
+        }
+    }
+
+    /// The body as an ordered record run. A tensor body is its records; a
+    /// nonempty blob is one whole-file data record; an empty blob is none.
+    /// This is the one read-path vocabulary, so record consumers need no blob
+    /// special case.
+    #[must_use]
+    pub fn records(&self) -> Cow<'_, [FileRecord]> {
+        match self {
+            Self::Tensor { records, .. } => Cow::Borrowed(records.as_slice()),
+            Self::Blob { logical_size: 0, .. } => Cow::Owned(Vec::new()),
+            Self::Blob {
+                logical_size,
+                digest,
+            } => Cow::Owned(vec![FileRecord::Data {
+                digest: *digest,
+                length: *logical_size,
+            }]),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Entry {
     Directory,
     File {
         executable: bool,
+        body: FileBody,
+    },
+    Symlink {
+        target: String,
+    },
+    Hardlink {
+        ordinal: u64,
+    },
+}
+
+/// One entry of the committed-but-unsealed workspace head tree.
+///
+/// The mutable workspace stages every file as a record run (the COW mount
+/// composes on the 64 MiB grid), a shape the canonical manifest deliberately
+/// cannot express for non-tensor files. This is that staging vocabulary: the
+/// same tree facts as [`Entry`], with file content still in record form.
+/// Sealing is what canonicalizes it into TFM1.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TreeEntry {
+    Directory,
+    File {
+        executable: bool,
         planner: PlannerId,
-        logical_size: u64,
         records: Vec<FileRecord>,
     },
     Symlink {
@@ -119,6 +213,31 @@ pub enum Entry {
     Hardlink {
         ordinal: u64,
     },
+}
+
+/// The resolved, validated workspace head tree: every path, ordering,
+/// hardlink and topology rule of TFM1 holds, but file bodies stay in staging
+/// record form. Produced only by [`SnapshotBuilder::finish_tree`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HeadTree {
+    entries: Vec<(String, TreeEntry)>,
+}
+
+impl HeadTree {
+    #[must_use]
+    pub fn entries(&self) -> &[(String, TreeEntry)] {
+        &self.entries
+    }
+
+    /// Resolves a hardlink ordinal to the carrier path, in ordinal order.
+    #[must_use]
+    pub fn ordinal_path(&self, ordinal: u64) -> Option<&str> {
+        self.entries
+            .iter()
+            .filter(|(_, entry)| matches!(entry, TreeEntry::File { .. }))
+            .nth(usize::try_from(ordinal).ok()?)
+            .map(|(path, _)| path.as_str())
+    }
 }
 
 #[derive(Debug, Error)]
@@ -177,6 +296,10 @@ pub enum Tfm1Error {
     RecordLimit,
     #[error("record lengths overflow or do not sum to the logical size")]
     LengthSumMismatch,
+    #[error("an empty blob must carry the digest of the empty byte string")]
+    EmptyBlobDigest,
+    #[error("a blob body is exactly one whole-file object or empty")]
+    BlobRecords,
     #[error("symlink target is empty, too long, or contains forbidden bytes")]
     SymlinkTarget,
     #[error("hardlink ordinal does not name a previously assigned file")]
@@ -219,6 +342,8 @@ impl Tfm1Error {
             Self::DataTooLarge => "data-too-large",
             Self::RecordLimit => "record-limit",
             Self::LengthSumMismatch => "length-sum-mismatch",
+            Self::EmptyBlobDigest => "empty-blob-digest",
+            Self::BlobRecords => "blob-records",
             Self::SymlinkTarget => "symlink-target",
             Self::HardlinkOrdinal => "hardlink-ordinal",
             Self::HardlinkTarget => "hardlink-target",
@@ -227,20 +352,17 @@ impl Tfm1Error {
     }
 }
 
-const fn planner_tag(planner: PlannerId) -> u8 {
-    match planner {
-        PlannerId::SafetensorsV1 => 1,
-        PlannerId::GgufV1 => 2,
-        PlannerId::RawFixed64mV1 => 3,
-    }
-}
-
-const fn planner_from_tag(tag: u8) -> Option<PlannerId> {
-    match tag {
-        1 => Some(PlannerId::SafetensorsV1),
-        2 => Some(PlannerId::GgufV1),
-        3 => Some(PlannerId::RawFixed64mV1),
-        _ => None,
+const fn planner_tag(body: &FileBody) -> u8 {
+    match body {
+        FileBody::Tensor {
+            format: TensorFormat::SafetensorsV1,
+            ..
+        } => PLANNER_SAFETENSORS,
+        FileBody::Tensor {
+            format: TensorFormat::GgufV1,
+            ..
+        } => PLANNER_GGUF,
+        FileBody::Blob { .. } => PLANNER_BLOB,
     }
 }
 
@@ -296,7 +418,14 @@ pub(crate) fn validate_symlink_target(target: &str) -> Result<(), Tfm1Error> {
     Ok(())
 }
 
-pub(crate) fn validate_records(records: &[FileRecord], logical_size: u64) -> Result<(), Tfm1Error> {
+/// The structural rules every record run obeys regardless of planner: bounded
+/// cardinality, no zero-length records, no adjacent holes, and an exact
+/// non-overflowing length sum. This is the staging-domain rule — the 64 MiB
+/// data-record cap belongs only to tensor bodies.
+pub(crate) fn validate_record_run(
+    records: &[FileRecord],
+    logical_size: u64,
+) -> Result<(), Tfm1Error> {
     if records.len() > MAX_FILE_RECORDS {
         return Err(Tfm1Error::RecordLimit);
     }
@@ -307,12 +436,7 @@ pub(crate) fn validate_records(records: &[FileRecord], logical_size: u64) -> Res
             return Err(Tfm1Error::ZeroLengthRecord);
         }
         match record {
-            FileRecord::Data { length, .. } => {
-                if *length > MAX_OBJECT_SIZE {
-                    return Err(Tfm1Error::DataTooLarge);
-                }
-                previous_was_hole = false;
-            }
+            FileRecord::Data { .. } => previous_was_hole = false,
             FileRecord::Hole { .. } => {
                 if previous_was_hole {
                     return Err(Tfm1Error::AdjacentHoles);
@@ -330,13 +454,30 @@ pub(crate) fn validate_records(records: &[FileRecord], logical_size: u64) -> Res
     Ok(())
 }
 
+/// The tensor-body rule: the structural run rules plus the tensor chunk grid
+/// cap on every data record.
+pub(crate) fn validate_records(records: &[FileRecord], logical_size: u64) -> Result<(), Tfm1Error> {
+    validate_record_run(records, logical_size)?;
+    for record in records {
+        if let FileRecord::Data { length, .. } = record
+            && *length > MAX_OBJECT_SIZE
+        {
+            return Err(Tfm1Error::DataTooLarge);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn case_fold(path: &str) -> String {
     path.chars().flat_map(char::to_lowercase).collect()
 }
 
 /// Validates the whole-tree facts every canonical manifest must satisfy:
 /// case-fold uniqueness and explicit parent directories for every entry.
-fn validate_tree(entries: &[(String, Entry)]) -> Result<(), Tfm1Error> {
+fn validate_tree<E>(
+    entries: &[(String, E)],
+    is_directory: impl Fn(&E) -> bool,
+) -> Result<(), Tfm1Error> {
     let mut folded = HashSet::new();
     for (path, _) in entries {
         if !folded.insert(case_fold(path)) {
@@ -345,7 +486,7 @@ fn validate_tree(entries: &[(String, Entry)]) -> Result<(), Tfm1Error> {
     }
     let directories: HashSet<&str> = entries
         .iter()
-        .filter(|(_, entry)| matches!(entry, Entry::Directory))
+        .filter(|(_, entry)| is_directory(entry))
         .map(|(path, _)| path.as_str())
         .collect();
     for (path, _) in entries {
@@ -374,28 +515,38 @@ fn emit(parent: Option<&SnapshotId>, entries: &[(String, Entry)]) -> Vec<u8> {
         bytes.extend_from_slice(path.as_bytes());
         match entry {
             Entry::Directory => bytes.push(KIND_DIRECTORY),
-            Entry::File {
-                executable,
-                planner,
-                logical_size,
-                records,
-            } => {
+            Entry::File { executable, body } => {
                 bytes.push(KIND_FILE);
                 bytes.push(u8::from(*executable));
-                bytes.push(planner_tag(*planner));
-                bytes.extend_from_slice(&logical_size.to_le_bytes());
-                bytes.extend_from_slice(&(records.len() as u64).to_le_bytes());
-                for record in records {
-                    match record {
-                        FileRecord::Data { digest, length } => {
-                            bytes.push(RECORD_DATA);
-                            bytes.extend_from_slice(digest.as_bytes());
-                            bytes.extend_from_slice(&length.to_le_bytes());
+                bytes.push(planner_tag(body));
+                match body {
+                    FileBody::Tensor {
+                        logical_size,
+                        records,
+                        ..
+                    } => {
+                        bytes.extend_from_slice(&logical_size.to_le_bytes());
+                        bytes.extend_from_slice(&(records.len() as u64).to_le_bytes());
+                        for record in records {
+                            match record {
+                                FileRecord::Data { digest, length } => {
+                                    bytes.push(RECORD_DATA);
+                                    bytes.extend_from_slice(digest.as_bytes());
+                                    bytes.extend_from_slice(&length.to_le_bytes());
+                                }
+                                FileRecord::Hole { length } => {
+                                    bytes.push(RECORD_HOLE);
+                                    bytes.extend_from_slice(&length.to_le_bytes());
+                                }
+                            }
                         }
-                        FileRecord::Hole { length } => {
-                            bytes.push(RECORD_HOLE);
-                            bytes.extend_from_slice(&length.to_le_bytes());
-                        }
+                    }
+                    FileBody::Blob {
+                        logical_size,
+                        digest,
+                    } => {
+                        bytes.extend_from_slice(&logical_size.to_le_bytes());
+                        bytes.extend_from_slice(digest.as_bytes());
                     }
                 }
             }
@@ -490,7 +641,12 @@ impl SnapshotBuilder {
         self
     }
 
-    /// The logical size is derived from the records; it cannot disagree.
+    /// Declares one regular file in the staging vocabulary: a planner and an
+    /// ordered record run. The logical size is derived from the records; it
+    /// cannot disagree. [`finish`] canonicalizes the body per planner — a
+    /// `blob-v1` file must be empty or exactly one whole-file data record.
+    ///
+    /// [`finish`]: Self::finish
     pub fn file(
         &mut self,
         path: impl Into<String>,
@@ -536,7 +692,11 @@ impl SnapshotBuilder {
         self
     }
 
-    pub fn finish(self) -> Result<Snapshot, Tfm1Error> {
+    /// Resolves the declared entries into the validated tree: path and
+    /// symlink rules, duplicate refusal, hardlink re-rooting onto the first
+    /// sorted path, ordinal assignment, and whole-tree topology. File bodies
+    /// stay in staging record form.
+    fn resolve(self) -> Result<Vec<(String, TreeEntry)>, Tfm1Error> {
         let mut entries: BTreeMap<String, Pending> = BTreeMap::new();
         for (path, pending) in self.pending {
             validate_path(&path)?;
@@ -595,7 +755,7 @@ impl SnapshotBuilder {
         let mut ordinals: BTreeMap<String, u64> = BTreeMap::new();
         for (path, pending) in entries {
             let entry = match pending {
-                Pending::Directory => Entry::Directory,
+                Pending::Directory => TreeEntry::Directory,
                 Pending::File {
                     executable,
                     planner,
@@ -610,30 +770,87 @@ impl SnapshotBuilder {
                             .checked_add(record.length())
                             .ok_or(Tfm1Error::LengthSumMismatch)?;
                     }
-                    validate_records(&records, logical_size)?;
+                    validate_record_run(&records, logical_size)?;
                     ordinals.insert(path.clone(), ordinals.len() as u64);
-                    Entry::File {
+                    TreeEntry::File {
                         executable,
                         planner,
-                        logical_size,
                         records,
                     }
                 }
-                Pending::Symlink { target } => Entry::Symlink { target },
+                Pending::Symlink { target } => TreeEntry::Symlink { target },
                 Pending::HardlinkTo { target_path } => {
                     let ordinal = *ordinals
                         .get(&target_path)
                         .ok_or(Tfm1Error::HardlinkOrdinal)?;
-                    Entry::Hardlink { ordinal }
+                    TreeEntry::Hardlink { ordinal }
                 }
             };
             resolved.push((path, entry));
         }
-        validate_tree(&resolved)?;
-        Ok(Snapshot {
-            parent: self.parent,
-            entries: resolved,
+        validate_tree(&resolved, |entry| matches!(entry, TreeEntry::Directory))?;
+        Ok(resolved)
+    }
+
+    /// Finishes as the committed-head staging tree, without canonicalizing
+    /// file bodies. This is the mount's tree-read seam: a mid-write file may
+    /// hold a record shape the canonical manifest cannot express.
+    pub fn finish_tree(self) -> Result<HeadTree, Tfm1Error> {
+        Ok(HeadTree {
+            entries: self.resolve()?,
         })
+    }
+
+    /// Finishes as one canonical snapshot value, canonicalizing every file
+    /// body: tensor planners keep their validated record list; a `blob-v1`
+    /// file must be empty or exactly one whole-file data record, which
+    /// becomes the recordless blob body.
+    pub fn finish(self) -> Result<Snapshot, Tfm1Error> {
+        let parent = self.parent;
+        let resolved = self.resolve()?;
+        let mut entries = Vec::with_capacity(resolved.len());
+        for (path, entry) in resolved {
+            let entry = match entry {
+                TreeEntry::Directory => Entry::Directory,
+                TreeEntry::File {
+                    executable,
+                    planner,
+                    records,
+                } => Entry::File {
+                    executable,
+                    body: canonical_body(planner, records)?,
+                },
+                TreeEntry::Symlink { target } => Entry::Symlink { target },
+                TreeEntry::Hardlink { ordinal } => Entry::Hardlink { ordinal },
+            };
+            entries.push((path, entry));
+        }
+        Ok(Snapshot { parent, entries })
+    }
+}
+
+fn canonical_body(planner: PlannerId, records: Vec<FileRecord>) -> Result<FileBody, Tfm1Error> {
+    match planner.tensor_format() {
+        Some(format) => {
+            let logical_size = records.iter().map(FileRecord::length).sum();
+            validate_records(&records, logical_size)?;
+            Ok(FileBody::Tensor {
+                format,
+                logical_size,
+                records,
+            })
+        }
+        None => match records.as_slice() {
+            [] => Ok(FileBody::Blob {
+                logical_size: 0,
+                digest: EMPTY_BLOB_DIGEST,
+            }),
+            [FileRecord::Data { digest, length }] => Ok(FileBody::Blob {
+                logical_size: *length,
+                digest: *digest,
+            }),
+            _ => Err(Tfm1Error::BlobRecords),
+        },
     }
 }
 
@@ -679,7 +896,8 @@ impl<'a> Reader<'a> {
 
 /// Strictly decodes one canonical TFM1 manifest. Every structural, path,
 /// record, ordering, and topology rule refuses; the decoder never consults a
-/// planner and reconstructs solely from the ordered records.
+/// planner and reconstructs solely from the body facts. Planner byte 3 — the
+/// retired `raw-fixed-64m-v1` grid — refuses as an unknown planner.
 pub fn decode(bytes: &[u8]) -> Result<Snapshot, Tfm1Error> {
     let mut reader = Reader { bytes, position: 0 };
     if reader.take(4)? != MAGIC {
@@ -727,43 +945,26 @@ pub fn decode(bytes: &[u8]) -> Result<Snapshot, Tfm1Error> {
                     1 => true,
                     _ => return Err(Tfm1Error::ExecutableFlag),
                 };
-                let planner =
-                    planner_from_tag(reader.take_u8()?).ok_or(Tfm1Error::UnknownPlanner)?;
-                let logical_size = reader.take_u64()?;
-                let record_count = reader.take_u64()?;
-                if record_count > MAX_FILE_RECORDS as u64 {
-                    return Err(Tfm1Error::RecordLimit);
-                }
-                if record_count > reader.remaining() / MIN_RECORD_BYTES {
-                    return Err(Tfm1Error::CountExceedsInput);
-                }
-                let mut records = Vec::new();
-                records
-                    .try_reserve_exact(usize::try_from(record_count).expect("bounded record count"))
-                    .map_err(|_| Tfm1Error::ResourceExhausted)?;
-                for _ in 0..record_count {
-                    let record = match reader.take_u8()? {
-                        RECORD_DATA => FileRecord::Data {
-                            digest: ObjectDigest::from_bytes(
-                                reader.take(32)?.try_into().expect("32 bytes were taken"),
-                            ),
-                            length: reader.take_u64()?,
-                        },
-                        RECORD_HOLE => FileRecord::Hole {
-                            length: reader.take_u64()?,
-                        },
-                        _ => return Err(Tfm1Error::UnknownRecordTag),
-                    };
-                    records.push(record);
-                }
-                validate_records(&records, logical_size)?;
+                let body = match reader.take_u8()? {
+                    PLANNER_SAFETENSORS => decode_tensor_body(&mut reader, TensorFormat::SafetensorsV1)?,
+                    PLANNER_GGUF => decode_tensor_body(&mut reader, TensorFormat::GgufV1)?,
+                    PLANNER_BLOB => {
+                        let logical_size = reader.take_u64()?;
+                        let digest = ObjectDigest::from_bytes(
+                            reader.take(32)?.try_into().expect("32 bytes were taken"),
+                        );
+                        if logical_size == 0 && digest != EMPTY_BLOB_DIGEST {
+                            return Err(Tfm1Error::EmptyBlobDigest);
+                        }
+                        FileBody::Blob {
+                            logical_size,
+                            digest,
+                        }
+                    }
+                    _ => return Err(Tfm1Error::UnknownPlanner),
+                };
                 assigned_ordinals += 1;
-                Entry::File {
-                    executable,
-                    planner,
-                    logical_size,
-                    records,
-                }
+                Entry::File { executable, body }
             }
             KIND_SYMLINK => {
                 let target_length = usize::try_from(reader.take_u32()?).expect("u32 fits in usize");
@@ -791,6 +992,45 @@ pub fn decode(bytes: &[u8]) -> Result<Snapshot, Tfm1Error> {
     if reader.remaining() != 0 {
         return Err(Tfm1Error::TrailingBytes);
     }
-    validate_tree(&entries)?;
+    validate_tree(&entries, |entry| matches!(entry, Entry::Directory))?;
     Ok(Snapshot { parent, entries })
+}
+
+fn decode_tensor_body(
+    reader: &mut Reader<'_>,
+    format: TensorFormat,
+) -> Result<FileBody, Tfm1Error> {
+    let logical_size = reader.take_u64()?;
+    let record_count = reader.take_u64()?;
+    if record_count > MAX_FILE_RECORDS as u64 {
+        return Err(Tfm1Error::RecordLimit);
+    }
+    if record_count > reader.remaining() / MIN_RECORD_BYTES {
+        return Err(Tfm1Error::CountExceedsInput);
+    }
+    let mut records = Vec::new();
+    records
+        .try_reserve_exact(usize::try_from(record_count).expect("bounded record count"))
+        .map_err(|_| Tfm1Error::ResourceExhausted)?;
+    for _ in 0..record_count {
+        let record = match reader.take_u8()? {
+            RECORD_DATA => FileRecord::Data {
+                digest: ObjectDigest::from_bytes(
+                    reader.take(32)?.try_into().expect("32 bytes were taken"),
+                ),
+                length: reader.take_u64()?,
+            },
+            RECORD_HOLE => FileRecord::Hole {
+                length: reader.take_u64()?,
+            },
+            _ => return Err(Tfm1Error::UnknownRecordTag),
+        };
+        records.push(record);
+    }
+    validate_records(&records, logical_size)?;
+    Ok(FileBody::Tensor {
+        format,
+        logical_size,
+        records,
+    })
 }

@@ -188,12 +188,12 @@ mod tests {
     fn refuses_a_plan_for_a_different_source_length() {
         let source = b"bytes".as_slice();
         let plan = Plan {
-            planner: PlannerId::RawFixed64mV1,
+            planner: PlannerId::BlobV1,
             file_size: 4,
             regions: vec![Region {
                 offset: 0,
                 length: 4,
-                kind: RegionKind::Raw,
+                kind: RegionKind::Blob,
             }],
         };
 
@@ -225,12 +225,12 @@ mod tests {
     #[test]
     fn propagates_source_read_failure_without_emitting_an_object() {
         let plan = Plan {
-            planner: PlannerId::RawFixed64mV1,
+            planner: PlannerId::BlobV1,
             file_size: 4,
             regions: vec![Region {
                 offset: 0,
                 length: 4,
-                kind: RegionKind::Raw,
+                kind: RegionKind::Blob,
             }],
         };
 

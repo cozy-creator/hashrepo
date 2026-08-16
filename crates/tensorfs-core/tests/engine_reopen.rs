@@ -39,7 +39,7 @@ fn build_and_seal(root: &std::path::Path) -> SnapshotId {
     let payload = b"cross-engine reopen payload".repeat(64);
     let admitted = meta.store().put_bytes(&payload).expect("bytes admit");
     let hashed = plan_and_hash(&SliceSource(&payload)).expect("payload plans");
-    assert_eq!(hashed.planner(), PlannerId::RawFixed64mV1);
+    assert_eq!(hashed.planner(), PlannerId::BlobV1);
 
     meta.create_workspace("main").expect("workspace creates");
     meta.commit_generation(
@@ -51,7 +51,7 @@ fn build_and_seal(root: &std::path::Path) -> SnapshotId {
             Mutation::CreateFile {
                 path: "models/weights.bin".to_owned(),
                 executable: false,
-                planner: PlannerId::RawFixed64mV1,
+                planner: PlannerId::BlobV1,
                 records: vec![FileRecord::Data {
                     digest: admitted.digest(),
                     length: payload.len() as u64,

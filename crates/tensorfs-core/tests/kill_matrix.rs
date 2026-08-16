@@ -42,7 +42,7 @@ use std::time::{Duration, Instant};
 
 use harness::{Consistency, Rng, Scratch, iterations, seed_from_env};
 use tensorfs_core::planner::PlannerId;
-use tensorfs_core::tfm1::{Entry, FileRecord, SnapshotId};
+use tensorfs_core::tfm1::{FileRecord, SnapshotId, TreeEntry};
 use tensorfs_core::workspace::{Mutation, WorkspaceStore};
 
 const ROLE: &str = "TENSORFS_KILL_ROLE";
@@ -123,7 +123,7 @@ fn kill_child_role() {
         &[Mutation::CreateFile {
             path: format!("round-{round}.bin"),
             executable: false,
-            planner: PlannerId::RawFixed64mV1,
+            planner: PlannerId::BlobV1,
             records,
         }],
     )
@@ -210,7 +210,7 @@ fn assert_recovered(
         .head_tree("main")
         .unwrap_or_else(|error| panic!("{context}: head tree unreadable: {error}"));
     for (path, entry) in tree.entries() {
-        let Entry::File { records, .. } = entry else {
+        let TreeEntry::File { records, .. } = entry else {
             continue;
         };
         for record in records {

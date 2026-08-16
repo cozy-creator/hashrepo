@@ -188,7 +188,7 @@ fn header_above_upstream_limit_falls_back_without_reading_it() {
 fn eight_and_nine_byte_candidates_fall_back_without_a_read() {
     for length in [8, 9] {
         let planned = plan(&ShortSource(length)).unwrap();
-        assert_eq!(planned.planner(), PlannerId::RawFixed64mV1);
+        assert_eq!(planned.planner(), PlannerId::BlobV1);
     }
 }
 
@@ -477,7 +477,7 @@ fn a_pathologically_nested_header_falls_back_instead_of_escaping_the_parser() {
     // A parser without a depth bound would abort the process here instead.
     let source = HeaderSource::new(header, 0);
     assert!(try_plan(&source).unwrap().is_none());
-    assert_eq!(plan(&source).unwrap().planner(), PlannerId::RawFixed64mV1);
+    assert_eq!(plan(&source).unwrap().planner(), PlannerId::BlobV1);
 
     // Contrast: the identical header with an unnested shape plans normally, so
     // the fallback above is caused by the nesting and not by the surrounding
@@ -498,7 +498,7 @@ fn an_enormous_shape_declaration_is_refused_before_any_shape_arithmetic() {
 
     let source = HeaderSource::new(header, 1);
     assert!(try_plan(&source).unwrap().is_none());
-    assert_eq!(plan(&source).unwrap().planner(), PlannerId::RawFixed64mV1);
+    assert_eq!(plan(&source).unwrap().planner(), PlannerId::BlobV1);
 
     // Contrast: the same 2,000-dimension shape made of in-range dimensions
     // whose product still matches the declared bytes plans normally, so the

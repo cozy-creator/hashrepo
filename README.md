@@ -154,11 +154,13 @@ caller-authored partition; one `plan_and_hash` operation owns both steps:
 - `gguf-v1` validates the little-endian GGUF v2/v3 directory, alignment,
   bounded metadata values and pinned GGML dense/quantized type geometry before
   applying the same tensor rule; and
-- `raw-fixed-64m-v1` is the whole-file fallback for every unrecognized,
-  unsupported or malformed byte stream.
+- `blob-v1` is every other byte stream — unrecognized, unsupported or
+  malformed — as ONE whole unchunked blob of any size, named by its own
+  SHA-256.
 
-Objects are at most 64 MiB and a plan has at most 1,000,000 objects. A semantic
-tensor at most that size is one natural
+Tensor-planned objects are at most 64 MiB (the tensor chunk grid constant)
+and a plan has at most 1,000,000 objects; a blob plan is exactly one object
+of any size. A semantic tensor at most 64 MiB is one natural
 object; a larger tensor is split every 64 MiB from its own start. There is no
 canonical packing of neighboring small tensors. Transport may batch small
 objects, but insertion, deletion, ordering, sharding and absolute file offsets

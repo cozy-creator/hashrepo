@@ -20,11 +20,11 @@ use crate::workspace_db::{Connection, OptionalExtension, TransactionBehavior, pa
 use thiserror::Error;
 
 use crate::object::ObjectDigest;
-use crate::planner::{PlanError, PlannerId, plan};
+use crate::planner::{ByteSource as _, PlanError, PlannerId, plan};
 use crate::store::{ObjectStore, StoreError};
 use crate::tfm1::{
-    Entry, FileRecord, Snapshot, SnapshotBuilder, SnapshotId, Tfm1Error, case_fold, decode,
-    validate_path, validate_records, validate_symlink_target,
+    Entry, FileRecord, HeadTree, Snapshot, SnapshotBuilder, SnapshotId, Tfm1Error, TreeEntry,
+    case_fold, decode, validate_path, validate_record_run, validate_symlink_target,
 };
 use crate::workspace_source::RecordsSource;
 
@@ -292,16 +292,11 @@ impl WorkspaceStore {
         for (path, entry) in decoded.entries() {
             match entry {
                 Entry::Directory => mutations.push(Mutation::Mkdir { path: path.clone() }),
-                Entry::File {
-                    executable,
-                    planner,
-                    records,
-                    ..
-                } => mutations.push(Mutation::CreateFile {
+                Entry::File { executable, body } => mutations.push(Mutation::CreateFile {
                     path: path.clone(),
                     executable: *executable,
-                    planner: *planner,
-                    records: records.clone(),
+                    planner: body.planner_id(),
+                    records: body.records().into_owned(),
                 }),
                 Entry::Symlink { target } => mutations.push(Mutation::Symlink {
                     path: path.clone(),
@@ -360,8 +355,11 @@ impl WorkspaceStore {
         for mutation in mutations {
             match mutation {
                 Mutation::CreateFile { records, .. } | Mutation::SetRecords { records, .. } => {
+                    // Staging-domain validation: structural run rules only.
+                    // The 64 MiB grid cap is a tensor-body rule — an adopted
+                    // blob is ONE data record of any size.
                     let logical_size = records_length(records)?;
-                    validate_records(records, logical_size)?;
+                    validate_record_run(records, logical_size)?;
                     for record in records {
                         if let FileRecord::Data { digest, .. } = record {
                             referenced.insert(*digest);
@@ -404,15 +402,16 @@ impl WorkspaceStore {
         Ok(next)
     }
 
-    /// Builds (without storing) the canonical snapshot value of the committed
-    /// head tree. This is the one tree-read seam a filesystem surface reads
-    /// through (the shelved daemon mounted via it): the snapshot value
-    /// already carries every fact such a surface needs, in the exact
-    /// vocabulary TFM1 freezes.
-    pub fn head_tree(&self, name: &str) -> Result<Snapshot, WorkspaceError> {
+    /// Builds (without storing) the committed head tree in the staging
+    /// vocabulary. This is the one tree-read seam a filesystem surface reads
+    /// through (the shelved daemon mounted via it). It is deliberately NOT a
+    /// canonical snapshot value: a mid-write non-tensor file is a grid record
+    /// run, a shape the recordless `blob-v1` manifest body cannot express —
+    /// sealing is what canonicalizes it.
+    pub fn head_tree(&self, name: &str) -> Result<HeadTree, WorkspaceError> {
         let connection = self.connection.lock().expect("metadata mutex is healthy");
         let workspace = workspace_row(&connection, name)?;
-        build_snapshot(&connection, &workspace, None)
+        build_tree(&connection, &workspace)
     }
 
     /// Seals the committed head tree as one canonical TFM1 snapshot, stores
@@ -420,15 +419,19 @@ impl WorkspaceStore {
     ///
     /// Before sealing, the closed planner registry re-establishes semantic
     /// boundaries: each pure-data file is planned through a records-backed
-    /// byte source (bounded header reads only), and when the planned regions
-    /// differ from the committed record boundaries the file is re-sliced —
-    /// exact-range records keep their digests without a payload read, every
-    /// other region is read once and admitted. The re-boundaried records and
-    /// the sealed snapshot land in one transaction, so the workspace head and
-    /// the snapshot always agree. Files containing holes are not semantic
-    /// candidates — re-planning them would materialize their sparseness — and
-    /// seal with their committed records unchanged, as do malformed files
-    /// (whose plan is the raw grid they already carry).
+    /// byte source (bounded header reads only). Tensor containers whose
+    /// planned regions differ from the committed record boundaries are
+    /// re-sliced — exact-range records keep their digests without a payload
+    /// read, every other region is read once and admitted. Everything else
+    /// becomes ONE whole blob: a non-tensor file already committed as its
+    /// single whole-file object is reused by `(offset, length)` with zero
+    /// re-hashing, and any other shape (a grid run, a sparse run — a hole in
+    /// a blob is unrepresentable, so its zeros materialize) is streamed once
+    /// through the verifying writer into one object of any size. The
+    /// re-boundaried records and the sealed snapshot land in one transaction,
+    /// so the workspace head and the snapshot always agree. Sparse files with
+    /// tensor provenance keep their committed records unchanged — the tensor
+    /// grammar keeps holes, and re-planning would materialize them.
     pub fn seal_snapshot(
         &self,
         name: &str,
@@ -441,7 +444,7 @@ impl WorkspaceStore {
                 let workspace = workspace_row(&connection, name)?;
                 (
                     workspace.head_generation,
-                    build_snapshot(&connection, &workspace, None)?,
+                    build_tree(&connection, &workspace)?,
                 )
             };
 
@@ -449,7 +452,7 @@ impl WorkspaceStore {
             // object admission must not hold the metadata store.
             let mut jobs = Vec::new();
             for (path, entry) in tree.entries() {
-                if let Entry::File {
+                if let TreeEntry::File {
                     planner, records, ..
                 } = entry
                     && let Some(job) = self.plan_seal_job(path, *planner, records)?
@@ -530,15 +533,44 @@ impl WorkspaceStore {
         stored_planner: PlannerId,
         records: &[FileRecord],
     ) -> Result<Option<SealJob>, WorkspaceError> {
-        if records.is_empty()
-            || records
-                .iter()
-                .any(|record| matches!(record, FileRecord::Hole { .. }))
-        {
+        if records.is_empty() {
+            return Ok(None);
+        }
+        let has_holes = records
+            .iter()
+            .any(|record| matches!(record, FileRecord::Hole { .. }));
+        if has_holes && stored_planner.tensor_format().is_some() {
+            // Tensor bodies keep hole records in the grammar, and re-planning
+            // a sparse tensor file would materialize its sparseness. It seals
+            // with its committed records unchanged.
             return Ok(None);
         }
         let source = RecordsSource::new(&self.store, records);
+        if has_holes {
+            // A hole in a blob is unrepresentable, so a sparse non-tensor
+            // file has exactly one canonical form: the whole byte stream —
+            // zeros included, read through the record source — as one object.
+            return Ok(Some(self.blob_seal_job(path, &source)?));
+        }
         let planned = plan(&source)?;
+        if planned.planner() == PlannerId::BlobV1 {
+            // Already committed as its single whole-file object: reuse by
+            // (offset, length) with ZERO re-hashing — the blob extension of
+            // the #61 double-hash fence. Anything else re-streams once.
+            if let [FileRecord::Data { .. }] = records {
+                if stored_planner == PlannerId::BlobV1 {
+                    return Ok(None);
+                }
+                return Ok(Some(SealJob {
+                    path: path.to_owned(),
+                    planner: PlannerId::BlobV1,
+                    records: records.to_vec(),
+                    update_records: false,
+                    new_digests: Vec::new(),
+                }));
+            }
+            return Ok(Some(self.blob_seal_job(path, &source)?));
+        }
 
         let mut committed = Vec::with_capacity(records.len());
         let mut position = 0_u64;
@@ -615,6 +647,27 @@ impl WorkspaceStore {
         }))
     }
 
+    /// Streams one file's whole committed byte run — holes read as zeros —
+    /// through the verifying writer as ONE object of any size, and returns
+    /// the single-record seal job carrying its whole-file digest.
+    fn blob_seal_job(
+        &self,
+        path: &str,
+        source: &RecordsSource<&ObjectStore>,
+    ) -> Result<SealJob, WorkspaceError> {
+        let admitted = self.store.admit_source_range(source, 0, source.len())?;
+        Ok(SealJob {
+            path: path.to_owned(),
+            planner: PlannerId::BlobV1,
+            records: vec![FileRecord::Data {
+                digest: admitted.digest(),
+                length: admitted.length(),
+            }],
+            update_records: true,
+            new_digests: vec![admitted.digest()],
+        })
+    }
+
     /// Loads and re-verifies one sealed snapshot's canonical bytes.
     pub fn load_snapshot(&self, id: &SnapshotId) -> Result<Snapshot, WorkspaceError> {
         let connection = self.connection.lock().expect("metadata mutex is healthy");
@@ -641,8 +694,8 @@ impl WorkspaceStore {
     pub fn adopt_snapshot(&self, bytes: &[u8]) -> Result<SnapshotId, WorkspaceError> {
         let snapshot = decode(bytes)?;
         for (_path, entry) in snapshot.entries() {
-            if let Entry::File { records, .. } = entry {
-                for record in records {
+            if let Entry::File { body, .. } = entry {
+                for record in body.records().iter() {
                     if let FileRecord::Data { digest, .. } = record
                         && !self.store.exists(digest)
                     {
@@ -738,8 +791,8 @@ impl WorkspaceStore {
         )?;
         let lease = LeaseId(tx.last_insert_rowid());
         for (_path, entry) in decoded.entries() {
-            if let Entry::File { records, .. } = entry {
-                for record in records {
+            if let Entry::File { body, .. } = entry {
+                for record in body.records().iter() {
                     if let FileRecord::Data { digest, .. } = record {
                         tx.execute(
                             "INSERT OR IGNORE INTO lease_objects (lease, digest)
@@ -822,8 +875,8 @@ impl WorkspaceStore {
                     return Err(WorkspaceError::SnapshotCorrupt);
                 }
                 for (_, entry) in decode(&blob)?.entries() {
-                    if let Entry::File { records, .. } = entry {
-                        for record in records {
+                    if let Entry::File { body, .. } = entry {
+                        for record in body.records().iter() {
                             if let FileRecord::Data { digest, .. } = record {
                                 roots.insert(*digest);
                             }
@@ -1069,11 +1122,12 @@ fn resolve_new_leaf(
     Ok((parent_inode, name.to_owned()))
 }
 
+/// Row values mirror the TFM1 planner tags; 3, the retired raw grid, is gone.
 fn planner_to_row(planner: PlannerId) -> i64 {
     match planner {
         PlannerId::SafetensorsV1 => 1,
         PlannerId::GgufV1 => 2,
-        PlannerId::RawFixed64mV1 => 3,
+        PlannerId::BlobV1 => 4,
     }
 }
 
@@ -1081,7 +1135,7 @@ fn planner_from_row(tag: i64) -> PlannerId {
     match tag {
         1 => PlannerId::SafetensorsV1,
         2 => PlannerId::GgufV1,
-        _ => PlannerId::RawFixed64mV1,
+        _ => PlannerId::BlobV1,
     }
 }
 
@@ -1220,7 +1274,7 @@ fn apply_mutation(
                     length: *length,
                 }
             })?;
-            validate_records(&truncated, *length)?;
+            validate_record_run(&truncated, *length)?;
             insert_records(connection, inode.id, &truncated)?;
         }
         Mutation::Rename { from, to } => {
@@ -1379,14 +1433,14 @@ fn truncate_records(records: Vec<FileRecord>, length: u64) -> Option<Vec<FileRec
     Some(kept)
 }
 
-/// Builds the canonical TFM1 snapshot for the committed tree by walking the
-/// dirent graph. Hardlink groups pass one carrier file body and point every
-/// other path at it; the builder re-roots by sorted order itself.
-fn build_snapshot(
+/// Stages the committed tree into a builder by walking the dirent graph.
+/// Hardlink groups pass one carrier file body and point every other path at
+/// it; the builder re-roots by sorted order itself.
+fn stage_builder(
     connection: &Connection,
     workspace: &WorkspaceRow,
     parent: Option<SnapshotId>,
-) -> Result<Snapshot, WorkspaceError> {
+) -> Result<SnapshotBuilder, WorkspaceError> {
     let mut paths_by_inode: BTreeMap<i64, Vec<String>> = BTreeMap::new();
     let mut directories = Vec::new();
     let mut symlinks: Vec<(String, String)> = Vec::new();
@@ -1447,7 +1501,26 @@ fn build_snapshot(
             builder.hardlink(path, carrier.clone());
         }
     }
-    Ok(builder.finish()?)
+    Ok(builder)
+}
+
+/// The committed head tree in the staging vocabulary — the mount's view.
+fn build_tree(
+    connection: &Connection,
+    workspace: &WorkspaceRow,
+) -> Result<HeadTree, WorkspaceError> {
+    Ok(stage_builder(connection, workspace, None)?.finish_tree()?)
+}
+
+/// The canonical TFM1 snapshot of the committed tree. Only meaningful after
+/// seal-time re-boundary: every non-tensor file must already be its single
+/// whole-file object, or the builder refuses (`blob-records`).
+fn build_snapshot(
+    connection: &Connection,
+    workspace: &WorkspaceRow,
+    parent: Option<SnapshotId>,
+) -> Result<Snapshot, WorkspaceError> {
+    Ok(stage_builder(connection, workspace, parent)?.finish()?)
 }
 
 /// A test-only one-shot hook, fired at a point no static on-disk state can
@@ -1605,7 +1678,7 @@ mod tests {
             &[Mutation::CreateFile {
                 path: "model.bin".to_owned(),
                 executable: false,
-                planner: PlannerId::RawFixed64mV1,
+                planner: PlannerId::BlobV1,
                 records: vec![FileRecord::Data {
                     digest,
                     length: admitted.length(),
@@ -1665,7 +1738,7 @@ mod tests {
                 &[Mutation::CreateFile {
                     path: "model.safetensors".to_owned(),
                     executable: false,
-                    planner: PlannerId::RawFixed64mV1,
+                    planner: PlannerId::BlobV1,
                     records: vec![FileRecord::Data {
                         digest: admitted.digest(),
                         length: admitted.length(),

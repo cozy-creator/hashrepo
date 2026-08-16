@@ -11,7 +11,7 @@
       "source_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "classification": "raw",
       "expected": {
-        "planner": "raw-fixed-64m-v1",
+        "planner": "blob-v1",
         "file_size": 0,
         "objects": []
       }
@@ -22,13 +22,13 @@
       "source_sha256": "sha256:91944925f53386aa2cefeab47fee39415810195dd64b089b9b68cd3dac1fef8b",
       "classification": "raw",
       "expected": {
-        "planner": "raw-fixed-64m-v1",
+        "planner": "blob-v1",
         "file_size": 18,
         "objects": [
           {
             "offset": 0,
             "length": 18,
-            "kind": "raw",
+            "kind": "blob",
             "digest": "sha256:91944925f53386aa2cefeab47fee39415810195dd64b089b9b68cd3dac1fef8b"
           }
         ]
@@ -222,13 +222,13 @@
       "source_sha256": "sha256:e9b0a8f949aef310e74bef48ec987a81b7272467f81a60a8314f891facc4998b",
       "classification": "fallback",
       "expected": {
-        "planner": "raw-fixed-64m-v1",
+        "planner": "blob-v1",
         "file_size": 64,
         "objects": [
           {
             "offset": 0,
             "length": 64,
-            "kind": "raw",
+            "kind": "blob",
             "digest": "sha256:e9b0a8f949aef310e74bef48ec987a81b7272467f81a60a8314f891facc4998b"
           }
         ]
@@ -240,13 +240,13 @@
       "source_sha256": "sha256:4c894fe562f6e25ea3bccb0bbcdc07e4f456870c703d7d19c4563024bed6dbfa",
       "classification": "fallback",
       "expected": {
-        "planner": "raw-fixed-64m-v1",
+        "planner": "blob-v1",
         "file_size": 63,
         "objects": [
           {
             "offset": 0,
             "length": 63,
-            "kind": "raw",
+            "kind": "blob",
             "digest": "sha256:4c894fe562f6e25ea3bccb0bbcdc07e4f456870c703d7d19c4563024bed6dbfa"
           }
         ]
@@ -258,13 +258,13 @@
       "source_sha256": "sha256:5a4091405b1cf80bf9a0500cb4fe6e6eccdf67ff14d313477541ac2ba5c13be9",
       "classification": "fallback",
       "expected": {
-        "planner": "raw-fixed-64m-v1",
+        "planner": "blob-v1",
         "file_size": 24,
         "objects": [
           {
             "offset": 0,
             "length": 24,
-            "kind": "raw",
+            "kind": "blob",
             "digest": "sha256:5a4091405b1cf80bf9a0500cb4fe6e6eccdf67ff14d313477541ac2ba5c13be9"
           }
         ]
@@ -276,13 +276,13 @@
       "source_sha256": "sha256:a6e9f4c4ed5d89cbab4e179834ad4178f24e14360f0c6655e2ebae1d667daf27",
       "classification": "fallback",
       "expected": {
-        "planner": "raw-fixed-64m-v1",
+        "planner": "blob-v1",
         "file_size": 96,
         "objects": [
           {
             "offset": 0,
             "length": 96,
-            "kind": "raw",
+            "kind": "blob",
             "digest": "sha256:a6e9f4c4ed5d89cbab4e179834ad4178f24e14360f0c6655e2ebae1d667daf27"
           }
         ]
