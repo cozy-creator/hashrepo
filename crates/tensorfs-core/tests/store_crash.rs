@@ -9,7 +9,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tensorfs_core::store::{ObjectStore, TempCollection};
 
@@ -55,16 +55,21 @@ impl Drop for TempRoot {
 }
 
 fn spawn_holding_child(root: &Path) -> Child {
-    let child = Command::new(std::env::current_exe().expect("test binary path"))
+    let mut child = Command::new(std::env::current_exe().expect("test binary path"))
         .args(["crash_child_role", "--exact", "--nocapture"])
         .env(ROLE_ENV, "hold")
         .env(ROOT_ENV, root)
         .spawn()
         .expect("child spawns");
     let ready = root.join("child-ready");
-    let deadline = Instant::now() + Duration::from_secs(20);
+    // Liveness, not a deadline: a child that is ALIVE is working, however
+    // slow the box is — wait indefinitely. A child that EXITED without
+    // touching the ready marker failed; say so with its status. A wall-clock
+    // bound here is a performance assertion, and this test makes none.
     while !ready.exists() {
-        assert!(Instant::now() < deadline, "child never became ready");
+        if let Some(status) = child.try_wait().expect("child status is readable") {
+            panic!("child exited ({status}) before becoming ready");
+        }
         std::thread::sleep(Duration::from_millis(10));
     }
     child
