@@ -20,7 +20,7 @@ use crate::workspace_db::{Connection, OptionalExtension, TransactionBehavior, pa
 use thiserror::Error;
 
 use crate::object::ObjectDigest;
-use crate::planner::{ByteSource, PlanError, PlannerId, plan};
+use crate::planner::{PlanError, PlannerId, plan};
 use crate::store::{ObjectStore, StoreError};
 use crate::tfm1::{
     Entry, FileRecord, Snapshot, SnapshotBuilder, SnapshotId, Tfm1Error, case_fold, decode,

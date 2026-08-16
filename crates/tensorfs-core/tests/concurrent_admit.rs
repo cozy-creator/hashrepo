@@ -163,7 +163,11 @@ fn racing_writers_of_one_digest_all_succeed_and_install_one_file() {
             .map(|_| {
                 let store = Arc::clone(&store);
                 let payload = Arc::clone(&payload);
-                scope.spawn(move || store.put_bytes(&payload).expect("racing admission succeeds"))
+                scope.spawn(move || {
+                    store
+                        .put_bytes(&payload)
+                        .expect("racing admission succeeds")
+                })
             })
             .collect();
         handles
