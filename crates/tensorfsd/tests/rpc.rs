@@ -14,6 +14,10 @@ use serde_json::{Value, json};
 
 const FRAME_BOUND: u32 = 1024 * 1024;
 
+/// How long a client waits for a response before calling the daemon wedged.
+/// See `Daemon::connect` — an anti-hang bound, deliberately not a latency gate.
+const RESPONSE_BOUND: Duration = Duration::from_secs(120);
+
 fn fuse_available() -> bool {
     if !Path::new("/dev/fuse").exists() {
         eprintln!("skipping: /dev/fuse is not available");
@@ -71,8 +75,17 @@ impl Daemon {
     fn connect(&self) -> UnixStream {
         let stream = UnixStream::connect(&self.socket).expect("the control socket accepts");
         // A daemon that stops answering must fail the test, never hang it.
+        //
+        // The bound is generous ON PURPOSE. It exists to convert a wedged
+        // daemon into a failure, not to assert how fast a mount is: several
+        // of these requests mount a real filesystem, and this suite shares a
+        // machine whose wall-clock for the same work swings by more than an
+        // order of magnitude under load. At 10s that made the harness itself
+        // flaky — `receive` timed out mid-mount and the test read it as a
+        // daemon that never answered. A timeout tight enough to measure
+        // performance is a performance assertion, and this is not one.
         stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
+            .set_read_timeout(Some(RESPONSE_BOUND))
             .expect("the read timeout installs");
         stream
     }
