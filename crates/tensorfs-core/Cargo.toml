@@ -8,6 +8,20 @@ repository.workspace = true
 rust-version.workspace = true
 publish = false
 
+# The formats and the planner are unconditional; everything that needs a real
+# filesystem, an HTTP client or a SQL engine is a feature.
+#
+# This exists so the Python extension module can link the object store and the
+# committed-records byte source WITHOUT linking `ureq`/`rustls`/`ring` and the
+# Turso engine, neither of which it calls. That is a smaller wheel and, more
+# importantly, far less C-toolchain surface to cross-compile for the eight
+# platform wheels the release builds.
+[features]
+default = ["store", "sync", "workspace"]
+store = ["dep:fs4"]
+sync = ["store", "dep:base64", "dep:ureq"]
+workspace = ["store", "dep:turso"]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
@@ -16,10 +30,13 @@ thiserror.workspace = true
 unicode-normalization.workspace = true
 
 [target.'cfg(any(unix, windows))'.dependencies]
-base64 = "0.22"
-fs4 = { version = "0.8", default-features = false, features = ["sync"] }
-turso = { version = "0.7.2", default-features = false }
-ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
+base64 = { version = "0.22", optional = true }
+fs4 = { version = "0.8", default-features = false, features = ["sync"], optional = true }
+turso = { version = "0.7.2", default-features = false, optional = true }
+ureq = { version = "2.12", default-features = false, features = [
+    "tls",
+    "json",
+], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -8,10 +8,10 @@ on:
 permissions: {}
 
 jobs:
-  build:
-    name: Test and build tagged release
+  gates:
+    name: Test tagged release
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -63,45 +63,24 @@ jobs:
           go test -race ./...
           go vet ./...
 
+      # tensorfs-py is excluded from the test and all-targets clippy runs on
+      # purpose: it enables `pyo3/extension-module` by default, which leaves
+      # CPython symbols undefined for the interpreter to resolve at import.
+      # That is correct for a cdylib and impossible for a test executable.
+      # Its gate is the Python suite above running against the real extension.
       - name: Verify Rust workspace
         run: |
           cargo fmt --all --check
-          cargo clippy --workspace --all-targets --all-features -- -D warnings
-          cargo test --workspace --all-features
+          cargo clippy --workspace --all-targets --all-features --exclude tensorfs-py -- -D warnings
+          cargo clippy -p tensorfs-py --lib -- -D warnings
+          cargo test --workspace --all-features --exclude tensorfs-py
 
-      - name: Build distributions
-        run: uv build
-
-      - name: Smoke-test built wheel
-        shell: bash
-        run: |
-          set -euo pipefail
-          uv venv --python 3.12 /tmp/tensorfs-wheel
-          uv pip install --python /tmp/tensorfs-wheel/bin/python dist/tensorfs-*.whl mypy
-          cd /tmp
-          /tmp/tensorfs-wheel/bin/python - <<'PY'
-          from importlib.resources import files
-          from pathlib import Path
-          from tempfile import TemporaryDirectory
-
-          from tensorfs import LocalCAS
-
-          assert files("tensorfs").joinpath("py.typed").is_file()
-
-          with TemporaryDirectory() as root:
-              cas = LocalCAS(Path(root))
-              ref = cas.put_bytes(b"release-smoke")
-              assert cas.verify_object(ref).read_bytes() == b"release-smoke"
-          PY
-          /tmp/tensorfs-wheel/bin/mypy --strict -c 'from tensorfs import LocalCAS'
-
-      - name: Preserve exact distributions for publishing
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-distributions
-          path: dist/
-          if-no-files-found: error
-          retention-days: 1
+  build:
+    name: Build distributions
+    needs: gates
+    permissions:
+      contents: read
+    uses: ./.github/workflows/wheels.yaml
 
   publish:
     name: Publish tagged distributions
@@ -112,11 +91,32 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - name: Retrieve tested distributions
+      - name: Retrieve tested wheels
         uses: actions/download-artifact@v4
         with:
-          name: python-distributions
+          pattern: wheels-*
           path: dist/
+          merge-multiple: true
+
+      - name: Retrieve the tested sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist/
+
+      - name: Every platform wheel and the sdist are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l dist/
+          wheels="$(ls dist/*.whl | wc -l)"
+          # The matrix builds six. A silently shrinking matrix would otherwise
+          # publish a release that drops a platform without notice.
+          if [[ "${wheels}" -ne 6 ]]; then
+            echo "::error::expected 6 platform wheels, found ${wheels}"
+            exit 1
+          fi
+          test -n "$(ls dist/*.tar.gz)" || { echo "::error::no sdist"; exit 1; }
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -142,8 +142,23 @@ jobs:
           with open("release.json", encoding="utf-8") as source:
               release = json.load(source)
           filenames = {item["filename"] for item in release["urls"]}
-          assert any(name.endswith(".whl") for name in filenames), filenames
+          wheels = {name for name in filenames if name.endswith(".whl")}
           assert any(name.endswith(".tar.gz") for name in filenames), filenames
+
+          # Every wheel is abi3 -- one per platform, not one per interpreter.
+          not_abi3 = {name for name in wheels if "-abi3-" not in name}
+          assert not not_abi3, not_abi3
+
+          # The platforms the matrix promises actually reached PyPI. No
+          # Windows: the pure-Python half imports `fcntl`, so a win_* wheel
+          # could not even be imported. See wheels.yaml.
+          required = [
+              "manylinux", "musllinux", "macosx",
+              "x86_64", "aarch64", "arm64",
+          ]
+          missing = [tag for tag in required if not any(tag in name for name in wheels)]
+          assert not missing, f"missing platform tags {missing} in {sorted(wheels)}"
+          print(f"published {len(wheels)} wheels plus an sdist")
           PY
               exit 0
             fi

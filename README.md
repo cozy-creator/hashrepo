@@ -52,10 +52,50 @@ check on this repository should be read as macOS or Windows mount coverage.
 ```text
 spec/v1/                 format documentation, JSON Schema, golden vectors
 crates/tensorfs-core/     Rust canonical formats, planners and storage engine
+crates/tensorfs-py/      the PyO3 extension module, `tensorfs._tensorfs`
 crates/tensorfsd/        the mount daemon and control plane (Linux only)
 python/src/tensorfs/     Python local CAS and grant-transfer data plane
 *.go                     Go manifest, planning, and promotion engine
 ```
+
+## The Python distribution
+
+`tensorfs` is **one** PyPI distribution carrying two things:
+
+| in the wheel | what it is |
+| --- | --- |
+| `tensorfs/*.py` | the pure-Python facade — `LocalCAS`, transfer, the daemon client |
+| `tensorfs/_tensorfs.abi3.so` | the compiled Rust extension, imported in-process |
+
+Every platform ships exactly the same two halves. This is HuggingFace's shape
+with the split removed: `huggingface_hub` is a pure `py3-none-any` facade and
+`hf_xet` is a separate distribution of compiled wheels. Here both halves are
+the same distribution, so there is no pure-Python wheel to fall back to. The
+**sdist** is that fallback: a platform outside the wheel matrix builds from
+source given a Rust toolchain.
+
+**`tensorfsd` is deliberately not in the wheel.** Pods cannot mount FUSE at
+all — opening `/dev/fuse` is denied by the device cgroup even for root,
+`CAP_SYS_ADMIN` is absent from the container's bounding set, and there is no
+API field to grant either. The wheel therefore ships native reads, and the
+daemon stays in-repo for local and development use.
+
+Import the compiled surface from `tensorfs.native`; `tensorfs._tensorfs` is
+private. It exposes the CAS (`ObjectStore`), the TFM1/TFP1 decoders, and
+`RecordsReader` — a committed file's records read as a random-access byte
+source, which is how one tensor is read without materializing its file.
+
+The wheels are **abi3** (`abi3-py311`): one wheel per platform for every
+CPython from 3.11 up, rather than one per interpreter version. The floor is
+3.11 because CPython added the buffer protocol — `Py_buffer`,
+`Py_bf_getbuffer`, `PyMemoryView_FromBuffer` — to the stable ABI in 3.11, and
+a zero-copy `memoryview` over a CAS object has to be expressible. Free-threaded
+CPython is **not** covered by abi3 and builds from the sdist; a stable
+free-threaded ABI exists but its floor is CPython 3.15.
+
+The extension links `tensorfs-core` with `--no-default-features --features
+store`: 43 crates rather than 259, with no HTTP client, TLS stack or embedded
+SQL engine in a wheel that calls none of them.
 
 ## Development
 
@@ -65,9 +105,18 @@ uv run pytest
 uv run mypy python/src
 go test ./...
 cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
+cargo clippy --workspace --all-targets --all-features --exclude tensorfs-py -- -D warnings
+cargo clippy -p tensorfs-py --lib -- -D warnings
+cargo test --workspace --all-features --exclude tensorfs-py
 ```
+
+`tensorfs-py` is excluded from `cargo test` and from `--all-targets` clippy
+because it enables `pyo3/extension-module`, which leaves CPython symbols for
+the loading interpreter to resolve — correct for a cdylib and impossible to
+link into a test executable. Its gate is `python/tests/test_native.py`, which
+drives the real built extension.
+
+`uv sync` compiles the extension, so a checkout now needs a Rust toolchain.
 
 The two test suites both read `spec/v1/vectors/manifest.json` and require their
 canonical encoders to reproduce it byte-for-byte.
@@ -147,11 +196,25 @@ broken in place: no v2 or compatibility reader is added beside it.
 
 For a release, merge the reviewed release commit to `main`, tag that exact
 commit with `v` followed by the version in `pyproject.toml`, and push the tag.
-The `Publish to PyPI` workflow
-reruns the Python and Go gates, builds and smoke-tests the wheel, publishes the
-tested wheel and sdist through PyPI Trusted Publishing, and verifies the exact
-version endpoint. Tags whose name does not match `pyproject.toml`, or whose
-commit is not on `main`, are refused.
+The `Publish to PyPI` workflow reruns the Python, Go and Rust gates, then calls
+`wheels.yaml` to build six platform wheels plus an sdist on native runners
+for every architecture — manylinux and musllinux on x86_64 and aarch64, and
+macOS on both architectures, with no QEMU anywhere. There is no Windows wheel:
+`local.py` and `journal.py` lock with `fcntl`, so `import tensorfs` cannot
+succeed there. The Rust half builds on Windows fine; the Python half is what
+needs a real POSIX-lock replacement first. Each
+wheel is installed into a clean venv and must pass `mypy --strict` across the
+extension boundary, a `LocalCAS` round trip, and a native `ObjectStore` plus
+`RecordsReader` round trip. The sdist is separately built and installed from
+source and used. Publication then goes through PyPI
+Trusted Publishing and the exact version endpoint is verified, including that
+every published wheel is abi3 and every promised platform tag arrived. Tags
+whose name does not match `pyproject.toml`, or whose commit is not on `main`,
+are refused.
+
+`wheels.yaml` also runs on `workflow_dispatch` and on any pull request that
+touches the build, so the matrix cannot rot between releases. A release tag is
+much too late to learn that a runner label moved.
 
 No PyPI token is stored in GitHub. The repository's `pypi` environment and the
 PyPI publisher must both identify `.github/workflows/publish.yaml`.

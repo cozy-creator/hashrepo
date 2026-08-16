@@ -1,0 +1,364 @@
+name: wheels
+
+# The platform wheel matrix, plus the sdist that covers everything outside it.
+#
+# It is callable three ways on purpose:
+#   * workflow_call  -- publish.yaml runs it on a release tag
+#   * workflow_dispatch -- run the whole matrix on demand without tagging
+#   * pull_request   -- any PR touching the build runs it, so the matrix
+#                       cannot rot silently between releases. Tagging is far
+#                       too late to discover that a runner label moved or a
+#                       target stopped cross-compiling.
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "pyproject.toml"
+      - "python/**"
+      - ".github/workflows/wheels.yaml"
+
+permissions:
+  contents: read
+
+env:
+  # abi3-py311: one wheel per platform serves every CPython from 3.11 up.
+  MATURIN_ARGS: --release --out dist
+
+jobs:
+  wheels:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds run in maturin's manylinux/musllinux containers so
+          # the extension links the libc the wheel tag claims.
+          - name: manylinux-x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            manylinux: auto
+          - name: manylinux-aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            manylinux: auto
+          - name: musllinux-x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            manylinux: musllinux_1_2
+          - name: musllinux-aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            manylinux: musllinux_1_2
+          # Native runners for every architecture. No QEMU anywhere: emulated
+          # Rust builds are slow enough to dominate the release.
+          - name: macos-x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - name: macos-aarch64
+            runner: macos-15
+            target: aarch64-apple-darwin
+          # NO WINDOWS WHEEL, and it is not a build problem -- both Windows
+          # cells built cleanly on this branch, including arm64. The blocker
+          # is the library: `python/src/tensorfs/{local,journal}.py` import
+          # `fcntl` at module scope for advisory locking, `__init__.py`
+          # imports them eagerly, so `import tensorfs` raises
+          # ModuleNotFoundError on Windows and always has. Shipping a wheel
+          # whose top-level import fails is worse than shipping none.
+          #
+          # Restoring Windows needs a real POSIX-lock replacement in those two
+          # modules (`msvcrt.locking` is byte-range and has no shared mode, so
+          # it is not a drop-in), not a matrix edit. Windows users can build
+          # from the sdist meanwhile. macOS is unaffected: it has flock, and
+          # both macOS smokes pass.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: ${{ env.MATURIN_ARGS }}
+          sccache: "true"
+
+      - name: The wheel is abi3, typed, and carries no daemon
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="$(ls dist/*.whl)"
+          echo "built ${wheel} ($(du -h "${wheel}" | cut -f1))"
+
+          # One wheel per platform, not one per interpreter version. If this
+          # ever reads cp311-cp311 the abi3 feature stopped applying and the
+          # matrix silently needs five times as many entries.
+          case "${wheel}" in
+            *-abi3-*) ;;
+            *) echo "::error::${wheel} is not an abi3 wheel"; exit 1 ;;
+          esac
+
+          python3 - "${wheel}" <<'PY'
+          import sys, zipfile
+
+          wheel = sys.argv[1]
+          names = set(zipfile.ZipFile(wheel).namelist())
+
+          assert any(n.startswith("tensorfs/_tensorfs") for n in names), sorted(names)[:20]
+          assert "tensorfs/py.typed" in names, "py.typed did not ship"
+          assert "tensorfs/_tensorfs.pyi" in names, "the extension stub did not ship"
+
+          # Every platform ships the same thing. The FUSE daemon is not in it:
+          # pods cannot mount FUSE, so it stays in-repo and unshipped. A stray
+          # binary from a dirty build tree would otherwise ride along unseen.
+          strays = sorted(n for n in names if n.startswith("tensorfs/_bin/"))
+          assert not strays, f"the wheel carries an unshipped binary: {strays}"
+          print(f"{wheel}: abi3, py.typed, stub, no daemon")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.name }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # Merging the facade and the extension into one distribution gives up the
+  # fallback HuggingFace gets from splitting `huggingface_hub` from `hf_xet`:
+  # a platform outside the matrix can no longer install a pure-Python wheel.
+  # The sdist IS that fallback, so it is gated, not assumed.
+  sdist-installs-from-source:
+    name: sdist builds and installs from source
+    needs: sdist
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist/
+
+      - name: Install the sdist into a clean venv and use it
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/from-sdist
+          /tmp/from-sdist/bin/pip install --quiet --upgrade pip
+          /tmp/from-sdist/bin/pip install --no-binary :all: dist/tensorfs-*.tar.gz
+          cd /tmp
+          /tmp/from-sdist/bin/python - <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          from tensorfs import LocalCAS
+          from tensorfs.native import ObjectStore, RecordsReader, FileRecord
+
+          with TemporaryDirectory() as root:
+              store = ObjectStore(Path(root))
+              admitted = store.put_bytes(b"sdist-built")
+              assert store.read_object(admitted.digest) == b"sdist-built"
+              reader = RecordsReader(
+                  store, [FileRecord.data(admitted.digest, admitted.length)]
+              )
+              assert reader.read_at(0, reader.length) == b"sdist-built"
+
+          with TemporaryDirectory() as root:
+              cas = LocalCAS(Path(root))
+              ref = cas.put_bytes(b"sdist-facade")
+              assert cas.verify_object(ref).read_bytes() == b"sdist-facade"
+
+          print("the sdist builds from source and works")
+          PY
+
+  smoke:
+    name: smoke ${{ matrix.name }}
+    needs: wheels
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Every wheel the matrix builds gets installed and used somewhere.
+          # A built-but-never-installed wheel is an untested wheel, and the
+          # musllinux and arm64-Windows cells are exactly where a packaging
+          # mistake would hide. musllinux is covered by `smoke-musl` below,
+          # which needs a container rather than a runner.
+          - name: manylinux-x86_64
+            runner: ubuntu-24.04
+          - name: manylinux-aarch64
+            runner: ubuntu-24.04-arm
+          - name: macos-x86_64
+            runner: macos-15-intel
+          - name: macos-aarch64
+            runner: macos-15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-${{ matrix.name }}
+          path: dist/
+
+      - name: Create a clean venv
+        shell: bash
+        run: |
+          set -euo pipefail
+          venv="${RUNNER_TEMP}/wheel-smoke"
+          python -m venv "${venv}"
+          echo "VENV_PYTHON=${venv}/bin/python" >> "${GITHUB_ENV}"
+
+      # Everything the previous publish workflow proved about the pure-Python
+      # wheel, still proved -- plus the equivalents for the compiled half.
+      - name: Install into a clean venv and prove the guarantees
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${VENV_PYTHON}" -m pip install --quiet --upgrade pip
+          "${VENV_PYTHON}" -m pip install --quiet dist/*.whl mypy
+          cd "${RUNNER_TEMP}"
+
+          "${VENV_PYTHON}" - <<'PY'
+          import sys
+          from importlib.resources import files
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          from tensorfs import LocalCAS
+          from tensorfs import native
+
+          # The pure-Python facade is untouched by this change.
+          assert files("tensorfs").joinpath("py.typed").is_file()
+          with TemporaryDirectory() as root:
+              cas = LocalCAS(Path(root))
+              ref = cas.put_bytes(b"release-smoke")
+              assert cas.verify_object(ref).read_bytes() == b"release-smoke"
+
+          # The compiled half is really compiled, and really works.
+          extension = Path(sys.modules["tensorfs._tensorfs"].__file__)
+          assert extension.suffix in {".so", ".pyd", ".dylib"}, extension
+          with TemporaryDirectory() as root:
+              store = native.ObjectStore(Path(root))
+              admitted = store.put_bytes(b"native-smoke")
+              assert store.read_object(admitted.digest) == b"native-smoke"
+              assert store.verify(admitted.digest) == admitted.length
+              reader = native.RecordsReader(
+                  store, [native.FileRecord.data(admitted.digest, admitted.length)]
+              )
+              assert reader.read_at(0, reader.length) == b"native-smoke"
+
+          # Every platform ships the same thing, and the FUSE daemon is not
+          # part of it -- pods cannot mount FUSE, so it stays in-repo.
+          assert not (extension.parent / "_bin").exists(), "the wheel carries an unshipped binary"
+          print("wheel smoke passed")
+          PY
+
+      # Typing must survive the extension boundary. PyO3 emits no type
+      # information, so this passes only because `_tensorfs.pyi` ships.
+      - name: Strict typing survives the extension boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          "${VENV_PYTHON}" -m mypy --strict -c 'from tensorfs import LocalCAS'
+          "${VENV_PYTHON}" -m mypy --strict -c 'from tensorfs.native import ObjectStore, RecordsReader, FileRecord'
+
+
+  # GitHub has no musl runner, so the musllinux wheels are installed inside an
+  # Alpine container instead. Without this, two of the six wheels would ship
+  # having never been imported once.
+  #
+  # The container is driven with an explicit `docker run` rather than the job's
+  # `container:` key, because GitHub runs its JavaScript actions INSIDE that
+  # container and "JavaScript Actions in Alpine containers are only supported
+  # on x64 Linux runners" -- which fails the aarch64 half, exactly the cell
+  # least likely to be covered anywhere else. Downloading on the host and
+  # mounting the result sidesteps it and works identically on both arches.
+  smoke-musl:
+    name: smoke ${{ matrix.name }}
+    needs: wheels
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: musllinux-x86_64
+            runner: ubuntu-24.04
+          - name: musllinux-aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-${{ matrix.name }}
+          path: dist/
+
+      - name: Write the smoke script
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > smoke.py <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          from tensorfs import LocalCAS, native
+
+          with TemporaryDirectory() as root:
+              cas = LocalCAS(Path(root))
+              ref = cas.put_bytes(b"musl-smoke")
+              assert cas.verify_object(ref).read_bytes() == b"musl-smoke"
+
+          with TemporaryDirectory() as root:
+              store = native.ObjectStore(Path(root))
+              admitted = store.put_bytes(b"musl-native")
+              assert store.read_object(admitted.digest) == b"musl-native"
+              reader = native.RecordsReader(
+                  store, [native.FileRecord.data(admitted.digest, admitted.length)]
+              )
+              assert reader.read_at(0, reader.length) == b"musl-native"
+
+          print("musl wheel works")
+          PY
+
+      - name: Install the musl wheel under Alpine and use it
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -v "${PWD}:/work" -w /work alpine:3.21 sh -eu -c '
+            apk add --no-cache python3 >/dev/null
+            python3 -m venv /tmp/musl-smoke
+            /tmp/musl-smoke/bin/pip install --quiet dist/*.whl
+            /tmp/musl-smoke/bin/python smoke.py
+          '
