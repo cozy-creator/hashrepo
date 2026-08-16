@@ -364,7 +364,11 @@ fn malformed_and_sparse_non_tensor_files_seal_as_one_whole_blob() {
 
     let (broken_planner, broken) = snapshot_file_records(&store, &sealed, "broken.safetensors");
     assert_eq!(broken_planner, PlannerId::BlobV1);
-    assert_eq!(record_lengths(&broken), vec![20 * MIB], "ONE object, no grid");
+    assert_eq!(
+        record_lengths(&broken),
+        vec![20 * MIB],
+        "ONE object, no grid"
+    );
     assert_eq!(read_back(&store, &broken), malformed);
 
     let mut expected_sparse = b"sixteen db bytes".to_vec();
@@ -429,7 +433,6 @@ fn a_grid_composed_gguf_file_regains_its_provenance_at_seal() {
     );
     assert_eq!(read_back(&store, &records), bytes);
 }
-
 
 /// The #61 double-hash fence, extended to blobs: a multi-GB-declared blob
 /// entry round-trips through seal planning with the blob reused by

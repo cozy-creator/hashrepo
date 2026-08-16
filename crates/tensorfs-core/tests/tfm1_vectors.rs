@@ -671,7 +671,11 @@ fn shared_tfm1_vectors_match_the_canonical_encoder_and_decoder() {
             &fs::read_to_string(corpus_dir.join(&row.fixture)).expect("fixture exists"),
         );
         assert_eq!(&fixture, bytes, "{name}: builder bytes drifted");
-        assert_eq!(hex_id(&fixture), row.snapshot_id, "{name}: identity drifted");
+        assert_eq!(
+            hex_id(&fixture),
+            row.snapshot_id,
+            "{name}: identity drifted"
+        );
 
         let snapshot = decode(&fixture).expect(name);
         assert_eq!(snapshot.to_bytes(), fixture, "{name}: re-encode drifted");

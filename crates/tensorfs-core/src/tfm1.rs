@@ -31,9 +31,8 @@ pub const MAX_FILE_RECORDS: usize = 1_000_000;
 /// blob, so every file body has the same shape and zero-size bodies cannot
 /// smuggle a second identity.
 pub const EMPTY_BLOB_DIGEST: ObjectDigest = ObjectDigest::from_bytes([
-    0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9,
-    0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52,
-    0xb8, 0x55,
+    0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+    0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
 ]);
 
 const MAGIC: [u8; 4] = *b"TFM1";
@@ -165,7 +164,9 @@ impl FileBody {
     pub fn records(&self) -> Cow<'_, [FileRecord]> {
         match self {
             Self::Tensor { records, .. } => Cow::Borrowed(records.as_slice()),
-            Self::Blob { logical_size: 0, .. } => Cow::Owned(Vec::new()),
+            Self::Blob {
+                logical_size: 0, ..
+            } => Cow::Owned(Vec::new()),
             Self::Blob {
                 logical_size,
                 digest,
@@ -180,16 +181,9 @@ impl FileBody {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Entry {
     Directory,
-    File {
-        executable: bool,
-        body: FileBody,
-    },
-    Symlink {
-        target: String,
-    },
-    Hardlink {
-        ordinal: u64,
-    },
+    File { executable: bool, body: FileBody },
+    Symlink { target: String },
+    Hardlink { ordinal: u64 },
 }
 
 /// One entry of the committed-but-unsealed workspace head tree.
@@ -946,7 +940,9 @@ pub fn decode(bytes: &[u8]) -> Result<Snapshot, Tfm1Error> {
                     _ => return Err(Tfm1Error::ExecutableFlag),
                 };
                 let body = match reader.take_u8()? {
-                    PLANNER_SAFETENSORS => decode_tensor_body(&mut reader, TensorFormat::SafetensorsV1)?,
+                    PLANNER_SAFETENSORS => {
+                        decode_tensor_body(&mut reader, TensorFormat::SafetensorsV1)?
+                    }
                     PLANNER_GGUF => decode_tensor_body(&mut reader, TensorFormat::GgufV1)?,
                     PLANNER_BLOB => {
                         let logical_size = reader.take_u64()?;

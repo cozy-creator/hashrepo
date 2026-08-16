@@ -759,7 +759,8 @@ fn a_blob_above_the_pack_payload_refuses_typed_before_any_transport_call() {
     let mib = 1024 * 1024;
     let root = scratch("big-blob");
     let meta = WorkspaceStore::open(&root).expect("workspace store opens");
-    meta.create_workspace("publisher").expect("workspace creates");
+    meta.create_workspace("publisher")
+        .expect("workspace creates");
     let big = vec![0x5A_u8; 64 * mib + 1];
     let admitted = meta.store().put_bytes(&big).expect("blob admits");
     meta.commit_generation(
