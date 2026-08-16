@@ -436,6 +436,22 @@ fn refusal_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
         "length-sum-mismatch",
         Raw::manifest().entry_count(1).raw_file("f", 5, &[(1, 4)]).0,
     ));
+    // The record sum overflows u64, and the declared logical size is the
+    // value a WRAPPING sum would land on: u64::MAX + 64 MiB wraps to
+    // 64 MiB - 1. A decoder that adds without checking accepts this manifest
+    // outright, so the fixture is refused only by the overflow guard itself.
+    cases.push((
+        "length-sum-overflow",
+        "length-sum-mismatch",
+        Raw::manifest()
+            .entry_count(1)
+            .raw_file(
+                "f",
+                MAX_OBJECT_SIZE - 1,
+                &[(2, u64::MAX), (1, MAX_OBJECT_SIZE)],
+            )
+            .0,
+    ));
     cases.push((
         "record-limit",
         "record-limit",

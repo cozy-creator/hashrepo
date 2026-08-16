@@ -767,6 +767,234 @@ fn completion_retries_through_incompleteness_and_surfaces_terminal_refusal() {
     ));
 }
 
+/// How a hub departs from the canonical missing set it should have answered
+/// with. Everything else about the hub stays honest, so a refusal here can
+/// only be the perturbation.
+#[derive(Clone, Copy)]
+enum Perturbation {
+    /// The same set, in the opposite order.
+    Reverse,
+    /// Canonical order, one length inflated by a byte.
+    InflateFirstLength,
+}
+
+struct PerturbingHub {
+    inner: FakeHub,
+    how: Perturbation,
+}
+
+impl PerturbingHub {
+    fn new(how: Perturbation) -> Self {
+        Self {
+            inner: FakeHub::new(),
+            how,
+        }
+    }
+
+    fn perturb(&self, mut missing: Vec<(ObjectDigest, u64)>) -> Vec<(ObjectDigest, u64)> {
+        match self.how {
+            Perturbation::Reverse => missing.reverse(),
+            Perturbation::InflateFirstLength => {
+                if let Some(first) = missing.first_mut() {
+                    first.1 += 1;
+                }
+            }
+        }
+        missing
+    }
+}
+
+impl SyncTransport for PerturbingHub {
+    fn declare(
+        &self,
+        tfm1_bytes: &[u8],
+        expected_head: Option<&SnapshotId>,
+    ) -> Result<SyncPlan, TransportError> {
+        let mut plan = self.inner.declare(tfm1_bytes, expected_head)?;
+        plan.missing = self.perturb(plan.missing);
+        Ok(plan)
+    }
+
+    fn pack_grants(
+        &self,
+        session: &str,
+        claims: &[PackClaim],
+    ) -> Result<GrantsPlan, TransportError> {
+        let mut plan = self.inner.pack_grants(session, claims)?;
+        plan.missing = self.perturb(plan.missing);
+        Ok(plan)
+    }
+
+    fn upload_pack(&self, grant: &PackGrant, pack: &[u8]) -> Result<(), TransportError> {
+        self.inner.upload_pack(grant, pack)
+    }
+
+    fn complete(&self, session: &str) -> Result<CompleteStatus, TransportError> {
+        self.inner.complete(session)
+    }
+
+    fn head(&self) -> Result<Option<SnapshotId>, TransportError> {
+        self.inner.head()
+    }
+
+    fn download_grants(
+        &self,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<DownloadGrant>, TransportError> {
+        self.inner.download_grants(digests)
+    }
+
+    fn download(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError> {
+        self.inner.download(grant)
+    }
+}
+
+/// The manifest the client declared is the only authority on which objects
+/// exist, how long they are, and in what order they are packed. A hub that
+/// answers the right SET in the wrong ORDER is refused, not quietly re-sorted:
+/// push assembles packs greedily in the order it is handed, so the order
+/// decides pack membership and therefore each pack's checksum — the value a
+/// grant binds and a resume must match. Repairing it here would hide a remote
+/// free to answer differently on the next replan.
+///
+/// The shuffle is deterministic (a reversal) and the arm is repeated, because
+/// an ordering claim proved once is a claim about one scheduling accident.
+#[test]
+fn a_hub_that_reorders_the_missing_set_is_refused_and_never_repaired() {
+    for round in 0..5 {
+        let root = scratch(&format!("shuffled-{round}"));
+        let (meta, id) = sealed_workspace(
+            &root,
+            "publisher",
+            &[(
+                "model.bin",
+                vec![vec![41_u8; 4096], vec![42_u8; 4096], vec![43_u8; 4096]],
+            )],
+        );
+        let canonical = data_digests(&meta, &id);
+        assert_eq!(
+            canonical.len(),
+            3,
+            "round {round}: three objects to reorder"
+        );
+
+        let hub = PerturbingHub::new(Perturbation::Reverse);
+        let error = push_snapshot(&meta, &hub, &id, None, PushOptions::default())
+            .expect_err("a reordered missing set must refuse");
+        assert!(
+            matches!(&error, SyncError::MissingNotCanonical { digest } if *digest == canonical[1]),
+            "round {round}: the refusal must name the first out-of-order digest, got {error:?}"
+        );
+        // Refused before anything moved: no pack was claimed, staged or
+        // promoted, and the head never advanced.
+        assert!(
+            hub.inner.state.borrow().uploads_by_digest.is_empty(),
+            "round {round}: bytes moved under a refused plan"
+        );
+        assert!(hub.inner.state.borrow().staged.is_empty());
+        assert_eq!(hub.inner.state.borrow().head, None);
+
+        // The control: the identical fixture against an honest hub pushes.
+        let honest = FakeHub::new();
+        let report = push(&meta, &honest, &id, None).expect("the honest order pushes");
+        assert_eq!(report.uploaded_objects, 3);
+        assert_eq!(honest.state.borrow().head, Some(id));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+/// The same contract on lengths: the remote may not restate an object's size.
+#[test]
+fn a_hub_that_restates_an_object_length_is_refused() {
+    let root = scratch("restated-length");
+    let (meta, id) = sealed_workspace(
+        &root,
+        "publisher",
+        &[("model.bin", vec![vec![51_u8; 2048], vec![52_u8; 1024]])],
+    );
+    let canonical = data_digests(&meta, &id);
+
+    let hub = PerturbingHub::new(Perturbation::InflateFirstLength);
+    let error = push_snapshot(&meta, &hub, &id, None, PushOptions::default())
+        .expect_err("an inflated length must refuse");
+    assert!(
+        matches!(
+            &error,
+            SyncError::MissingLength { digest, expected, actual }
+                if *digest == canonical[0] && *expected == 2048 && *actual == 2049
+        ),
+        "the refusal must name the digest and both lengths, got {error:?}"
+    );
+    assert!(hub.inner.state.borrow().uploads_by_digest.is_empty());
+}
+
+/// The pack layer proves the 64 MiB bound on synthetic bytes; this proves the
+/// whole hermetic engine carries one there — committed to a workspace, sealed
+/// into a manifest, loaded, packed, claimed, uploaded and promoted. It is the
+/// largest object the format admits, and one object at the object cap fills
+/// the payload cap exactly, so this is also the pack-count boundary: 64 MiB is
+/// one pack, and one byte more could not be.
+///
+/// Deliberately ONE object: the point is the bound, not a large corpus, and a
+/// multi-gigabyte fixture would buy nothing this does not already prove.
+#[test]
+fn one_maximum_size_object_rides_the_engine_end_to_end() {
+    let root = scratch("max-object");
+    // The literal bound, NOT `MAX_PACK_PAYLOAD`. Sizing the fixture from the
+    // constant would make this arm move with the very regression it guards:
+    // halve the constant and a constant-derived object halves with it and the
+    // test stays green, proving nothing. Pinned here, a moved bound fails
+    // twice — on the format claim below, and on the push itself.
+    const BOUND: usize = 64 * 1024 * 1024;
+    let bound = BOUND;
+    assert_eq!(
+        tfp1::MAX_PACK_PAYLOAD,
+        BOUND as u64,
+        "TFP1.md: the payload bound is 64 MiB and equals the object bound"
+    );
+    assert_eq!(tensorfs_core::planner::MAX_OBJECT_SIZE, BOUND as u64);
+    let (meta, id) = {
+        let chunk: Vec<u8> = (0..bound)
+            .map(|index| (0xa5_u8).wrapping_add(index as u8))
+            .collect();
+        sealed_workspace(&root, "publisher", &[("giant.bin", vec![chunk])])
+    };
+
+    let closure = data_digests(&meta, &id);
+    assert_eq!(closure.len(), 1, "one object, at the bound");
+    assert_eq!(
+        meta.store()
+            .verify(&closure[0])
+            .expect("the object verifies"),
+        bound as u64
+    );
+
+    let hub = FakeHub::new();
+    let report = push(&meta, &hub, &id, None).expect("a maximum-size object pushes");
+    assert_eq!(report.uploaded_objects, 1);
+    assert_eq!(report.uploaded_bytes, bound as u64);
+    assert_eq!(
+        report.packs, 1,
+        "the object cap equals the payload cap: exactly one pack"
+    );
+    assert_eq!(hub.state.borrow().head, Some(id));
+
+    // The hub promoted the real bytes, at the real length, under the real
+    // digest — its own tfp1 decode and checksum gate ran on the way in.
+    let state = hub.state.borrow();
+    let promoted = &state.objects[closure[0].as_bytes()];
+    assert_eq!(promoted.len(), bound);
+    assert_eq!(
+        ObjectDigest::from_bytes(Sha256::digest(promoted).into()),
+        closure[0]
+    );
+    assert_eq!(state.uploads_by_digest[closure[0].as_bytes()], 1);
+    drop(state);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A hub that fires one shot of local mischief the instant a push has
 /// declared and is therefore in flight, then behaves exactly like the real
 /// fake for the rest of the transfer.

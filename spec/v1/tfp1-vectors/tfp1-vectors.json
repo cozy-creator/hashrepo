@@ -24,6 +24,19 @@
       "description": "a deeper index walk with mixed small object sizes"
     }
   ],
+  "generated_golden": [
+    {
+      "name": "full-payload-single-object",
+      "objects": [
+        {
+          "ramp_seed": 165,
+          "length": 67108864
+        }
+      ],
+      "pack_sha256": "29b46710fd57b08b8e139ee64410abb2c1122cc0e7a800dc919208541dcae6d8",
+      "description": "one object at the 64 MiB bound; the payload cap equals the object cap, so this pack is exactly full"
+    }
+  ],
   "refusals": [
     {
       "name": "bad-magic",
@@ -88,6 +101,11 @@
     {
       "name": "offset-mismatch-gap",
       "fixture": "fixtures/refusal-offset-mismatch-gap.hex",
+      "reason": "offset-mismatch"
+    },
+    {
+      "name": "offset-overlap",
+      "fixture": "fixtures/refusal-offset-overlap.hex",
       "reason": "offset-mismatch"
     },
     {

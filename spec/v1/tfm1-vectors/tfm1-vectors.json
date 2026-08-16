@@ -193,6 +193,11 @@
       "reason": "length-sum-mismatch"
     },
     {
+      "name": "length-sum-overflow",
+      "fixture": "fixtures/refusal-length-sum-overflow.hex",
+      "reason": "length-sum-mismatch"
+    },
+    {
       "name": "record-limit",
       "fixture": "fixtures/refusal-record-limit.hex",
       "reason": "record-limit"
