@@ -8,7 +8,6 @@ from .manifest import MAX_CHUNK_SIZE, Chunk, FileEntry, RepositoryManifest
 from .refs import CASRef
 from .tensors import (
     DTYPE_BITS,
-    EXTRACT_SIZE_LIMIT,
     BlockLayout,
     FileTooLarge,
     TensorError,
@@ -74,7 +73,6 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "DTYPE_BITS",
-    "EXTRACT_SIZE_LIMIT",
     "BlockLayout",
     "FileTooLarge",
     "CASRef",

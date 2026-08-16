@@ -238,15 +238,18 @@ tensors.extract("compiled/graph.so", scratch / "graph.so")
 ```
 
 `TensorReader.extract` writes **one named file**, atomically, verifying its
-digest. It refuses above `EXTRACT_SIZE_LIMIT` with a typed `FileTooLarge`, and
-`limit=` may only *tighten* that ceiling, never raise it — a hatch a caller can
-widen is not a bound, and weights would be back on disk within a release.
+digest, streaming record by record — a ranged read per object, appended to the
+destination, O(one block) of memory regardless of file size.
 
-The ceiling is 512 MiB and it is argued, not picked: it must clear the largest
-expected `.so` bundle (low hundreds of MB) with room to spare while sitting well
-under a single safetensors weight shard, which is conventionally multiple GB.
-Anything near a gigabyte would start admitting real weights, which is the exact
-regression the bound exists to make impossible.
+**There is no size cap — ruled by Paul, 2026-08-16**: *"no hard-cap on
+materialization size; we just want to avoid large non-tensor files being in
+tensorfs (our chunked CAS system)."* The control is SCOPE at ingestion, not a
+limit at extraction: CAS holds repos only (large tensor files plus their small
+config/metadata), datasets and compiled-graph artifacts never enter it (see
+DESIGN-RULINGS "CAS scope: repos only"), so there is nothing oversized to
+extract in a well-formed store. Preferring small extractions is guidance, not
+an enforced bound — an earlier revision shipped a 512 MiB `FileTooLarge`
+ceiling here, which this ruling retires.
 
 This is not `materialize_repository`. Whole-tree materialization stays deleted.
 

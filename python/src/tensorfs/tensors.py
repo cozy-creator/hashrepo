@@ -34,7 +34,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DTYPE_BITS",
-    "EXTRACT_SIZE_LIMIT",
     "BlockLayout",
     "FileTooLarge",
     "TensorError",
@@ -63,18 +62,6 @@ class FileTooLarge(TensorError):
     """A caller tried to extract a file the escape hatch must not carry."""
 
 
-# The one remaining reason to put a file on disk is an artifact that is not
-# tensor-shaped and whose consumer can only take a path: an AOT-Inductor `.so`
-# bundle, or config JSON. Those top out in the low hundreds of MB.
-#
-# This is a ceiling, not a tuning knob, and it exists to keep that hatch from
-# quietly becoming the whole-file materialization this package just deleted.
-# The number is chosen by what it must separate: it clears the largest expected
-# `.so` bundle with room to spare, while sitting well under a single
-# safetensors weight shard, which is conventionally multiple GB. Anything near
-# a gigabyte would start admitting real weights, which is precisely the
-# regression this bound is here to make impossible.
-EXTRACT_SIZE_LIMIT = 512 * 1024 * 1024
 
 
 def dtype_itemsize(dtype: str) -> float:
@@ -268,27 +255,32 @@ class TensorReader(Mapping[str, TensorView]):
         *,
         limit: int | None = None,
     ) -> Path:
-        """Write ONE small non-tensor file to disk, for consumers that need a path.
+        """Write ONE non-tensor file to disk, for consumers that need a path.
 
-        This is the whole remaining reason to create a file: an AOT-Inductor
-        ``.so`` that must be ``dlopen``ed, or config JSON a third-party
-        constructor insists on reading from a directory. Tensors never come
-        through here -- they are read with :class:`TensorView`.
+        This is the whole remaining reason to create a file: config JSON a
+        third-party constructor insists on reading from a directory, or any
+        other non-tensor member of a repo. Tensors never come through here --
+        they are read with :class:`TensorView`.
 
-        ``limit`` may only tighten :data:`EXTRACT_SIZE_LIMIT`, never raise it.
-        A hatch a caller can widen is not a bound, and weights would be back on
-        disk within a release.
+        There is NO size cap -- ruled by Paul, 2026-08-16: "no hard-cap on
+        materialization size; we just want to avoid large non-tensor files
+        being in tensorfs (our chunked CAS system)." The control is scope at
+        ingestion (CAS holds repos only; datasets and compiled-graph artifacts
+        never enter it -- DESIGN-RULINGS "CAS scope: repos only"), not a limit
+        here. The stream is O(one block) of memory regardless of file size, so
+        extraction itself has no reason to refuse. ``limit`` remains for a
+        caller that wants to bound ITS OWN request; when given, exceeding it
+        raises :class:`FileTooLarge`.
 
         The write is atomic: the destination either does not exist or is
         complete, and its bytes are verified on the way out.
         """
 
         entry = self._entry(path)
-        ceiling = EXTRACT_SIZE_LIMIT if limit is None else min(limit, EXTRACT_SIZE_LIMIT)
-        if entry.size_bytes > ceiling:
+        if limit is not None and entry.size_bytes > limit:
             raise FileTooLarge(
-                f"{path} is {entry.size_bytes} bytes, above the {ceiling}-byte "
-                "extraction bound; read it as tensors instead of as a file"
+                f"{path} is {entry.size_bytes} bytes, above the caller-supplied "
+                f"{limit}-byte bound"
             )
         target = Path(destination)
         target.parent.mkdir(parents=True, exist_ok=True)
