@@ -124,6 +124,27 @@ fn proc_vmhwm(pid: u32) -> u64 {
 struct BinMount {
     child: process::Child,
     mountpoint: PathBuf,
+    /// Set once the daemon has been signalled and its endpoint dealt with, so
+    /// the panic-path cleanup in `Drop` stands down.
+    reaped: bool,
+}
+
+impl Drop for BinMount {
+    /// A panicking arm skips its explicit teardown. Without this guard the
+    /// daemon outlives the run holding the harness's inherited stdout pipe, so
+    /// cargo waits on it forever and a plain assertion failure presents as a
+    /// hung suite plus a stale mount.
+    fn drop(&mut self) {
+        if self.reaped {
+            return;
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = process::Command::new("fusermount3")
+            .args(["-u", "-z"])
+            .arg(&self.mountpoint)
+            .status();
+    }
 }
 
 impl BinMount {
@@ -142,12 +163,18 @@ impl BinMount {
         if let Some(budget) = budget {
             command.env("TENSORFS_ASSEMBLY_BUDGET_BYTES", budget.to_string());
         }
+        // Null stdio: an inherited pipe would keep the test harness's output
+        // stream open for as long as a leaked daemon lives.
+        command
+            .stdout(process::Stdio::null())
+            .stderr(process::Stdio::null());
         let mut child = command.spawn().expect("daemon spawns");
         for _ in 0..100 {
             if mounted_here(mountpoint) {
                 return Self {
                     child,
                     mountpoint: mountpoint.to_path_buf(),
+                    reaped: false,
                 };
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -172,6 +199,7 @@ impl BinMount {
             .args(["-u", "-z"])
             .arg(&self.mountpoint)
             .status();
+        self.reaped = true;
         for _ in 0..50 {
             if !mounted_here(&self.mountpoint) {
                 return;
@@ -186,6 +214,7 @@ impl BinMount {
             .args(["-TERM", &self.child.id().to_string()])
             .status();
         let _ = self.child.wait();
+        self.reaped = true;
         assert!(
             !mounted_here(&self.mountpoint),
             "a terminated daemon must leave no mount behind"
@@ -378,7 +407,14 @@ fn an_out_of_order_writer_spills_instead_of_growing_and_stays_exact() {
     let daemon = BinMount::spawn(&root, "main", &mountpoint, Some(budget));
 
     let slots = 6_u64;
-    let stamp = pattern(31, 8192);
+    // A DISTINCT stamp per slot. One shared pattern made every slot's bytes
+    // interchangeable, so a spill read that addressed the wrong slot returned
+    // the right bytes by coincidence and the readback below could not see it —
+    // the spill holds its bytes at their LOGICAL offsets, and nothing proved
+    // the read path agreed.
+    let stamps: Vec<Vec<u8>> = (0..slots)
+        .map(|slot| pattern(31 + slot as u8, 8192))
+        .collect();
     let path = mountpoint.join("wide.bin");
     let file = OpenOptions::new()
         .create_new(true)
@@ -395,29 +431,52 @@ fn an_out_of_order_writer_spills_instead_of_growing_and_stays_exact() {
     // for 48 KiB of data, which is what the pre-flush bound below rules out.
     for slot in (0..slots).rev() {
         let at = slot * 64 * MIB + 60 * MIB;
-        file.write_all_at(&stamp, at)
+        file.write_all_at(&stamps[slot as usize], at)
             .expect("far-offset write works");
     }
     let peak_before_flush = proc_vmhwm(daemon.pid());
     file.sync_all().expect("fsync works");
     let (read_after, write_after) = proc_io(daemon.pid());
 
-    let mut sample = vec![0_u8; stamp.len()];
+    drop(file);
+    let peak_rss = proc_vmhwm(daemon.pid());
+    daemon.sigterm_and_wait();
+
+    // Byte-exactness is asserted on a FRESH daemon, never through the mount
+    // that just did the writing. Reading back through the writing mount is
+    // served out of the kernel page cache — those pages are clean and present
+    // — so it proves the kernel remembers what we wrote and says nothing at
+    // all about the spill. The spill holds its bytes at their LOGICAL offsets;
+    // making the compose read them at slot-relative offsets instead gives
+    // every slot the first slot's bytes, and the in-mount readback stayed
+    // green through all of it.
+    let remounted = unique_dir("amp-sparse-remnt");
+    let daemon = BinMount::spawn(&root, "main", &remounted, None);
+    let survivor = OpenOptions::new()
+        .read(true)
+        .open(remounted.join("wide.bin"))
+        .expect("survivor opens");
+    let mut sample = vec![0_u8; stamps[0].len()];
     for slot in 0..slots {
         let at = slot * 64 * MIB + 60 * MIB;
-        file.read_exact_at(&mut sample, at)
+        survivor
+            .read_exact_at(&mut sample, at)
             .expect("sparse read back works");
-        assert_eq!(sample, stamp, "the stamp at {at} survives the spill path");
+        assert_eq!(
+            sample, stamps[slot as usize],
+            "slot {slot}'s own stamp at {at} survives the spill path"
+        );
     }
     // The untouched bytes of a sparse file are still holes reading as zero.
     let mut gap = vec![0xAA_u8; 4096];
-    file.read_exact_at(&mut gap, 8 * MIB).expect("gap reads");
+    survivor
+        .read_exact_at(&mut gap, 8 * MIB)
+        .expect("gap reads");
     assert!(
         gap.iter().all(|byte| *byte == 0),
         "untouched bytes are zero"
     );
-    drop(file);
-    let peak_rss = proc_vmhwm(daemon.pid());
+    drop(survivor);
     daemon.sigterm_and_wait();
 
     // No amplification bound is asserted: admitting six 64 MiB grid objects for
@@ -425,7 +484,7 @@ fn an_out_of_order_writer_spills_instead_of_growing_and_stays_exact() {
     // pretending otherwise would be a bound on the grid, not on this code.
     report(
         "sparse/out-of-order",
-        slots * stamp.len() as u64,
+        slots * stamps[0].len() as u64,
         write_after - write_before,
         read_after - read_before,
     );
