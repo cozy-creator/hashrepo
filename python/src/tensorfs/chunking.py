@@ -26,7 +26,7 @@ _MAX_USIZE = (1 << 64) - 1
 
 # This mirrors safetensors::tensor::Dtype::bitsize at upstream 6eb4dc9. Unknown
 # future dtypes take the safe fixed-boundary fallback instead of being guessed here.
-_DTYPE_BITS = {
+DTYPE_BITS = {
     "F4": 4,
     "F6_E2M3": 6,
     "F6_E3M2": 6,
@@ -114,7 +114,7 @@ def _tensor_spans(source: BinaryIO, size: int) -> tuple[int, tuple[tuple[int, in
         dtype = value["dtype"]
         shape = value["shape"]
         offsets = value["data_offsets"]
-        if not isinstance(dtype, str) or dtype not in _DTYPE_BITS:
+        if not isinstance(dtype, str) or dtype not in DTYPE_BITS:
             return None
         if not isinstance(shape, list) or any(
             type(dimension) is not int or not 0 <= dimension <= _MAX_USIZE
@@ -130,7 +130,7 @@ def _tensor_spans(source: BinaryIO, size: int) -> tuple[int, tuple[tuple[int, in
         start, end = offsets
         if start < 0 or end < start or end > _MAX_USIZE:
             return None
-        dtype_bits = _DTYPE_BITS[dtype]
+        dtype_bits = DTYPE_BITS[dtype]
         body_bits = (end - start) * 8
         elements = 1
         for dimension in shape:

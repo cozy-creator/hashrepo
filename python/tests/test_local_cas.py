@@ -9,10 +9,17 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from tensorfs import MAX_CHUNK_SIZE, FileEntry, LocalCAS, RefConflict, RepositoryManifest
+from tensorfs import (
+    MAX_CHUNK_SIZE,
+    FileEntry,
+    LocalCAS,
+    RefConflict,
+    RepositoryManifest,
+    read_entry,
+)
 
 
-def test_local_cas_survives_restart_and_materializes_atomically(tmp_path: Path) -> None:
+def test_local_cas_survives_restart_and_rereads_committed_bytes(tmp_path: Path) -> None:
     source = tmp_path / "source.bin"
     source.write_bytes(b"local-only bytes")
     root = tmp_path / "cas"
@@ -26,9 +33,7 @@ def test_local_cas_survives_restart_and_materializes_atomically(tmp_path: Path) 
     second = LocalCAS(root)
     assert second.read_ref("compiled/cg-key-v1-example") == manifest_ref
     loaded = second.load_manifest(manifest_ref)
-    destination = tmp_path / "materialized" / "graph.bin"
-    second.materialize(loaded.files[0], destination)
-    assert destination.read_bytes() == source.read_bytes()
+    assert read_entry(second, loaded.files[0]) == source.read_bytes()
 
 
 def test_fresh_process_reuses_local_cas_without_loading_network_stack(tmp_path: Path) -> None:
@@ -140,14 +145,13 @@ def test_logical_ref_is_compare_and_swap_not_silent_overwrite(tmp_path: Path) ->
     assert cas.read_ref("graph") == second
 
 
-def test_materialize_refuses_a_corrupt_resident_object(tmp_path: Path) -> None:
+def test_reading_refuses_a_corrupt_resident_object(tmp_path: Path) -> None:
     cas = LocalCAS(tmp_path / "cas")
     ref = cas.put_bytes(b"good")
     cas.object_path(ref).write_bytes(b"evil")
     entry = FileEntry("file", 4, ref)
     with pytest.raises(ValueError, match="object bytes do not match"):
-        cas.materialize(entry, tmp_path / "output")
-    assert not (tmp_path / "output").exists()
+        read_entry(cas, entry)
 
 
 def test_put_file_atomically_repairs_only_a_corrupt_digest_object(tmp_path: Path) -> None:
@@ -300,9 +304,7 @@ def test_file_above_chunk_boundary_round_trips(tmp_path: Path) -> None:
     assert entry.size_bytes == MAX_CHUNK_SIZE + 3
     assert [chunk.length for chunk in entry.chunks] == [MAX_CHUNK_SIZE, 3]
 
-    destination = tmp_path / "rebuilt.bin"
-    cas.materialize(entry, destination)
-    assert destination.read_bytes() == source.read_bytes()
+    assert read_entry(cas, entry) == source.read_bytes()
 
 
 def test_repository_tree_round_trips_with_portable_paths(tmp_path: Path) -> None:
@@ -318,10 +320,9 @@ def test_repository_tree_round_trips_with_portable_paths(tmp_path: Path) -> None
     cas.compare_and_swap_ref("snapshot", manifest_ref, expected=None)
 
     restarted = LocalCAS(tmp_path / "cas")
-    target = tmp_path / "materialized"
-    restarted.materialize_repository(restarted.load_manifest(manifest_ref), target)
-    assert (target / "config.json").read_bytes() == b"{}"
-    assert (target / "nested" / "weights.bin").read_bytes() == b"weights"
+    reloaded = restarted.load_manifest(manifest_ref)
+    contents = {entry.path: read_entry(restarted, entry) for entry in reloaded.files}
+    assert contents == {"config.json": b"{}", "nested/weights.bin": b"weights"}
 
 
 def test_repository_ingest_refuses_symlinks(tmp_path: Path) -> None:
