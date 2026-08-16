@@ -231,14 +231,86 @@ fn assert_recovered(
     generation
 }
 
-/// One uninterrupted cycle, used to calibrate the kill-delay range so the
-/// randomised kills actually span the cycle instead of all landing at open.
+/// One uninterrupted cycle, the STARTING POINT for the kill-delay range.
+///
+/// Round 0 is deliberate and cannot be repeated: it is the only round that
+/// creates the workspace, and the child names its file `round-{round}.bin`,
+/// so a second cycle at round 0 fails its own commit on the duplicate path.
+/// A single sample is enough because [`adjust_ceiling`] corrects the range
+/// from wherever this lands.
 fn calibrate(root: &Path) -> Duration {
     let started = Instant::now();
     let mut child = spawn(root, 0);
     let status = child.wait().expect("calibration child is reaped");
     assert!(status.success(), "the calibration cycle must complete");
     started.elapsed()
+}
+
+/// Steer the kill-delay ceiling from where the last kill actually landed.
+///
+/// One up-front measurement cannot set this range correctly for the whole
+/// run, for two independent reasons: the calibration cycle pays cold page
+/// cache and a cold store, and the store ACCUMULATES, so later cycles are
+/// slower than the one that was measured. A fixed ceiling derived from a
+/// single sample is therefore wrong by an unknown factor on an unknown
+/// machine — which is exactly how CI landed 29 of 30 kills in `done`.
+///
+/// So the range is a feedback loop rather than a constant. Landing in `done`
+/// means the child finished before the kill and the window is too wide;
+/// landing in `open` (or `none`, meaning it died before announcing anything)
+/// means the window is too narrow. Anything between those is the interesting
+/// middle and is left alone.
+///
+/// Multiplicative because the error is multiplicative: a machine an order of
+/// magnitude faster needs an order-of-magnitude correction, and stepping by a
+/// constant would take the whole run to get there.
+fn adjust_ceiling(ceiling: u64, floor: u64, cap: u64, phase: &str) -> u64 {
+    let adjusted = match phase {
+        "done" => ceiling * 3 / 4,
+        "open" | "none" => ceiling * 4 / 3 + 1,
+        _ => ceiling,
+    };
+    adjusted.clamp(floor, cap)
+}
+
+/// The controller must haul an absurd starting ceiling back into range, which
+/// is the macOS failure reproduced deterministically and without spawning
+/// anything: there, the 8 ms floor set a window an order of magnitude wider
+/// than the work, and every kill landed after the child was already done.
+#[test]
+fn the_kill_window_converges_from_an_absurd_starting_point() {
+    let floor = 200_u64;
+    let cap = 10_000_u64;
+
+    // A window 50x too wide: every kill lands in `done`.
+    let mut ceiling = cap;
+    let mut steps = 0;
+    while ceiling > floor * 4 && steps < 100 {
+        ceiling = adjust_ceiling(ceiling, floor, cap, "done");
+        steps += 1;
+    }
+    assert!(
+        steps < 20,
+        "a too-wide window took {steps} rounds to come back in range"
+    );
+
+    // And the other direction: a window so narrow every kill lands at `open`.
+    let mut ceiling = floor;
+    let mut steps = 0;
+    while ceiling < cap / 4 && steps < 100 {
+        ceiling = adjust_ceiling(ceiling, floor, cap, "open");
+        steps += 1;
+    }
+    assert!(
+        steps < 20,
+        "a too-narrow window took {steps} rounds to open up"
+    );
+
+    // The bounds hold, and the interesting middle is never disturbed.
+    assert_eq!(adjust_ceiling(floor, floor, cap, "done"), floor);
+    assert_eq!(adjust_ceiling(cap, floor, cap, "open"), cap);
+    assert_eq!(adjust_ceiling(500, floor, cap, "commit"), 500);
+    assert_eq!(adjust_ceiling(500, floor, cap, "admit-2"), 500);
 }
 
 #[test]
@@ -248,11 +320,24 @@ fn a_kill_at_any_point_in_the_cycle_leaves_a_consistent_store() {
     let seed = seed_from_env(0x5EED_1257_C0FF_EE01);
     let mut rng = Rng::new(seed);
 
+    // The kill delay is drawn uniformly from a window that STEERS ITSELF
+    // toward the machine (see `adjust_ceiling`). The measured cycle only sets
+    // where the search starts; the floor and cap keep it sane while it moves.
+    //
+    // The floor used to be 8 ms and set the ceiling outright, which inverted
+    // its stated purpose on a fast box: a macOS runner finishes a cycle well
+    // inside 8 ms, so delays were sampled across a window an order of
+    // magnitude wider than the work and landed past completion nearly every
+    // time. That is how CI put 29 of 30 kills in `done` and tripped the
+    // spread assertion below. The floor now guards only a degenerate
+    // measurement, so it is small.
     let cycle = calibrate(root);
-    // A floor keeps the range meaningful when the box is fast; the ceiling
-    // reaches past a whole cycle so "killed after done" is represented too.
-    let span = cycle.max(Duration::from_millis(8));
-    let ceiling = (span.as_micros() as u64).saturating_mul(13) / 10;
+    let micros = cycle.as_micros().min(u128::from(u64::MAX)) as u64;
+    let floor = 200_u64;
+    // Wide enough that a slowing store can still be outrun, bounded so a run
+    // of `open` kills cannot let the window grow without limit.
+    let cap = micros.saturating_mul(8).clamp(floor * 8, 2_000_000);
+    let mut ceiling = (micros.saturating_mul(13) / 10).clamp(floor, cap);
 
     let rounds = iterations(30, 200);
     let mut distribution: BTreeMap<String, u32> = BTreeMap::new();
@@ -271,6 +356,7 @@ fn a_kill_at_any_point_in_the_cycle_leaves_a_consistent_store() {
 
         let phase = last_phase(root);
         *distribution.entry(phase.clone()).or_default() += 1;
+        ceiling = adjust_ceiling(ceiling, floor, cap, &phase);
         generation = assert_recovered(root, seed, round, &phase, generation);
     }
 
