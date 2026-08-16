@@ -37,7 +37,11 @@ pub const MAX_FRAME_BYTES: u32 = 1024 * 1024;
 /// The wire protocol generation reported by `hello`.
 pub const PROTOCOL: u64 = 1;
 
-const ACCEPT_POLL: Duration = Duration::from_millis(200);
+/// The accept loop's idle tick, and the per-connection read tick with it, so
+/// shutdown is observed mid-idle-connection. Public because a test that has to
+/// force a frame across an idle tick must derive its pause from this value
+/// rather than restate it.
+pub const ACCEPT_POLL: Duration = Duration::from_millis(200);
 
 /// One stable refusal. The kebab-case code is the cross-language contract;
 /// the message is for humans and never load-bearing.

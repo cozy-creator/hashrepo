@@ -29,6 +29,10 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
 
 const MIB: u64 = 1024 * 1024;
 
+/// How often a waiting test re-reads the mount table. A polling tick only: no
+/// verdict anywhere depends on its value.
+const MOUNT_POLL: Duration = Duration::from_millis(100);
+
 fn fuse_available() -> bool {
     if !Path::new("/dev/fuse").exists() {
         eprintln!("skipping: /dev/fuse is not available");
@@ -275,7 +279,12 @@ impl BinMount {
             .stderr(process::Stdio::null())
             .spawn()
             .expect("daemon spawns");
-        for _ in 0..100 {
+        // A daemon that is still mounting is making progress, however loaded
+        // the box is. The failure worth detecting is a daemon that has EXITED
+        // without mounting, and that is observable directly — so wait on the
+        // child's liveness rather than on a clock, which would call a slow
+        // machine a broken daemon.
+        loop {
             if mounted_here(mountpoint) {
                 return Self {
                     child,
@@ -283,11 +292,11 @@ impl BinMount {
                     reaped: false,
                 };
             }
-            std::thread::sleep(Duration::from_millis(100));
+            if let Some(status) = child.try_wait().expect("the daemon's status reads") {
+                panic!("the daemon exited ({status}) without mounting {mountpoint:?}");
+            }
+            std::thread::sleep(MOUNT_POLL);
         }
-        let _ = child.kill();
-        let _ = child.wait();
-        panic!("daemon did not mount in time");
     }
 
     fn pid(&self) -> u32 {
@@ -318,11 +327,18 @@ impl BinMount {
             .arg(&self.mountpoint)
             .status();
         self.reaped = true;
+        // The lazy unmount detaches synchronously, so this loop normally does
+        // not run once. The bounded retry stays, and deliberately: there is no
+        // process left whose liveness could be asked, nothing here reports
+        // progress, and what the last iteration would report is a FUSE mount
+        // still standing on a machine several lanes share. That has to go red
+        // — a wait with no ceiling would instead hold the stale mount for as
+        // long as the run lasts. It is a resource verdict, not a latency one.
         for _ in 0..50 {
             if !mounted_here(&self.mountpoint) {
                 return;
             }
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(MOUNT_POLL);
         }
         panic!("stale mount survived cleanup");
     }
