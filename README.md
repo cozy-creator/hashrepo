@@ -16,9 +16,9 @@ and migration source. The production v1 data plane is being hard-cut to one
 Rust implementation, and the Python half of that cut has landed: the Python
 chunker, grant transfer client, transfer journal and Python GC are deleted.
 The Rust planner (`crates/tensorfs-core/src/planner/`) is the only chunker.
-Python is a typed local client — the CAS store, the manifest model, direct
-tensor reads/writes and the daemon client — and Go remains Tensorhub's
-non-authoring verifier/promoter.
+Python is a typed local client — the CAS store, the manifest model and direct
+tensor reads/writes — and Go remains Tensorhub's non-authoring
+verifier/promoter.
 
 ## Status
 
@@ -37,15 +37,17 @@ The supported v1 shape is intentionally narrow:
 
 ### Platform support
 
-The mounted filesystem is **Linux/FUSE3 only**. macOS (macFUSE/FSKit) and
-Windows (WinFsp) are unimplemented, not merely untested: `crates/tensorfsd`
-compiles to an empty shell off Linux and its `tensorfsd` binary exits
-non-zero. The Windows named-pipe control plane is a seam, not a feature.
+There is no mounted filesystem in this branch. The FUSE daemon
+(`crates/tensorfsd`, Linux/FUSE3 only, with its Python client and mount
+benchmarks) is **shelved on the `shelf/tensorfsd` branch** — split point
+tagged `shelf/tensorfsd-split` — as a permanent, never-rebased reference.
+Revival is a rewrite against then-current core, starting from issues #59 and
+#50. Direct tensor reads/writes (`docs/direct-tensor-reads.md`) are the
+deployment path.
 
 `crates/tensorfs-core` — formats, planners and the storage engine — is
 genuinely cross-platform and CI runs its tests on macOS and Windows in the
-`core-cross-platform` job. That job builds `tensorfs-core` alone, so no green
-check on this repository should be read as macOS or Windows mount coverage.
+`core-cross-platform` job.
 
 ## Layout
 
@@ -53,8 +55,7 @@ check on this repository should be read as macOS or Windows mount coverage.
 spec/v1/                 format documentation, JSON Schema, golden vectors
 crates/tensorfs-core/     Rust canonical formats, planners and storage engine
 crates/tensorfs-py/      the PyO3 extension module, `tensorfs._tensorfs`
-crates/tensorfsd/        the mount daemon and control plane (Linux only)
-python/src/tensorfs/     Python local CAS, direct tensor reads/writes, daemon client
+python/src/tensorfs/     Python local CAS, direct tensor reads/writes
 *.go                     Go manifest, planning, and promotion engine
 ```
 
@@ -64,7 +65,7 @@ python/src/tensorfs/     Python local CAS, direct tensor reads/writes, daemon cl
 
 | in the wheel | what it is |
 | --- | --- |
-| `tensorfs/*.py` | the pure-Python facade — `LocalCAS`, tensor reads/writes, the daemon client |
+| `tensorfs/*.py` | the pure-Python facade — `LocalCAS` and tensor reads/writes |
 | `tensorfs/_tensorfs.abi3.so` | the compiled Rust extension, imported in-process |
 
 Every platform ships exactly the same two halves. This is HuggingFace's shape
@@ -74,11 +75,12 @@ the same distribution, so there is no pure-Python wheel to fall back to. The
 **sdist** is that fallback: a platform outside the wheel matrix builds from
 source given a Rust toolchain.
 
-**`tensorfsd` is deliberately not in the wheel.** Pods cannot mount FUSE at
-all — opening `/dev/fuse` is denied by the device cgroup even for root,
-`CAP_SYS_ADMIN` is absent from the container's bounding set, and there is no
-API field to grant either. The wheel therefore ships native reads, and the
-daemon stays in-repo for local and development use.
+**There is no daemon in the wheel, and none in this branch.** Pods cannot
+mount FUSE at all — opening `/dev/fuse` is denied by the device cgroup even
+for root, `CAP_SYS_ADMIN` is absent from the container's bounding set, and
+there is no API field to grant either. The wheel ships native reads;
+`tensorfsd` lives on the `shelf/tensorfsd` branch (tag
+`shelf/tensorfsd-split`).
 
 Import the compiled surface from `tensorfs.native`; `tensorfs._tensorfs` is
 private. It exposes the CAS (`ObjectStore`), the TFM1/TFP1 decoders, and

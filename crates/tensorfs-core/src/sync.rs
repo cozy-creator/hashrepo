@@ -675,7 +675,7 @@ fn load_pack_members(
 
 /// Pulls the remote head snapshot: fetch its manifest object, admit every
 /// locally missing data object through the verifying writer, then adopt the
-/// snapshot so it is locally sealed and mountable. Resident objects are the
+/// snapshot so it is locally sealed and readable. Resident objects are the
 /// resume journal and are never re-fetched.
 pub fn pull_head<T: SyncTransport>(
     meta: &WorkspaceStore,
@@ -810,7 +810,7 @@ pub mod http {
     }
 
     /// Where the bearer token comes from. A file is re-read on every call so
-    /// an external refresher can rotate it without restarting the daemon.
+    /// an external refresher can rotate it without restarting the process.
     #[derive(Clone, Debug, Default)]
     pub enum TokenSource {
         #[default]

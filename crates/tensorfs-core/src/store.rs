@@ -27,10 +27,10 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// Process-wide ceiling on bytes held in RAM while admitting objects, and the
 /// environment variable that overrides it.
 ///
-/// This is deliberately the SAME name and default the daemon's slot assembly
-/// uses. Ingest and assembly both hold whole grid slots in RAM for the same
-/// reason, so an operator tunes one number rather than discovering a second
-/// knob that means almost the same thing.
+/// This is deliberately the SAME name and default the shelved daemon's slot
+/// assembly used (`shelf/tensorfsd`). Ingest and assembly both hold whole
+/// grid slots in RAM for the same reason, so an operator tunes one number
+/// rather than discovering a second knob that means almost the same thing.
 const INGEST_BUDGET_ENV: &str = "TENSORFS_ASSEMBLY_BUDGET_BYTES";
 const DEFAULT_INGEST_BUDGET: u64 = 8 * MAX_OBJECT_SIZE;
 

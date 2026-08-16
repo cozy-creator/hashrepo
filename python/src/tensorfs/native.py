@@ -11,11 +11,12 @@ Nothing in the existing pure-Python modules has been rewritten onto Rust.
 `LocalCAS`, `transfer` and the rest are unchanged; this is the binding they
 will be ported onto later.
 
-The `tensorfsd` mount daemon is deliberately not shipped in the wheel. Pods
+There is no `tensorfsd` mount daemon in the wheel or on this branch. Pods
 cannot mount FUSE -- opening `/dev/fuse` is denied by the device cgroup even
 for root, `CAP_SYS_ADMIN` is absent from the container's bounding set, and
-there is no API field to grant either -- so the wheel carries native reads
-instead, and the daemon stays in-repo for local and development use.
+there is no API field to grant either -- so the wheel carries native reads,
+and the daemon is shelved on the `shelf/tensorfsd` branch (tag
+`shelf/tensorfsd-split`).
 """
 
 from __future__ import annotations

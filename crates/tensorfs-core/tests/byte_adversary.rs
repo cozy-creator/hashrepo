@@ -31,8 +31,8 @@ use tensorfs_core::tfm1::SnapshotId;
 use tensorfs_core::workspace::{WorkspaceError, WorkspaceStore};
 
 /// The on-disk home of one object. The two-level fanout is part of the
-/// store's published layout, which the daemon and the benchmarks also rely
-/// on, so computing it here is reading the contract, not guessing.
+/// store's published layout, so computing it here is reading the contract,
+/// not guessing.
 fn object_path(root: &std::path::Path, digest: &ObjectDigest) -> PathBuf {
     let hex = digest.to_string();
     let hex = hex.strip_prefix("sha256:").unwrap_or(&hex).to_owned();

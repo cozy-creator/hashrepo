@@ -17,8 +17,10 @@ tensorfs` and the extension does everything, in-process. That is a selling
 point rather than a limitation — it is one dependency instead of a
 platform capability we cannot get.
 
-FUSE is kept for programs that only speak POSIX and do not know about us. It
-receives no further investment.
+The FUSE daemon received no further investment and is now shelved: the whole
+mount stack lives on the `shelf/tensorfsd` branch (split point tagged
+`shelf/tensorfsd-split`), a permanent never-rebased reference. Revival is a
+rewrite against then-current core.
 
 ## What is deleted
 
@@ -40,7 +42,7 @@ One bounded escape hatch survives, described under "Small files" below.
 `crates/tensorfs-core/src/planner/safetensors.rs` re-boundaries a sealed
 snapshot into one header object plus one object per tensor, subdivided every
 64 MiB from the tensor's own start. `crates/tensorfsd/tests/safetensors_reader.rs:555`
-asserts that grid. `planner/gguf.rs` gives GGUF the same treatment after
+(now on `shelf/tensorfsd`) asserts that grid. `planner/gguf.rs` gives GGUF the same treatment after
 validating its directory.
 
 So "load tensor X" is already "read these CAS objects". Two structural
@@ -438,8 +440,9 @@ Caveats, stated rather than buried:
 - The deleted `materialize` is reproduced inside the benchmark so the comparison
   stays runnable. Its numbers were verified identical to the real method before
   deletion.
-- **No FUSE number is invented.** No banked measurement exists in this repo and
-  a mount cannot be raised on a pod at all. It is unmeasured.
+- **No FUSE number is invented.** No banked measurement exists on this branch
+  (the mount benchmarks moved to `shelf/tensorfsd`) and a mount cannot be
+  raised on a pod at all. It is unmeasured.
 
 ## Proven and unproven
 
