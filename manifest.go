@@ -81,9 +81,8 @@ func (f File) Validate() error {
 		return errors.New("file size must not be negative")
 	}
 	if len(f.Chunks) == 0 {
-		if f.SizeBytes > MaxChunkSize {
-			return errors.New("files above 64 MiB require chunks")
-		}
+		// A chunkless file is one whole blob of ANY size; the 64 MiB bound
+		// is the tensor chunk grid constant, never a blob cap.
 		return nil
 	}
 	var total int64

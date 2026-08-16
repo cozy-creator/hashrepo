@@ -5,6 +5,8 @@ use thiserror::Error;
 mod gguf;
 mod safetensors;
 
+/// The tensor chunk grid constant: the bound on one tensor-planned object.
+/// It is NOT a store admission cap — a blob is one object of any size.
 pub const MAX_OBJECT_SIZE: u64 = 64 * 1024 * 1024;
 pub(crate) const MAX_OBJECT_COUNT: usize = 1_000_000;
 
@@ -12,7 +14,7 @@ pub(crate) const MAX_OBJECT_COUNT: usize = 1_000_000;
 pub enum PlannerId {
     SafetensorsV1,
     GgufV1,
-    RawFixed64mV1,
+    BlobV1,
 }
 
 impl PlannerId {
@@ -21,7 +23,35 @@ impl PlannerId {
         match self {
             Self::SafetensorsV1 => "safetensors-v1",
             Self::GgufV1 => "gguf-v1",
-            Self::RawFixed64mV1 => "raw-fixed-64m-v1",
+            Self::BlobV1 => "blob-v1",
+        }
+    }
+
+    #[must_use]
+    pub const fn tensor_format(self) -> Option<TensorFormat> {
+        match self {
+            Self::SafetensorsV1 => Some(TensorFormat::SafetensorsV1),
+            Self::GgufV1 => Some(TensorFormat::GgufV1),
+            Self::BlobV1 => None,
+        }
+    }
+}
+
+/// The tensor container formats: exactly the planners whose file bodies carry
+/// a record list. `blob-v1` is structurally excluded, so "a chunked blob" is
+/// unrepresentable rather than refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TensorFormat {
+    SafetensorsV1,
+    GgufV1,
+}
+
+impl TensorFormat {
+    #[must_use]
+    pub const fn planner_id(self) -> PlannerId {
+        match self {
+            Self::SafetensorsV1 => PlannerId::SafetensorsV1,
+            Self::GgufV1 => PlannerId::GgufV1,
         }
     }
 }
@@ -30,7 +60,7 @@ impl PlannerId {
 pub enum RegionKind {
     Header,
     Tensor,
-    Raw,
+    Blob,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,6 +114,14 @@ impl Plan {
         if self.regions.len() > MAX_OBJECT_COUNT {
             return Err(PlanError::ObjectLimit);
         }
+        // A blob is ONE region covering the whole file, of any size; the
+        // 64 MiB grid constant applies only to tensor-planned regions. The
+        // scope (is this a tensor container?) decides the shape — the number
+        // never enforces a preference.
+        let blob = self.planner == PlannerId::BlobV1;
+        if blob && self.regions.len() > 1 {
+            return Err(PlanError::InvalidCoverage);
+        }
         if self.file_size == 0 {
             if self.regions.is_empty() {
                 return Ok(());
@@ -95,7 +133,7 @@ impl Plan {
         for region in &self.regions {
             if region.offset != expected_offset
                 || region.length == 0
-                || region.length > MAX_OBJECT_SIZE
+                || (!blob && region.length > MAX_OBJECT_SIZE)
             {
                 return Err(PlanError::InvalidCoverage);
             }
@@ -170,7 +208,7 @@ pub fn plan<S: ByteSource + ?Sized>(source: &S) -> Result<Plan, PlanError> {
 
 fn plan_once<S: ByteSource + ?Sized>(source: &S) -> Result<Plan, PlanError> {
     if source.len() < 10 {
-        let plan = raw_plan(source.len())?;
+        let plan = blob_plan(source.len());
         plan.validate()?;
         return Ok(plan);
     }
@@ -184,19 +222,28 @@ fn plan_once<S: ByteSource + ?Sized>(source: &S) -> Result<Plan, PlanError> {
         plan.validate()?;
         return Ok(plan);
     }
-    let plan = raw_plan(source.len())?;
+    let plan = blob_plan(source.len());
     plan.validate()?;
     Ok(plan)
 }
 
-pub(crate) fn raw_plan(file_size: u64) -> Result<Plan, PlanError> {
-    let mut regions = Vec::new();
-    append_split_region(&mut regions, 0, file_size, RegionKind::Raw)?;
-    Ok(Plan {
-        planner: PlannerId::RawFixed64mV1,
+/// The whole-blob plan for every non-tensor file: one unchunked region of any
+/// size (none when empty). There is no raw grid and no fallback splitting.
+pub(crate) fn blob_plan(file_size: u64) -> Plan {
+    let regions = if file_size == 0 {
+        Vec::new()
+    } else {
+        vec![Region {
+            offset: 0,
+            length: file_size,
+            kind: RegionKind::Blob,
+        }]
+    };
+    Plan {
+        planner: PlannerId::BlobV1,
         file_size,
         regions,
-    })
+    }
 }
 
 pub(crate) fn append_split_region(
@@ -239,25 +286,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn raw_plan_uses_bounded_contiguous_regions() {
-        let plan = raw_plan(MAX_OBJECT_SIZE + 1).unwrap();
-        assert_eq!(plan.planner, PlannerId::RawFixed64mV1);
+    fn a_blob_plan_is_one_region_of_any_size() {
+        let plan = blob_plan(5 * (MAX_OBJECT_SIZE + 1));
+        assert_eq!(plan.planner, PlannerId::BlobV1);
         assert_eq!(
             plan.regions,
-            vec![
-                Region {
-                    offset: 0,
-                    length: MAX_OBJECT_SIZE,
-                    kind: RegionKind::Raw,
-                },
-                Region {
-                    offset: MAX_OBJECT_SIZE,
-                    length: 1,
-                    kind: RegionKind::Raw,
-                },
-            ]
+            vec![Region {
+                offset: 0,
+                length: 5 * (MAX_OBJECT_SIZE + 1),
+                kind: RegionKind::Blob,
+            }]
         );
         plan.validate().unwrap();
+    }
+
+    #[test]
+    fn a_blob_plan_never_splits_at_the_tensor_grid() {
+        let plan = blob_plan(MAX_OBJECT_SIZE + 1);
+        assert_eq!(plan.regions.len(), 1, "the raw grid is dead");
+        plan.validate().unwrap();
+    }
+
+    #[test]
+    fn a_multi_region_blob_plan_refuses() {
+        let plan = Plan {
+            planner: PlannerId::BlobV1,
+            file_size: 4,
+            regions: vec![
+                Region {
+                    offset: 0,
+                    length: 2,
+                    kind: RegionKind::Blob,
+                },
+                Region {
+                    offset: 2,
+                    length: 2,
+                    kind: RegionKind::Blob,
+                },
+            ],
+        };
+        assert!(matches!(plan.validate(), Err(PlanError::InvalidCoverage)));
+    }
+
+    #[test]
+    fn tensor_regions_keep_the_grid_cap_and_blob_regions_do_not() {
+        let oversized = |planner| Plan {
+            planner,
+            file_size: MAX_OBJECT_SIZE + 1,
+            regions: vec![Region {
+                offset: 0,
+                length: MAX_OBJECT_SIZE + 1,
+                kind: RegionKind::Tensor,
+            }],
+        };
+        assert!(matches!(
+            oversized(PlannerId::SafetensorsV1).validate(),
+            Err(PlanError::InvalidCoverage)
+        ));
+        oversized(PlannerId::BlobV1).validate().unwrap();
     }
 
     #[test]
@@ -266,52 +352,52 @@ mod tests {
             vec![Region {
                 offset: 1,
                 length: 3,
-                kind: RegionKind::Raw,
+                kind: RegionKind::Tensor,
             }],
             vec![
                 Region {
                     offset: 0,
                     length: 2,
-                    kind: RegionKind::Raw,
+                    kind: RegionKind::Tensor,
                 },
                 Region {
                     offset: 3,
                     length: 1,
-                    kind: RegionKind::Raw,
+                    kind: RegionKind::Tensor,
                 },
             ],
             vec![
                 Region {
                     offset: 0,
                     length: 3,
-                    kind: RegionKind::Raw,
+                    kind: RegionKind::Tensor,
                 },
                 Region {
                     offset: 2,
                     length: 2,
-                    kind: RegionKind::Raw,
+                    kind: RegionKind::Tensor,
                 },
             ],
             vec![Region {
                 offset: 0,
                 length: 0,
-                kind: RegionKind::Raw,
+                kind: RegionKind::Tensor,
             }],
             vec![Region {
                 offset: 0,
                 length: MAX_OBJECT_SIZE + 1,
-                kind: RegionKind::Raw,
+                kind: RegionKind::Tensor,
             }],
             vec![Region {
                 offset: 0,
                 length: 3,
-                kind: RegionKind::Raw,
+                kind: RegionKind::Tensor,
             }],
         ];
 
         for regions in invalid {
             let plan = Plan {
-                planner: PlannerId::RawFixed64mV1,
+                planner: PlannerId::SafetensorsV1,
                 file_size: 4,
                 regions,
             };
@@ -328,11 +414,11 @@ mod tests {
             .map(|offset| Region {
                 offset: offset as u64,
                 length: 1,
-                kind: RegionKind::Raw,
+                kind: RegionKind::Tensor,
             })
             .collect();
         let plan = Plan {
-            planner: PlannerId::RawFixed64mV1,
+            planner: PlannerId::SafetensorsV1,
             file_size: MAX_OBJECT_COUNT as u64 + 1,
             regions,
         };
@@ -358,23 +444,26 @@ mod tests {
     }
 
     #[test]
-    fn raw_planning_refuses_cardinality_before_allocating_regions() {
-        assert!(matches!(plan(&HugeSource), Err(PlanError::ObjectLimit)));
+    fn a_huge_non_tensor_source_plans_as_one_blob_not_a_grid() {
+        let plan = plan(&HugeSource).unwrap();
+        assert_eq!(plan.planner, PlannerId::BlobV1);
+        assert_eq!(plan.regions.len(), 1);
+        assert_eq!(plan.regions[0].length, HugeSource.len());
     }
 
     #[test]
     fn empty_file_has_one_canonical_empty_partition() {
-        let empty = raw_plan(0).unwrap();
+        let empty = blob_plan(0);
         assert!(empty.regions.is_empty());
         empty.validate().unwrap();
 
         let noncanonical = Plan {
-            planner: PlannerId::RawFixed64mV1,
+            planner: PlannerId::BlobV1,
             file_size: 0,
             regions: vec![Region {
                 offset: 0,
                 length: 0,
-                kind: RegionKind::Raw,
+                kind: RegionKind::Blob,
             }],
         };
         assert!(matches!(

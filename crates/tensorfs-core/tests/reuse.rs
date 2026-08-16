@@ -70,7 +70,7 @@ fn borrowed_slices_pass_directly_through_the_closed_registry() {
     let bytes = b"ordinary raw bytes".as_slice();
     let planned = plan(bytes).unwrap();
 
-    assert_eq!(planned.planner(), PlannerId::RawFixed64mV1);
+    assert_eq!(planned.planner(), PlannerId::BlobV1);
 }
 
 fn tensor_digests(hashed: &HashedPlan) -> Vec<String> {

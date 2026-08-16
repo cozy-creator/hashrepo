@@ -7,8 +7,9 @@ from typing import Any
 
 from .refs import CASRef
 
-# Every independently addressed object remains at most 64 MiB. This is a wire
-# bound, not a promise that chunk offsets are fixed multiples of this value.
+# The tensor chunk grid constant: every CHUNKED object is at most 64 MiB.
+# A chunkless file is one whole blob of any size — this is not an admission
+# cap. The bound is a wire fact for chunks, not a fixed-offset promise.
 MAX_CHUNK_SIZE = 64 << 20
 FORMAT = 1
 MAX_SIZE = (1 << 63) - 1
@@ -92,8 +93,8 @@ class FileEntry:
         if not 0 <= self.size_bytes <= MAX_SIZE:
             raise ValueError(f"file size must be in [0, {MAX_SIZE}]")
         if not self.chunks:
-            if self.size_bytes > MAX_CHUNK_SIZE:
-                raise ValueError("files above 64 MiB require chunks")
+            # A chunkless file is one whole blob of ANY size; the 64 MiB
+            # bound is the tensor chunk grid constant, never a blob cap.
             return
         if sum(chunk.length for chunk in self.chunks) != self.size_bytes:
             raise ValueError("chunk lengths must sum exactly to the file size")

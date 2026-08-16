@@ -285,6 +285,16 @@ pub enum SyncError {
     ReplansExhausted(u32),
     #[error("completion still not terminal after {attempts} calls (last: {last})")]
     CompletionExhausted { attempts: u32, last: String },
+    #[error(
+        "object {digest} is {length} bytes, above the {limit}-byte TFP1 pack payload; \
+         blobs above the pack bound need the th#2064 multipart direct-R2 blob grants, \
+         which this wire does not carry yet"
+    )]
+    ObjectExceedsPackPayload {
+        digest: ObjectDigest,
+        length: u64,
+        limit: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -330,8 +340,8 @@ fn data_closure(snapshot: &Snapshot) -> Vec<(ObjectDigest, u64)> {
     let mut seen = HashSet::new();
     let mut closure = Vec::new();
     for (_path, entry) in snapshot.entries() {
-        if let Entry::File { records, .. } = entry {
-            for record in records {
+        if let Entry::File { body, .. } = entry {
+            for record in body.records().iter() {
                 if let FileRecord::Data { digest, length } = record
                     && seen.insert(*digest.as_bytes())
                 {
@@ -441,6 +451,21 @@ pub fn push_snapshot<T: SyncTransport>(
     let _pin = PendingSyncPin { meta, lease };
     let tfm1_bytes = decoded.to_bytes();
 
+    // A blob larger than one pack payload cannot ride this wire at all: TFP1
+    // stays capped by design, and the multipart lane is th#2064's. Refuse
+    // typed and up front — before any transport call — rather than encoding
+    // a pack that can only fail.
+    let closure = data_closure(&decoded);
+    for (digest, length) in &closure {
+        if *length > MAX_PACK_PAYLOAD {
+            return Err(SyncError::ObjectExceedsPackPayload {
+                digest: *digest,
+                length: *length,
+                limit: MAX_PACK_PAYLOAD,
+            });
+        }
+    }
+
     let mut report = PushReport::default();
     let plan = transport.declare(&tfm1_bytes, expected_head)?;
     if plan.snapshot_id != *snapshot {
@@ -454,9 +479,9 @@ pub fn push_snapshot<T: SyncTransport>(
     // exactly as uploaded ones do: a resumed push that finds most of its
     // closure already promoted must not read as a push doing nothing.
     report.skipped_remote_resident = plan.have.len() as u64;
-    let lengths: std::collections::HashMap<[u8; 32], u64> = data_closure(&decoded)
-        .into_iter()
-        .map(|(digest, length)| (*digest.as_bytes(), length))
+    let lengths: std::collections::HashMap<[u8; 32], u64> = closure
+        .iter()
+        .map(|(digest, length)| (*digest.as_bytes(), *length))
         .collect();
     for digest in &plan.have {
         if let Some(length) = lengths.get(digest.as_bytes()) {
@@ -474,7 +499,6 @@ pub fn push_snapshot<T: SyncTransport>(
     // The manifest we declared is the only authority on which objects exist
     // and in what order; the remote's answer is checked against it, never
     // trusted for it.
-    let closure = data_closure(&decoded);
     let mut missing = plan.missing;
     verify_canonical_missing(&closure, &missing)?;
     loop {

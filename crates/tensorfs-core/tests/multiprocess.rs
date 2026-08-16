@@ -61,7 +61,7 @@ fn commit_one(meta: &WorkspaceStore, workspace: &str, fill: u8) {
         &[Mutation::CreateFile {
             path: "model.bin".to_owned(),
             executable: false,
-            planner: PlannerId::RawFixed64mV1,
+            planner: PlannerId::BlobV1,
             records: vec![FileRecord::Data {
                 digest: admitted.digest(),
                 length: bytes.len() as u64,

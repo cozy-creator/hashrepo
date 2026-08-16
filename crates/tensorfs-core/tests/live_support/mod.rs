@@ -181,10 +181,10 @@ pub fn file_bytes(meta: &WorkspaceStore, id: &SnapshotId, path: &str) -> Vec<u8>
         if entry_path != path {
             continue;
         }
-        let Entry::File { records, .. } = entry else {
+        let Entry::File { body, .. } = entry else {
             panic!("{path} is not a regular file");
         };
-        for record in records {
+        for record in body.records().iter() {
             match record {
                 FileRecord::Hole { length } => {
                     out.extend(std::iter::repeat_n(0_u8, usize::try_from(*length).unwrap()));

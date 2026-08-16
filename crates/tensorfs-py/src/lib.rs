@@ -138,7 +138,7 @@ const fn region_kind_name(kind: RegionKind) -> &'static str {
     match kind {
         RegionKind::Header => "header",
         RegionKind::Tensor => "tensor",
-        RegionKind::Raw => "raw",
+        RegionKind::Blob => "blob",
     }
 }
 
@@ -206,7 +206,7 @@ impl PyTempCollection {
 pub struct PyRegion {
     offset: u64,
     length: u64,
-    /// `"header"`, `"tensor"` or `"raw"`.
+    /// `"header"`, `"tensor"` or `"blob"`.
     kind: String,
 }
 
@@ -252,7 +252,7 @@ pub struct PyPlan {
 
 #[pymethods]
 impl PyPlan {
-    /// `"safetensors-v1"`, `"gguf-v1"` or `"raw-fixed-64m-v1"`.
+    /// `"safetensors-v1"`, `"gguf-v1"` or `"blob-v1"`.
     #[getter]
     fn planner(&self) -> &str {
         &self.planner
@@ -478,6 +478,7 @@ pub struct PySnapshotEntry {
     planner: Option<String>,
     logical_size: Option<u64>,
     records: Option<Vec<Py<PyFileRecord>>>,
+    digest: Option<String>,
     target: Option<String>,
     ordinal: Option<u64>,
 }
@@ -515,6 +516,14 @@ impl PySnapshotEntry {
         self.records
             .as_ref()
             .map(|records| records.iter().map(|item| item.clone_ref(py)).collect())
+    }
+
+    /// The whole-file SHA-256 (bare hex) of a `blob-v1` entry, else `None`.
+    /// Tensor entries have no whole-file hash — their identity is the record
+    /// list.
+    #[getter]
+    fn digest(&self) -> Option<&str> {
+        self.digest.as_deref()
     }
 
     #[getter]
@@ -572,10 +581,11 @@ impl PySnapshot {
             if entry_path != path {
                 continue;
             }
-            let Entry::File { records, .. } = entry else {
+            let Entry::File { body, .. } = entry else {
                 return Ok(None);
             };
-            return records
+            return body
+                .records()
                 .iter()
                 .map(|record| Py::new(py, PyFileRecord::from_core(record)))
                 .collect::<PyResult<Vec<_>>>()
@@ -894,26 +904,29 @@ fn decode_snapshot(py: Python<'_>, data: &[u8]) -> PyResult<PySnapshot> {
                     planner: None,
                     logical_size: None,
                     records: None,
+                    digest: None,
                     target: None,
                     ordinal: None,
                 },
-                Entry::File {
-                    executable,
-                    planner,
-                    logical_size,
-                    records,
-                } => PySnapshotEntry {
+                Entry::File { executable, body } => PySnapshotEntry {
                     path: path.clone(),
                     kind: "file".to_owned(),
                     executable: Some(*executable),
-                    planner: Some(planner_name(*planner).to_owned()),
-                    logical_size: Some(*logical_size),
+                    planner: Some(planner_name(body.planner_id()).to_owned()),
+                    logical_size: Some(body.logical_size()),
+                    // The effective record run: a tensor body's records, or a
+                    // nonempty blob's single whole-file record. Feed it to
+                    // `RecordsReader` unchanged.
                     records: Some(
-                        records
+                        body.records()
                             .iter()
                             .map(|record| Py::new(py, PyFileRecord::from_core(record)))
                             .collect::<PyResult<Vec<_>>>()?,
                     ),
+                    digest: match body {
+                        tfm1::FileBody::Blob { digest, .. } => Some(hex_of(digest.as_bytes())),
+                        tfm1::FileBody::Tensor { .. } => None,
+                    },
                     target: None,
                     ordinal: None,
                 },
@@ -924,6 +937,7 @@ fn decode_snapshot(py: Python<'_>, data: &[u8]) -> PyResult<PySnapshot> {
                     planner: None,
                     logical_size: None,
                     records: None,
+                    digest: None,
                     target: Some(target.clone()),
                     ordinal: None,
                 },
@@ -934,6 +948,7 @@ fn decode_snapshot(py: Python<'_>, data: &[u8]) -> PyResult<PySnapshot> {
                     planner: None,
                     logical_size: None,
                     records: None,
+                    digest: None,
                     target: None,
                     ordinal: Some(*ordinal),
                 },

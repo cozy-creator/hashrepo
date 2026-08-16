@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::{MAX_OBJECT_SIZE, PlannerId};
-use tensorfs_core::tfm1::{FileRecord, SnapshotBuilder, SnapshotId, decode};
+use tensorfs_core::tfm1::{EMPTY_BLOB_DIGEST, FileRecord, SnapshotBuilder, SnapshotId, decode};
 
 const CORPUS_DIR: &str = "../../spec/v1/tfm1-vectors";
 const REGEN_ENV: &str = "TENSORFS_WRITE_TFM1_VECTORS";
@@ -66,14 +66,29 @@ fn golden_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
         .to_bytes();
     let empty_id = SnapshotId::of(&empty);
 
-    let single_file = {
+    let single_blob = {
+        let mut builder = SnapshotBuilder::new(None);
+        builder.file("model.bin", false, PlannerId::BlobV1, vec![data(0x11, 18)]);
+        builder.finish().expect("valid").to_bytes()
+    };
+
+    // The old grammar capped one record at 64 MiB, so a non-tensor file this
+    // size could only exist as a grid. Here it is ONE recordless body — and
+    // the encoded entry is the same 40 body bytes as any other blob.
+    let large_blob = {
         let mut builder = SnapshotBuilder::new(None);
         builder.file(
-            "model.bin",
+            "video.webm",
             false,
-            PlannerId::RawFixed64mV1,
-            vec![data(0x11, 18)],
+            PlannerId::BlobV1,
+            vec![data(0x12, 5 * 1024 * 1024 * 1024 + 3)],
         );
+        builder.finish().expect("valid").to_bytes()
+    };
+
+    let empty_blob = {
+        let mut builder = SnapshotBuilder::new(None);
+        builder.file("empty.bin", false, PlannerId::BlobV1, Vec::new());
         builder.finish().expect("valid").to_bytes()
     };
 
@@ -94,20 +109,23 @@ fn golden_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
             vec![data(0x23, 64), data(0x24, 512)],
         );
         builder.file(
-            "run.sh",
-            true,
-            PlannerId::RawFixed64mV1,
-            vec![data(0x25, 5)],
+            "config.json",
+            false,
+            PlannerId::BlobV1,
+            vec![data(0x26, 415)],
         );
+        builder.file("run.sh", true, PlannerId::BlobV1, vec![data(0x25, 5)]);
         builder.finish().expect("valid").to_bytes()
     };
 
+    // Holes remain representable for TENSOR bodies only; a hole in a blob is
+    // unrepresentable by construction.
     let sparse = {
         let mut builder = SnapshotBuilder::new(None);
         builder.file(
-            "sparse.bin",
+            "sparse.safetensors",
             false,
-            PlannerId::RawFixed64mV1,
+            PlannerId::SafetensorsV1,
             vec![
                 FileRecord::Hole { length: 4096 },
                 data(0x31, 100),
@@ -122,17 +140,12 @@ fn golden_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
         builder.file(
             "z-original.bin",
             false,
-            PlannerId::RawFixed64mV1,
+            PlannerId::BlobV1,
             vec![data(0x41, 33)],
         );
         builder.hardlink("m-alias.bin", "z-original.bin");
         builder.hardlink("a-alias.bin", "z-original.bin");
-        builder.file(
-            "b-solo.bin",
-            false,
-            PlannerId::RawFixed64mV1,
-            vec![data(0x42, 7)],
-        );
+        builder.file("b-solo.bin", false, PlannerId::BlobV1, vec![data(0x42, 7)]);
         builder.finish().expect("valid").to_bytes()
     };
 
@@ -142,7 +155,7 @@ fn golden_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
         builder.file(
             "snapshots/current.bin",
             false,
-            PlannerId::RawFixed64mV1,
+            PlannerId::BlobV1,
             vec![data(0x51, 9)],
         );
         builder.symlink("latest", "snapshots/current.bin");
@@ -158,9 +171,9 @@ fn golden_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
     let boundary = {
         let mut builder = SnapshotBuilder::new(None);
         builder.file(
-            "boundary.bin",
+            "boundary.safetensors",
             false,
-            PlannerId::RawFixed64mV1,
+            PlannerId::SafetensorsV1,
             vec![
                 data(0x61, 1),
                 data(0x62, MAX_OBJECT_SIZE - 1),
@@ -168,18 +181,13 @@ fn golden_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
                 FileRecord::Hole { length: 1 },
             ],
         );
-        builder.file("zero.bin", false, PlannerId::RawFixed64mV1, Vec::new());
+        builder.file("zero.bin", false, PlannerId::BlobV1, Vec::new());
         builder.finish().expect("valid").to_bytes()
     };
 
     let with_parent = {
         let mut builder = SnapshotBuilder::new(Some(empty_id));
-        builder.file(
-            "child.bin",
-            false,
-            PlannerId::RawFixed64mV1,
-            vec![data(0x71, 3)],
-        );
+        builder.file("child.bin", false, PlannerId::BlobV1, vec![data(0x71, 3)]);
         builder.finish().expect("valid").to_bytes()
     };
 
@@ -201,23 +209,33 @@ fn golden_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
             empty,
         ),
         (
-            "single-file",
-            "one raw-planned regular file with one data record",
-            single_file,
+            "single-blob",
+            "one whole-blob regular file: logical size and whole-file digest, no records",
+            single_blob,
+        ),
+        (
+            "large-blob",
+            "a blob declaring 5 GiB + 3 bytes, inexpressible as one record in the retired grammar",
+            large_blob,
+        ),
+        (
+            "empty-blob",
+            "a zero-size blob carrying the digest of the empty byte string",
+            empty_blob,
         ),
         (
             "tree",
-            "nested explicit directories, safetensors provenance, and an executable file",
+            "a mixed tree: explicit directories, safetensors records, a config blob, an executable blob",
             tree,
         ),
         (
-            "sparse-file",
-            "hole, data, and a beyond-object-size trailing hole",
+            "sparse-tensor",
+            "hole, data, and a beyond-object-size trailing hole in a tensor body",
             sparse,
         ),
         (
             "hardlink-group",
-            "a three-path link group re-rooted onto its first sorted path",
+            "a three-path link group over a blob, re-rooted onto its first sorted path",
             hardlinks,
         ),
         (
@@ -232,7 +250,7 @@ fn golden_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
         ),
         (
             "boundary-objects",
-            "data record lengths 1, 64 MiB minus one, and exactly 64 MiB, plus an empty file",
+            "tensor data record lengths 1, 64 MiB minus one, and exactly 64 MiB, plus an empty blob",
             boundary,
         ),
         (
@@ -242,7 +260,7 @@ fn golden_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
         ),
         (
             "gguf-provenance",
-            "a gguf-v1 planned file pinning the remaining planner tag",
+            "a gguf-v1 planned file pinning the remaining tensor planner tag",
             gguf_provenance,
         ),
     ]
@@ -283,10 +301,11 @@ impl Raw {
         self.path(path).bytes(&[1])
     }
 
-    fn raw_file(self, path: &str, logical_size: u64, records: &[(u8, u64)]) -> Self {
+    /// A safetensors-provenance file body: the record-carrying shape.
+    fn tensor_file(self, path: &str, logical_size: u64, records: &[(u8, u64)]) -> Self {
         let mut raw = self
             .path(path)
-            .bytes(&[2, 0, 3])
+            .bytes(&[2, 0, 1])
             .u64(logical_size)
             .u64(records.len() as u64);
         for (tag, length) in records {
@@ -298,11 +317,23 @@ impl Raw {
         }
         raw
     }
+
+    /// A blob file body: logical size then the whole-file digest — nothing
+    /// else, ever.
+    fn blob_file(self, path: &str, logical_size: u64, digest: &[u8; 32]) -> Self {
+        self.path(path)
+            .bytes(&[2, 0, 4])
+            .u64(logical_size)
+            .bytes(digest)
+    }
 }
 
 fn refusal_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
     let mut cases = Vec::new();
-    let valid = Raw::manifest().entry_count(1).raw_file("a", 4, &[(1, 4)]).0;
+    let valid = Raw::manifest()
+        .entry_count(1)
+        .tensor_file("a.safetensors", 4, &[(1, 4)])
+        .0;
 
     let mut bad_magic = valid.clone();
     bad_magic[0] = b'X';
@@ -350,7 +381,7 @@ fn refusal_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
         "missing-parent-directory",
         Raw::manifest()
             .entry_count(1)
-            .raw_file("a/b", 1, &[(1, 1)])
+            .blob_file("a/b", 1, &[0x99; 32])
             .0,
     ));
 
@@ -389,7 +420,7 @@ fn refusal_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
         Raw::manifest()
             .entry_count(1)
             .path("f")
-            .bytes(&[2, 2, 3])
+            .bytes(&[2, 2, 1])
             .u64(0)
             .u64(0)
             .0,
@@ -405,22 +436,45 @@ fn refusal_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
             .u64(0)
             .0,
     ));
+    // Planner byte 3 was `raw-fixed-64m-v1`, the retired 64 MiB grid for
+    // non-tensor files. It is retired, not aliased: the tag refuses exactly
+    // like a tag that never existed, even framing a well-formed record list.
+    cases.push((
+        "retired-raw-planner",
+        "unknown-planner",
+        Raw::manifest()
+            .entry_count(1)
+            .path("f")
+            .bytes(&[2, 0, 3])
+            .u64(4)
+            .u64(1)
+            .bytes(&[1])
+            .bytes(&[0x99; 32])
+            .u64(4)
+            .0,
+    ));
     cases.push((
         "unknown-record-tag",
         "unknown-record-tag",
-        Raw::manifest().entry_count(1).raw_file("f", 1, &[(9, 1)]).0,
+        Raw::manifest()
+            .entry_count(1)
+            .tensor_file("f", 1, &[(9, 1)])
+            .0,
     ));
     cases.push((
         "zero-length-record",
         "zero-length-record",
-        Raw::manifest().entry_count(1).raw_file("f", 1, &[(1, 0)]).0,
+        Raw::manifest()
+            .entry_count(1)
+            .tensor_file("f", 1, &[(1, 0)])
+            .0,
     ));
     cases.push((
         "adjacent-holes",
         "adjacent-holes",
         Raw::manifest()
             .entry_count(1)
-            .raw_file("f", 2, &[(2, 1), (2, 1)])
+            .tensor_file("f", 2, &[(2, 1), (2, 1)])
             .0,
     ));
     cases.push((
@@ -428,13 +482,16 @@ fn refusal_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
         "data-too-large",
         Raw::manifest()
             .entry_count(1)
-            .raw_file("f", MAX_OBJECT_SIZE + 1, &[(1, MAX_OBJECT_SIZE + 1)])
+            .tensor_file("f", MAX_OBJECT_SIZE + 1, &[(1, MAX_OBJECT_SIZE + 1)])
             .0,
     ));
     cases.push((
         "length-sum-mismatch",
         "length-sum-mismatch",
-        Raw::manifest().entry_count(1).raw_file("f", 5, &[(1, 4)]).0,
+        Raw::manifest()
+            .entry_count(1)
+            .tensor_file("f", 5, &[(1, 4)])
+            .0,
     ));
     // The record sum overflows u64, and the declared logical size is the
     // value a WRAPPING sum would land on: u64::MAX + 64 MiB wraps to
@@ -445,7 +502,7 @@ fn refusal_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
         "length-sum-mismatch",
         Raw::manifest()
             .entry_count(1)
-            .raw_file(
+            .tensor_file(
                 "f",
                 MAX_OBJECT_SIZE - 1,
                 &[(2, u64::MAX), (1, MAX_OBJECT_SIZE)],
@@ -458,7 +515,7 @@ fn refusal_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
         Raw::manifest()
             .entry_count(1)
             .path("f")
-            .bytes(&[2, 0, 3])
+            .bytes(&[2, 0, 1])
             .u64(0)
             .u64(1_000_001)
             .0,
@@ -486,6 +543,34 @@ fn refusal_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
             .path("link")
             .bytes(&[3])
             .bytes(&0_u32.to_le_bytes())
+            .0,
+    ));
+
+    // A blob body carries no record list; record framing appended after the
+    // digest is trailing input, exactly as any other byte would be.
+    let mut blob_trailing = Raw::manifest()
+        .entry_count(1)
+        .blob_file("f", 4, &[0x99; 32])
+        .0;
+    blob_trailing.extend_from_slice(&1_u64.to_le_bytes());
+    blob_trailing.push(1);
+    blob_trailing.extend_from_slice(&[0x99; 32]);
+    blob_trailing.extend_from_slice(&4_u64.to_le_bytes());
+    cases.push(("blob-trailing-records", "trailing-bytes", blob_trailing));
+
+    let mut blob_short_digest = Raw::manifest().entry_count(1).path("f").bytes(&[2, 0, 4]).0;
+    blob_short_digest.extend_from_slice(&4_u64.to_le_bytes());
+    blob_short_digest.extend_from_slice(&[0x99; 16]);
+    cases.push(("blob-truncated-digest", "truncated", blob_short_digest));
+
+    // A zero-size blob has exactly one canonical digest — sha256("") — so an
+    // empty body cannot smuggle a second identity for the same tree facts.
+    cases.push((
+        "empty-blob-digest",
+        "empty-blob-digest",
+        Raw::manifest()
+            .entry_count(1)
+            .blob_file("f", 0, &[0x99; 32])
             .0,
     ));
 
@@ -528,6 +613,9 @@ fn hex_id(bytes: &[u8]) -> String {
 
 fn regenerate(corpus_dir: &Path) {
     let fixtures = corpus_dir.join("fixtures");
+    // The corpus is REPLACED, not appended: fixtures of a retired grammar
+    // must not survive a regeneration.
+    let _ = fs::remove_dir_all(&fixtures);
     fs::create_dir_all(&fixtures).expect("fixture directory is writable");
     let mut corpus = Corpus {
         schema: "tfm1-vectors.schema.json".to_owned(),
@@ -611,22 +699,70 @@ fn shared_tfm1_vectors_match_the_canonical_encoder_and_decoder() {
     }
 }
 
+/// The corpus directory must hold exactly the indexed fixtures — the retired
+/// grammar's vectors dying in the same commit is part of the contract, and a
+/// stray stale fixture would silently stop being validated by anyone.
 #[test]
-fn every_single_byte_mutation_of_a_golden_fixture_refuses_or_changes_the_id() {
-    let (_, _, bytes) = &golden_bytes()[1];
-    for index in 0..bytes.len() {
-        let mut mutated = bytes.clone();
-        mutated[index] ^= 0x01;
-        match decode(&mutated) {
-            Err(_) => {}
-            Ok(snapshot) => {
-                assert_eq!(snapshot.to_bytes(), mutated, "canonical re-encode");
-                assert_ne!(
-                    SnapshotId::of(&mutated),
-                    SnapshotId::of(bytes),
-                    "byte {index}: an accepted mutation must change the identity"
-                );
+fn the_fixture_directory_holds_exactly_the_indexed_fixtures() {
+    let corpus_dir = Path::new(CORPUS_DIR);
+    let corpus: Corpus = serde_json::from_str(
+        &fs::read_to_string(corpus_dir.join("tfm1-vectors.json"))
+            .expect("the committed corpus exists"),
+    )
+    .expect("the committed corpus parses strictly");
+    let mut indexed: Vec<String> = corpus
+        .golden
+        .iter()
+        .map(|row| row.fixture.clone())
+        .chain(corpus.refusals.iter().map(|row| row.fixture.clone()))
+        .collect();
+    indexed.sort();
+    let mut resident: Vec<String> = fs::read_dir(corpus_dir.join("fixtures"))
+        .expect("fixtures directory exists")
+        .map(|entry| {
+            format!(
+                "fixtures/{}",
+                entry
+                    .expect("dirent reads")
+                    .file_name()
+                    .to_str()
+                    .expect("fixture names are ASCII")
+            )
+        })
+        .collect();
+    resident.sort();
+    assert_eq!(resident, indexed, "stale or missing fixture files");
+}
+
+#[test]
+fn every_single_byte_mutation_of_every_golden_fixture_refuses_or_changes_the_id() {
+    for (name, _, bytes) in &golden_bytes() {
+        for index in 0..bytes.len() {
+            let mut mutated = bytes.clone();
+            mutated[index] ^= 0x01;
+            match decode(&mutated) {
+                Err(_) => {}
+                Ok(snapshot) => {
+                    assert_eq!(
+                        snapshot.to_bytes(),
+                        mutated,
+                        "{name} byte {index}: canonical re-encode"
+                    );
+                    assert_ne!(
+                        SnapshotId::of(&mutated),
+                        SnapshotId::of(bytes),
+                        "{name} byte {index}: an accepted mutation must change the identity"
+                    );
+                }
             }
         }
     }
+}
+
+/// The empty-blob digest constant really is sha256 of zero bytes, proven
+/// against the hash implementation rather than trusted as a literal.
+#[test]
+fn the_empty_blob_digest_is_sha256_of_nothing() {
+    let empty: [u8; 32] = Sha256::digest([]).into();
+    assert_eq!(EMPTY_BLOB_DIGEST, ObjectDigest::from_bytes(empty));
 }

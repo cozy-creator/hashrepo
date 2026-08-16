@@ -278,6 +278,35 @@ impl ObjectStore {
         self.put_bytes(&buffer)
     }
 
+    /// Admits one contiguous source range as ONE object of any size — the
+    /// blob lane. Bytes stream through the leased verifying writer in bounded
+    /// blocks; nothing here assumes the tensor grid constant, and peak memory
+    /// is one block regardless of blob size.
+    pub fn admit_source_range<S>(
+        &self,
+        source: &S,
+        offset: u64,
+        length: u64,
+    ) -> Result<AdmittedObject, StoreError>
+    where
+        S: ByteSource + ?Sized,
+    {
+        let end = offset
+            .checked_add(length)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let mut writer = self.writer()?;
+        let mut buffer = vec![0_u8; VERIFY_BUFFER_SIZE];
+        let mut position = offset;
+        while position < end {
+            let take = usize::try_from((end - position).min(VERIFY_BUFFER_SIZE as u64))
+                .expect("a block never exceeds usize");
+            source.read_exact_at(position, &mut buffer[..take])?;
+            writer.write_all(&buffer[..take])?;
+            position += take as u64;
+        }
+        writer.finish()
+    }
+
     /// Opens a resident object for reading, refusing symlinks and every
     /// non-regular file at the digest path.
     pub fn open_object(&self, digest: &ObjectDigest) -> Result<File, StoreError> {

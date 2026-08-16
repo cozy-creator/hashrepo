@@ -129,7 +129,7 @@ fn setup(store_root: &Path, native: &Path, size_mib: usize) {
         &[Mutation::CreateFile {
             path: "model.bin".to_owned(),
             executable: false,
-            planner: PlannerId::RawFixed64mV1,
+            planner: PlannerId::BlobV1,
             records,
         }],
     )

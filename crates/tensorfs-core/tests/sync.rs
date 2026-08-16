@@ -81,7 +81,11 @@ fn mutations_for(meta: &WorkspaceStore, files: &[(&str, Vec<Vec<u8>>)]) -> Vec<M
             Mutation::CreateFile {
                 path: (*path).to_owned(),
                 executable: false,
-                planner: PlannerId::RawFixed64mV1,
+                // Tensor provenance: seal keeps a sparse tensor body's
+                // committed records verbatim, which is what preserves the
+                // multi-object closure these fixtures exist to exercise. A
+                // blob-planner file would materialize into ONE object.
+                planner: PlannerId::SafetensorsV1,
                 records,
             }
         }))
@@ -190,8 +194,8 @@ impl SyncTransport for FakeHub {
         let mut closure = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for (_path, entry) in snapshot.entries() {
-            if let tensorfs_core::tfm1::Entry::File { records, .. } = entry {
-                for record in records {
+            if let tensorfs_core::tfm1::Entry::File { body, .. } = entry {
+                for record in body.records().iter() {
                     if let FileRecord::Data { digest, length } = record
                         && seen.insert(*digest.as_bytes())
                     {
@@ -563,8 +567,8 @@ fn push_then_pull_round_trips_a_sealed_snapshot_byte_exactly() {
     let pulled = meta_b.load_snapshot(&id).expect("snapshot adopted");
     assert_eq!(pulled.snapshot_id(), id);
     for (_path, entry) in pulled.entries() {
-        if let tensorfs_core::tfm1::Entry::File { records, .. } = entry {
-            for record in records {
+        if let tensorfs_core::tfm1::Entry::File { body, .. } = entry {
+            for record in body.records().iter() {
                 if let FileRecord::Data { digest, length } = record {
                     let verified = meta_b.store().verify(digest).expect("object verifies");
                     assert_eq!(verified, *length);
@@ -605,8 +609,8 @@ fn an_edited_clone_pushes_only_its_changed_objects() {
         .entries()
         .iter()
         .find_map(|(path, entry)| match entry {
-            tensorfs_core::tfm1::Entry::File { records, .. } => {
-                Some((path.clone(), records.clone()))
+            tensorfs_core::tfm1::Entry::File { body, .. } => {
+                Some((path.clone(), body.records().into_owned()))
             }
             _ => None,
         })
@@ -744,6 +748,49 @@ fn packs_hold_whole_sorted_objects_within_the_payload_bound() {
     // Every staged pack passed the hub's claim arithmetic (12 + 48n +
     // payload), its signed checksum, and the tfp1 oracle on upload; a claim
     // lying about size, members or bytes would have refused there.
+}
+
+/// A blob above one pack payload cannot ride TFP1 at all — its lane is the
+/// th#2064 multipart direct-R2 blob grant, which this wire does not carry.
+/// The refusal is TYPED, names the object, and fires before any transport
+/// call, so nothing is staged, declared, or half-uploaded.
+#[test]
+fn a_blob_above_the_pack_payload_refuses_typed_before_any_transport_call() {
+    let mib = 1024 * 1024;
+    let root = scratch("big-blob");
+    let meta = WorkspaceStore::open(&root).expect("workspace store opens");
+    meta.create_workspace("publisher")
+        .expect("workspace creates");
+    let big = vec![0x5A_u8; 64 * mib + 1];
+    let admitted = meta.store().put_bytes(&big).expect("blob admits");
+    meta.commit_generation(
+        "publisher",
+        &[Mutation::CreateFile {
+            path: "video.webm".to_owned(),
+            executable: false,
+            planner: PlannerId::BlobV1,
+            records: vec![FileRecord::Data {
+                digest: admitted.digest(),
+                length: admitted.length(),
+            }],
+        }],
+    )
+    .expect("the oversized blob commits");
+    let id = meta.seal_snapshot("publisher", None).expect("seals");
+
+    let hub = FakeHub::new();
+    match push(&meta, &hub, &id, None) {
+        Err(SyncError::ObjectExceedsPackPayload { digest, length, .. }) => {
+            assert_eq!(digest, admitted.digest());
+            assert_eq!(length, 64 * (mib as u64) + 1);
+        }
+        other => panic!("expected the typed th#2064 refusal, got {other:?}"),
+    }
+    let state = hub.state.borrow();
+    assert!(
+        state.sessions.is_empty() && state.staged.is_empty() && state.head.is_none(),
+        "the refusal fired before any transport call"
+    );
 }
 
 #[test]
@@ -1483,8 +1530,8 @@ fn data_digests(meta: &WorkspaceStore, id: &SnapshotId) -> Vec<ObjectDigest> {
     let snapshot = meta.load_snapshot(id).expect("snapshot loads");
     let mut digests = Vec::new();
     for (_path, entry) in snapshot.entries() {
-        if let tensorfs_core::tfm1::Entry::File { records, .. } = entry {
-            for record in records {
+        if let tensorfs_core::tfm1::Entry::File { body, .. } = entry {
+            for record in body.records().iter() {
                 if let FileRecord::Data { digest, .. } = record {
                     digests.push(*digest);
                 }

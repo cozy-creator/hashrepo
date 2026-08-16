@@ -1,11 +1,13 @@
 # TFM1 — the TensorFS canonical snapshot manifest
 
 One snapshot has exactly one byte encoding. `SnapshotId` is the SHA-256 of
-those bytes; there is no second Merkle identity, no per-file whole-file hash,
-and nothing platform-derived (inode numbers, timestamps, owners, randomness)
-can enter them. Equal tree facts with the same explicit parent produce the
-same id on every host. Pre-launch, this format is replaced in place: there is
-no version field, no v2 reader, and no compatibility alias.
+those bytes; there is no second Merkle identity, and nothing platform-derived
+(inode numbers, timestamps, owners, randomness) can enter them. A tensor
+file's identity is its record list — it has no whole-file hash; a blob's
+identity IS its whole-file hash, because a blob is one object. Equal tree
+facts with the same explicit parent produce the same id on every host.
+Pre-launch, this format is replaced in place: there is no version field, no
+v2 reader, and no compatibility alias.
 
 All integers are fixed-width little-endian. There are no varints.
 
@@ -25,10 +27,18 @@ entry :=
 
 file body (kind 2) :=
   executable    u8: 0 | 1
-  planner       u8: 1 safetensors-v1 | 2 gguf-v1 | 3 raw-fixed-64m-v1
+  planner       u8: 1 safetensors-v1 | 2 gguf-v1 | 4 blob-v1
+  body          per planner
+
+tensor body (planner 1, 2) :=
   logical_size  u64
   record_count  u64 (<= 1,000,000)
   record * record_count
+
+blob body (planner 4) :=
+  logical_size  u64
+  digest        32 bytes    SHA-256 of the whole file; SHA-256 of the empty
+                            string iff logical_size == 0
 
 record :=
   tag           u8: 1 data | 2 hole
@@ -43,11 +53,23 @@ hardlink body (kind 4) :=
   ordinal       u64, a previously assigned file ordinal
 ```
 
-Record lengths must sum exactly to `logical_size` (overflow refuses). Zero
-lengths and adjacent holes refuse. A data record never exceeds 64 MiB; holes
-are unbounded. An empty file has zero records. Readers reconstruct solely
-from the ordered digest/length records; the planner byte is provenance and no
-reader loads a planner.
+Tensor bodies: record lengths must sum exactly to `logical_size` (overflow
+refuses). Zero lengths and adjacent holes refuse. A data record never exceeds
+64 MiB — the tensor chunk grid constant, which bounds nothing but tensor
+records; holes are unbounded. An empty tensor file has zero records.
+
+Blob bodies: every non-tensor file is ONE unchunked blob of any size. The
+body is its logical size and the SHA-256 of its whole byte content — there is
+no record list, so a chunked blob, a multi-record blob, and a hole in a blob
+are unrepresentable rather than refused. A zero-size blob must carry exactly
+the SHA-256 of the empty string (refusal `empty-blob-digest`); no other size
+is digest-checked at decode, because verification is admission-time. Planner
+byte 3 — the retired `raw-fixed-64m-v1` grid — refuses as `unknown-planner`:
+retired, not aliased.
+
+Readers reconstruct solely from the body facts (ordered digest/length records
+for tensor bodies, the single whole-file object for blob bodies); the planner
+byte is provenance and no reader loads a planner.
 
 Object ordinals count regular-file entries in path order, starting at zero.
 A hardlink names an already-assigned ordinal, so the carrier of a link group

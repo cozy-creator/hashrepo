@@ -50,7 +50,7 @@ use std::process::{Command, Stdio};
 use harness::{Consistency, Scratch};
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::PlannerId;
-use tensorfs_core::tfm1::{Entry, FileRecord};
+use tensorfs_core::tfm1::{FileRecord, TreeEntry};
 use tensorfs_core::workspace::{Mutation, WorkspaceError, WorkspaceStore};
 
 const ROLE: &str = "TENSORFS_CONC_ROLE";
@@ -133,7 +133,7 @@ fn commit_role(root: &str, writer: u32, workspace: &str) {
         let mutation = Mutation::CreateFile {
             path: format!("w{writer}-r{round}.bin"),
             executable: false,
-            planner: PlannerId::RawFixed64mV1,
+            planner: PlannerId::BlobV1,
             records: vec![FileRecord::Data {
                 digest: admitted.digest(),
                 length: admitted.length(),
@@ -363,7 +363,7 @@ fn a_collector_racing_live_commits_never_costs_a_committed_object() {
         let mutation = Mutation::CreateFile {
             path: format!("r{round}.bin"),
             executable: false,
-            planner: PlannerId::RawFixed64mV1,
+            planner: PlannerId::BlobV1,
             records: vec![FileRecord::Data {
                 digest: admitted.digest(),
                 length: admitted.length(),
@@ -431,7 +431,7 @@ fn a_collector_racing_other_processes_keeps_every_referenced_object() {
         &[Mutation::CreateFile {
             path: "rooted.bin".to_owned(),
             executable: false,
-            planner: PlannerId::RawFixed64mV1,
+            planner: PlannerId::BlobV1,
             records,
         }],
     )
@@ -465,7 +465,7 @@ fn referenced_digests(meta: &WorkspaceStore, workspace: &str) -> Vec<ObjectDiges
     let tree = meta.head_tree(workspace).expect("tree builds");
     let mut digests = Vec::new();
     for (_path, entry) in tree.entries() {
-        if let Entry::File { records, .. } = entry {
+        if let TreeEntry::File { records, .. } = entry {
             for record in records {
                 if let FileRecord::Data { digest, .. } = record {
                     digests.push(*digest);
