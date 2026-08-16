@@ -364,3 +364,19 @@ failure, du semantics, manifest-at-its-own-id, and snapshot deletion as tree
 removal leaving peers intact. **Not covered** (design only, no gate claimed):
 the TFM1 grammar change and its vectors, the multipart grant flow, seal-path
 changes, hub-side anything, and Windows fallback behaviour.
+
+## The filed program (hard cut A→B, per Paul's mandate)
+
+- **tensorfs#68** — TFM1 blob-v1 entries; `raw-fixed-64m-v1` dies; Rust+Go
+  vectors regenerate in the same cut.
+- **tensorfs#69** — the layout: snapshot symlink trees, atomic refs,
+  manifests as blobs at their own id; tree builder replaces materialization.
+- **tensorfs#70** — pointer stubs, format pinned.
+- **tensorfs#71** — GC + accounting over the unified store.
+- **th#2064** (tracker) — multipart direct-R2 blob grants; hub re-pins the Go
+  module; TFP1 untouched.
+- **pgw#1295** (tracker, rewritten a second time) — publish = tree
+  construction; **pgw#1308** — the consumption cutover carrying §9's audit
+  table.
+- **tcg#28** — re-reframed on-thread: artifacts are blobs + symlinks inside
+  the store.
