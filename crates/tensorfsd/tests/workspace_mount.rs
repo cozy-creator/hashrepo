@@ -423,12 +423,23 @@ fn an_8_kib_overwrite_recomposes_exactly_the_touched_object() {
         read_delta / 1024,
         write_delta / 1024,
     );
+    // A gross ceiling on block reads, and deliberately NOT the proof that only
+    // one slot was composed. Measured 2026-08-15, both with a warm cache and
+    // with every object evicted first: a single-slot compose and a forced
+    // whole-file recompose read the SAME volume (0 KiB warm, 96 MiB cold in
+    // both cases). Read volume here is invariant under the regression, so it
+    // cannot discriminate it — the write bound below is what does, and it was
+    // red-proved against exactly that mutation. The exact composition of the
+    // cold-cache 96 MiB was not run to ground; see the PR body.
     assert!(
         read_delta < 96 * MIB,
-        "composing one 64 MiB slot reads one slot, not the file \
+        "the overwrite path must not explode block reads \
          (read {read_delta} bytes across {majflt_delta} major faults; a non-zero fault \
           count means the daemon paged itself in and the prefault did not hold)"
     );
+    // THE discriminating assertion: a whole-file recompose writes 160 MiB here
+    // against one object's 64 MiB, and forcing every slot to compose fails
+    // exactly this line.
     assert!(
         write_delta < 112 * MIB,
         "composing one 64 MiB slot writes one object, not the file (wrote {write_delta} bytes)"
