@@ -11,7 +11,7 @@ use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::PlannerId;
 use tensorfs_core::store::StoreError;
 use tensorfs_core::tfm1::FileRecord;
-use tensorfs_core::workspace::{GcReport, LeaseKind, Mutation, WorkspaceError, WorkspaceStore};
+use tensorfs_core::workspace::{GcReport, Mutation, WorkspaceError, WorkspaceStore};
 
 struct TempRoot(PathBuf);
 
@@ -480,7 +480,7 @@ fn snapshot_and_lease_roots_pin_objects_against_collection() {
         )
         .unwrap();
     let lease = store
-        .acquire_lease("main", "open.bin", LeaseKind::Unlinked, "test-holder")
+        .acquire_unlinked_lease("main", "open.bin", "test-holder")
         .unwrap();
     store
         .commit_generation(

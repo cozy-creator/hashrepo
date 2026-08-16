@@ -80,7 +80,7 @@ use fuser::{
 
 use tensorfs_core::planner::{MAX_OBJECT_SIZE, PlannerId};
 use tensorfs_core::tfm1::{Entry, FileRecord, Snapshot};
-use tensorfs_core::workspace::{LeaseId, LeaseKind, Mutation, WorkspaceError, WorkspaceStore};
+use tensorfs_core::workspace::{LeaseId, Mutation, WorkspaceError, WorkspaceStore};
 
 use crate::MountError;
 use crate::locks::LockTable;
@@ -1088,7 +1088,7 @@ impl WorkspaceFs {
         if needs_lease {
             let lease = self
                 .meta
-                .acquire_lease(&self.workspace, &path, LeaseKind::Unlinked, LEASE_HOLDER)
+                .acquire_unlinked_lease(&self.workspace, &path, LEASE_HOLDER)
                 .map_err(|error| errno(&error))?;
             if let Some(WNode::File(file)) = self.nodes.get_mut(&ino) {
                 file.unlink_lease = Some(lease);
@@ -1453,12 +1453,10 @@ impl Filesystem for WorkspaceFs {
                         && file.open_handles > 0
                         && file.unlink_lease.is_none();
                     if needs_lease {
-                        match self.meta.acquire_lease(
-                            &self.workspace,
-                            &to,
-                            LeaseKind::Unlinked,
-                            LEASE_HOLDER,
-                        ) {
+                        match self
+                            .meta
+                            .acquire_unlinked_lease(&self.workspace, &to, LEASE_HOLDER)
+                        {
                             Ok(lease) => {
                                 if let Some(WNode::File(file)) = self.nodes.get_mut(&existing) {
                                     file.unlink_lease = Some(lease);
