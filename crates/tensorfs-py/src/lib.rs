@@ -1180,6 +1180,41 @@ fn rekey(
     records: Vec<PyFileRecord>,
     names: BTreeMap<String, String>,
 ) -> PyResult<Vec<PyFileRecord>> {
+    compose_records(py, store, planner, records, &names, compose::rekey)
+}
+
+/// Composes a trimmed container: exactly the tensors `names` maps survive.
+///
+/// The omitted tensors' records are omitted with them, so a sync of the
+/// result never asks for their objects. Pass identity pairs to trim without
+/// renaming.
+#[pyfunction]
+fn subset(
+    py: Python<'_>,
+    store: &PyObjectStore,
+    planner: &str,
+    records: Vec<PyFileRecord>,
+    names: BTreeMap<String, String>,
+) -> PyResult<Vec<PyFileRecord>> {
+    compose_records(py, store, planner, records, &names, compose::subset)
+}
+
+/// A composition over one committed tensor body: `compose::rekey` or
+/// `compose::subset`.
+type Composition = fn(
+    &ObjectStore,
+    &tfm1::FileBody,
+    &BTreeMap<String, String>,
+) -> Result<tfm1::FileBody, compose::ComposeError>;
+
+fn compose_records(
+    py: Python<'_>,
+    store: &PyObjectStore,
+    planner: &str,
+    records: Vec<PyFileRecord>,
+    names: &BTreeMap<String, String>,
+    composition: Composition,
+) -> PyResult<Vec<PyFileRecord>> {
     let format = parse_planner(planner)?
         .tensor_format()
         .ok_or_else(|| TensorfsError::new_err("only a tensor container can be recomposed"))?;
@@ -1193,7 +1228,7 @@ fn rekey(
         records,
     };
     let composed = py
-        .detach(|| compose::rekey(&store.inner, &body, &names))
+        .detach(|| composition(&store.inner, &body, names))
         .map_err(compose_error)?;
     Ok(composed
         .records()
@@ -1242,6 +1277,7 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(plan_and_hash_file, module)?)?;
     module.add_function(wrap_pyfunction!(ingest_concurrency, module)?)?;
     module.add_function(wrap_pyfunction!(rekey, module)?)?;
+    module.add_function(wrap_pyfunction!(subset, module)?)?;
 
     module.add("MAX_OBJECT_SIZE", planner::MAX_OBJECT_SIZE)?;
     module.add("MAX_PACK_PAYLOAD", tfp1::MAX_PACK_PAYLOAD)?;

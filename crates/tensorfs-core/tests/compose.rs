@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use tensorfs_core::compose::{ComposeError, rekey};
+use tensorfs_core::compose::{ComposeError, rekey, subset};
 use tensorfs_core::object::{ObjectDigest, plan_and_hash};
 use tensorfs_core::planner::{self, ByteSource, MAX_OBJECT_SIZE, PlannerId};
 use tensorfs_core::store::ObjectStore;
@@ -468,5 +468,119 @@ fn a_gguf_name_the_format_cannot_hold_is_refused() {
     assert!(matches!(
         rekey(&store, &source, &names(&[("a", &"n".repeat(64))])),
         Err(ComposeError::UnusableName(_))
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// #83: subsets
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_subset_inherits_the_kept_tensors_and_omits_the_rest() {
+    let root = TempRoot::new("subset");
+    let store = ObjectStore::open(root.path()).expect("store opens");
+    let source = commit(&store, &big_fixture());
+    let before = object_count(root.path());
+
+    let trimmed = subset(
+        &store,
+        &source,
+        &names(&[
+            ("denoiser.big", "denoiser.big"),
+            ("text_encoder.a", "kept.a"),
+        ]),
+    )
+    .expect("a partial naming trims");
+
+    let source_digests = digests(&source);
+    let composed_digests = digests(&trimmed);
+    assert_eq!(
+        composed_digests[1..],
+        [
+            source_digests[1], // denoiser.big, 64 MiB
+            source_digests[2], // denoiser.big, the 1 MiB remainder
+            source_digests[4], // text_encoder.a
+        ],
+        "the kept tensors are inherited, in the source's own data order"
+    );
+    assert!(
+        !composed_digests.contains(&source_digests[3]),
+        "and denoiser.small's object is not named at all"
+    );
+    assert_eq!(
+        object_count(root.path()),
+        before + 1,
+        "a trim admits one header, exactly like a re-key"
+    );
+
+    let bytes = read_back(&store, &trimmed);
+    let replanned = plan_and_hash(bytes.as_slice()).expect("the trimmed bytes plan");
+    assert_eq!(replanned.planner(), PlannerId::SafetensorsV1);
+    assert_eq!(
+        replanned
+            .objects()
+            .iter()
+            .map(|object| object.digest())
+            .collect::<Vec<_>>(),
+        composed_digests
+    );
+}
+
+#[test]
+fn a_trimmed_gguf_rewrites_its_tensor_count_and_inherits_the_rest() {
+    let root = TempRoot::new("gguf-subset");
+    let store = ObjectStore::open(root.path()).expect("store opens");
+    let source = commit(
+        &store,
+        &gguf(&[
+            ("blk.0.attn_q.weight", 4096, 0x41),
+            ("blk.0.attn_k.weight", 100, 0x42),
+            ("output.weight", 2048, 0x43),
+        ]),
+    );
+
+    let trimmed = subset(
+        &store,
+        &source,
+        &names(&[
+            ("blk.0.attn_q.weight", "blk.0.attn_q.weight"),
+            ("output.weight", "output.weight"),
+        ]),
+    )
+    .expect("composes");
+
+    // The tensor count lives in the metadata block's fixed prefix, so a trim
+    // is the one composition that has to rewrite that domain.
+    assert_ne!(digests(&trimmed)[0], digests(&source)[0]);
+    let source_digests = digests(&source);
+    for kept in [source_digests[source_digests.len() - 1], source_digests[3]] {
+        assert!(
+            digests(&trimmed).contains(&kept),
+            "{kept} was not inherited"
+        );
+    }
+
+    let bytes = read_back(&store, &trimmed);
+    let replanned = plan_and_hash(bytes.as_slice()).expect("the trimmed GGUF plans");
+    assert_eq!(replanned.planner(), PlannerId::GgufV1);
+    assert_eq!(
+        replanned
+            .objects()
+            .iter()
+            .map(|object| object.digest())
+            .collect::<Vec<_>>(),
+        digests(&trimmed)
+    );
+}
+
+#[test]
+fn a_trim_still_refuses_a_name_the_source_does_not_hold() {
+    let root = TempRoot::new("subset-refusal");
+    let store = ObjectStore::open(root.path()).expect("store opens");
+    let source = commit(&store, &safetensors(&[("a", 64, 0x01), ("b", 64, 0x02)]));
+
+    assert!(matches!(
+        subset(&store, &source, &names(&[("c", "c")])),
+        Err(ComposeError::UnknownTensor(name)) if name == "c"
     ));
 }

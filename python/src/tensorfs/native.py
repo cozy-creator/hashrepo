@@ -59,6 +59,7 @@ from ._tensorfs import (
     rekey,
     snapshot_id_of,
     stub_bytes,
+    subset,
 )
 
 __all__ = [
@@ -99,4 +100,5 @@ __all__ = [
     "rekey",
     "snapshot_id_of",
     "stub_bytes",
+    "subset",
 ]
