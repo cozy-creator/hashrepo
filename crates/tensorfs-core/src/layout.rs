@@ -341,6 +341,19 @@ impl<'store> Layout<'store> {
     /// Every ref name currently pointing at one snapshot, sorted.
     pub fn refs_to(&self, id: &SnapshotId) -> Result<Vec<String>, LayoutError> {
         let mut names = Vec::new();
+        for name in self.ref_names()? {
+            if self.read_ref(&name).ok().flatten() == Some(*id) {
+                names.push(name);
+            }
+        }
+        Ok(names)
+    }
+
+    /// Every ref name present, sorted. Names a ref may not have — a leading
+    /// dot above all — are skipped, which is what keeps a `.swap-…` staged
+    /// file mid-`rename` invisible to enumeration.
+    pub fn ref_names(&self) -> Result<Vec<String>, LayoutError> {
+        let mut names = Vec::new();
         let entries = match fs::read_dir(self.refs_dir()) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(names),
@@ -349,15 +362,36 @@ impl<'store> Layout<'store> {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
-            if validated_ref_name(name).is_err() {
-                continue;
-            }
-            if self.read_ref(name).ok().flatten() == Some(*id) {
+            if validated_ref_name(name).is_ok() {
                 names.push(name.to_owned());
             }
         }
         names.sort();
         Ok(names)
+    }
+
+    /// Every projected tree present, as the snapshot id it claims to hold.
+    ///
+    /// A name that is not a snapshot id is not a tree: `project` builds under
+    /// `.building-<pid>-<n>` and renames into place, so such a name belongs to
+    /// an in-flight projection in some process and is that process's to
+    /// remove. Enumeration therefore reports trees only.
+    pub fn tree_ids(&self) -> Result<Vec<SnapshotId>, LayoutError> {
+        let mut ids = Vec::new();
+        let entries = match fs::read_dir(self.snapshots_dir()) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(ids),
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str()
+                && let Some(id) = SnapshotId::parse_hex(name)
+            {
+                ids.push(id);
+            }
+        }
+        ids.sort_by_key(|id| *id.as_bytes());
+        Ok(ids)
     }
 }
 
