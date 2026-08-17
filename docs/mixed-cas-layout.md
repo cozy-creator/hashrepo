@@ -335,7 +335,7 @@ only writer. What each layer protects:
   referents. TFM1 keeps the bit; the projected symlink does not carry it —
   the HF cache loses it identically. The one consumer that would care,
   `dlopen` of a compiled graph, does not need `+x` on Linux; a projected
-  script that must be executed is a `extract()` case.
+  script that must be executed is a `materialize()` case.
 
 ## 6. Symlink specifics
 
@@ -345,7 +345,7 @@ only writer. What each layer protects:
 - **`snapshots/` and `objects/` live under one root** by construction.
   Symlinks themselves cross filesystems fine; what breaks is copying a
   snapshot *tree* out of the store — the relative targets dangle. That is
-  unsupported by design: exporting a file is `extract()` (§8), exporting a
+  unsupported by design: exporting a file is `materialize()` (§8), exporting a
   tree is not a thing this system does.
 - **Trees pin nothing.** GC reachability comes from manifests (DB roots →
   manifest blob → record digests + blob digests), exactly as today — never
@@ -432,11 +432,11 @@ reclaims *exactly* the byte count `exclusive` promised.
 | **#56 / #61** (direct tensor read/write) | **Unchanged and load-bearing.** `TensorReader`/`TensorWriter` operate on records and never see the snapshot dir; blob entries are simply not tensor containers. The `docs/direct-tensor-reads.md` API is how every tensor in §4's stubs is actually read. One correction flows back: the `inherit()` "must still hash every byte" caveat is stale under TFM1 (§2). |
 | **#58** (old data plane deletion) | **Unchanged.** Already executed by PRs #62/#66; nothing here resurrects it. |
 | **#64** (chunker disagreement) | **Unchanged.** The Rust planner is canonical. Strengthened, if anything: non-tensor files no longer chunk at all, so the sub-64 MiB packing question cannot arise for them. |
-| **tcg#28** (compiled-graph artifacts) | **Superseded again**, including this lane's earlier comment moving artifacts to plain files *outside* the store. They are whole blobs *inside* it, appearing in snapshot trees as symlinks. Site B (`resolve`, untar-and-discard) reads through the symlink — the materialize step disappears entirely. Site A (`export_artifact`, publishes via `os.link` on the caller's device) becomes `extract()` to that device; hardlinking outsiders onto a 0444 store inode aliases canonical bytes and is refused. |
+| **tcg#28** (compiled-graph artifacts) | **Superseded again**, including this lane's earlier comment moving artifacts to plain files *outside* the store. They are whole blobs *inside* it, appearing in snapshot trees as symlinks. Site B (`resolve`, untar-and-discard) reads through the symlink — the materialize step disappears entirely. Site A (`export_artifact`, publishes via `os.link` on the caller's device) becomes `materialize()` to that device; hardlinking outsiders onto a 0444 store inode aliases canonical bytes and is refused. |
 | **pgw#1295** (snapshot consumption) | The "publish" step becomes **seal + project the symlink tree**. `from_pretrained`-style config/tokenizer reads traverse symlinks as plain files; weights load natively per component. No copy anywhere. |
-| **streaming materializer** (`extract`, PR #62/#65) | Survives **only** as the private-copy escape hatch (§9's audit). Not a component of the layout. |
+| **streaming materializer** (`materialize`, ex-`extract`, PR #62/#65) | Survives **only** as the private-copy escape hatch — tier 3 of §9's ladder. Not a component of the layout. |
 
-## 9. Materialization is not a component of this system
+## 9. The file-access preference ladder; `materialize()` is the last resort
 
 Paul, refining the proposal:
 
@@ -445,24 +445,49 @@ Paul, refining the proposal:
 > tensorFS … we could add an escape hatch that lets you materialize tensors,
 > but it's not recommended (defeats the whole purpose of this system)."
 
-Stated as a property of the layout, with the consumer audit as evidence:
+Paul's **#1303 ruling, 2026-08-17**, turns that into a fixed preference order
+and settles the hatch's status. It is a **PERMANENT feature and it is NOT
+separately priced** — it is simply the least-preferred tier:
 
-| consumer class | served by |
-|---|---|
-| config / tokenizer / JSON readers (`from_pretrained(dir)` non-weight half) | symlink in the tree — a plain file |
-| dataset readers (images, video, audio) | symlinks — shared blobs, stored once |
-| compiled-graph `.so` → `dlopen` | symlink; `dlopen` follows it |
-| weight loading (safetensors, GGUF), all quantizers except the two below | native tensor reads (#56/#61) |
-| `modelopt` conversion | native reads — quantizes post-load, `from_config` + state dict; once mis-classified as blocked, is not |
-| GGUF discovery (`rglob("*.gguf")`) | pointer stubs carrying real filenames (§4) |
-| tcg artifact export off-store | `extract()` |
-| endpoint author slots reading raw weight bytes from a directory (pgw#1303) | **the hatch** — explicitly priced, or deprecated |
+| tier | how a consumer reads a snapshot | for |
+|---|---|---|
+| **1** | symlink tree + **native tensorfs reads** (#56/#61) | all of our own code, and every tensor |
+| **2** | symlink tree + **FUSE** (`tensorfsd`, shelved — #96/#59) | third-party code that needs file *semantics* on a tensor file, **where FUSE exists** |
+| **3** | **`materialize()`** — a private copy | last resort: nothing above works |
 
-**Zero known mandatory materializations; one discouraged-hatch user pending a
-deprecation decision.** The hatch is the existing `extract()` (PR #62,
-uncapped by #65): streaming, O(one block), atomic, any size. It is
-**discouraged** — "defeats the whole purpose", Paul's words — and this list of
-users is the whole list; the hatch is not an invitation.
+**Tier 2 is not universally available, and that is a measured fact, not a
+scheduling problem.** A RunPod pod cannot open `/dev/fuse` (denied at the
+device cgroup, even for root) and has no `CAP_SYS_ADMIN` in its bounding set
+— `README.md` "There is no daemon in the wheel", `docs/direct-tensor-reads.md`
+"Why there is no mount to fall back to". So on the serving
+fleet tier 2 does not exist and a third-party binary that insists on a real
+file falls straight to tier 3 — permanently, and acceptably. Tier 2 is for
+FUSE-capable machines: `cozy-local`, dev boxes, laptops. This is the named
+production consumer class the shelf's revival criteria now carry.
+
+The rename: **`extract()` → `materialize()`**. One name for the operation, in
+this repo and in every consumer.
+
+The consumer audit, restated as tier assignments:
+
+| consumer class | tier | served by |
+|---|---|---|
+| config / tokenizer / JSON readers (`from_pretrained(dir)` non-weight half) | 1 | symlink in the tree — a plain file |
+| dataset readers (images, video, audio) | 1 | symlinks — shared blobs, stored once |
+| compiled-graph `.so` → `dlopen` | 1 | symlink; `dlopen` follows it |
+| weight loading (safetensors, GGUF), all quantizers except the two below | 1 | native tensor reads (#56/#61) |
+| `modelopt` conversion | 1 | native reads — quantizes post-load, `from_config` + state dict; once mis-classified as blocked, is not |
+| GGUF discovery (`rglob("*.gguf")`) | 1 | pointer stubs carrying real filenames (§4) |
+| `convert_hf_to_gguf.py` (the HF→GGUF converter) | 1, pending rewrite | Paul, 2026-08-17: *"I would think we can just rewrite it to use tensorfs natively."* `TensorReader` reads the safetensors, `TensorWriter` writes the GGUF (#106), and #81's permute-adapter vocabulary carries the rope/key mapping. Not a hatch user |
+| external binaries taking a path (`llama-server -m`, `gguf.GGUFReader` in a runtime) | 2 where FUSE exists, **3 on pods** | third-party file semantics; no upstream API to change |
+| tcg artifact export off-store | 3 | `materialize()` to the caller's device |
+| endpoint author slots reading raw weight bytes from a directory (pgw#1303) | 1 for our own loaders; 3 for a genuine third party | migration, not a gate — see pgw#1303 |
+
+**Zero mandatory materializations of tensors by our own code.** `materialize()`
+(PR #62, uncapped by #65) is streaming, O(one block), atomic, any size. The
+ideal state is that it is never used in practice; every current user migrates
+up the ladder as far as it can go, and what remains at tier 3 stays there
+honestly rather than being hidden.
 
 Two adjacent facts, recorded so they aren't re-litigated: bnb nf4/int8
 *conversion* is orphaned (no pgw ladder class, no hub precision class names

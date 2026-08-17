@@ -3,7 +3,7 @@
 The 64 MiB bound is the tensor chunk grid constant, not a blob cap. A
 non-tensor file above 64 MiB is exactly one chunkless ``FileEntry`` whose
 digest is its whole-file SHA-256, and the reader serves it — ``read_range``,
-``read_file``-style access, and ``extract()`` — without any grid.
+``read_file``-style access, and ``materialize()`` — without any grid.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def test_a_chunk_above_the_tensor_grid_still_refuses() -> None:
         )
 
 
-def test_the_reader_serves_and_extracts_a_blob_above_64_mib(tmp_path: Path) -> None:
+def test_the_reader_serves_and_materializes_a_blob_above_64_mib(tmp_path: Path) -> None:
     payload = _blob_bytes()
     assert len(payload) > MAX_CHUNK_SIZE
 
@@ -69,19 +69,19 @@ def test_the_reader_serves_and_extracts_a_blob_above_64_mib(tmp_path: Path) -> N
         assert reader.read_range("clips/video.webm", edge, 16) == payload[edge : edge + 16]
         assert reader.read_range("clips/video.webm", 0, 64) == payload[:64]
 
-        # extract() streams the whole blob out and verifies it on the way.
-        target = reader.extract("clips/video.webm", tmp_path / "out" / "video.webm")
+        # materialize() streams the whole blob out and verifies it on the way.
+        target = reader.materialize("clips/video.webm", tmp_path / "out" / "video.webm")
         assert target.read_bytes() == payload
 
 
-def test_extract_still_verifies_blob_bytes_against_the_manifest(tmp_path: Path) -> None:
+def test_materialize_still_verifies_blob_bytes_against_the_manifest(tmp_path: Path) -> None:
     payload = b"small blob body"
     cas = LocalCAS(tmp_path / "cas")
     ref = cas.put_bytes(payload)
     entry = FileEntry("config.json", len(payload), ref)
 
     # Corrupt the resident object without changing its length; with per-object
-    # verification off, extract()'s own whole-file check is the last fence.
+    # verification off, materialize()'s own whole-file check is the last fence.
     resident = cas.object_path(ref)
     resident.chmod(0o644)
     corrupted = b"X" + payload[1:]
@@ -89,4 +89,4 @@ def test_extract_still_verifies_blob_bytes_against_the_manifest(tmp_path: Path) 
 
     with open_tensors(cas, RepositoryManifest((entry,)), verify=False) as reader:
         with pytest.raises(ValueError, match="do not match"):
-            reader.extract("config.json", tmp_path / "out.json")
+            reader.materialize("config.json", tmp_path / "out.json")

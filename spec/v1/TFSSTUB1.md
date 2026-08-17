@@ -70,5 +70,6 @@ changes no snapshot id.
 ## Reading the real bytes
 
 Through tensorfs — the record-addressed reader (`docs/direct-tensor-reads.md`).
-A consumer that wants the file as one contiguous stream uses the `extract()`
-escape hatch, which the layout doc §9 prices and discourages.
+A consumer that wants the file as one contiguous stream uses the
+`materialize()` escape hatch — tier 3, the last resort of the layout doc §9
+access ladder.

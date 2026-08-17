@@ -91,7 +91,7 @@ class TensorError(ValueError):
 
 
 class FileTooLarge(TensorError):
-    """A caller tried to extract a file the escape hatch must not carry."""
+    """A caller tried to materialize a file the escape hatch must not carry."""
 
 
 
@@ -287,19 +287,32 @@ class TensorReader(Mapping[str, TensorView]):
         entry = self._entry(path)
         return self.read_range(path, 0, entry.size_bytes)
 
-    def extract(
+    def materialize(
         self,
         path: str,
         destination: str | Path,
         *,
         limit: int | None = None,
     ) -> Path:
-        """Write ONE non-tensor file to disk, for consumers that need a path.
+        """Write ONE file to disk. The LAST RESORT of the access ladder.
 
-        This is the whole remaining reason to create a file: config JSON a
-        third-party constructor insists on reading from a directory, or any
-        other non-tensor member of a repo. Tensors never come through here --
-        they are read with :class:`TensorView`.
+        Paul's 2026-08-17 ruling fixes the preference order for every
+        consumer, and this method is tier 3 of 3:
+
+        1. symlink snapshot + native tensorfs reads (:class:`TensorView`,
+           :meth:`read_file`) -- all of our own code, all tensors;
+        2. symlink snapshot + FUSE, for third-party code that needs file
+           semantics on a tensor file (the ``tensorfsd`` consumer class) --
+           only where FUSE exists, which is NOT a RunPod pod;
+        3. ``materialize()`` -- a private copy, only when neither works.
+
+        The seam is PERMANENT: some third party will always insist on a real
+        file, and on a FUSE-less pod there is nothing above this tier for it.
+        It is not separately priced or metered; it is simply the
+        least-preferred tier, and the ideal state is that our own code never
+        reaches for it. Tensors especially should never come through here --
+        they are read with :class:`TensorView`, which is tier 1 and cheaper by
+        a whole copy.
 
         There is NO size cap -- ruled by Paul, 2026-08-16: "no hard-cap on
         materialization size; we just want to avoid large non-tensor files
@@ -307,7 +320,7 @@ class TensorReader(Mapping[str, TensorView]):
         ingestion (CAS holds repos only; datasets and compiled-graph artifacts
         never enter it -- DESIGN-RULINGS "CAS scope: repos only"), not a limit
         here. The stream is O(one block) of memory regardless of file size, so
-        extraction itself has no reason to refuse. ``limit`` remains for a
+        the write itself has no reason to refuse. ``limit`` remains for a
         caller that wants to bound ITS OWN request; when given, exceeding it
         raises :class:`FileTooLarge`.
 
@@ -334,7 +347,9 @@ class TensorReader(Mapping[str, TensorView]):
                 sink.flush()
                 os.fsync(sink.fileno())
             if digest.hexdigest() != entry.digest.digest:
-                raise TensorError(f"{path}: extracted bytes do not match the manifest")
+                raise TensorError(
+                    f"{path}: materialized bytes do not match the manifest"
+                )
             os.replace(temporary, target)
             return target
         except BaseException:
