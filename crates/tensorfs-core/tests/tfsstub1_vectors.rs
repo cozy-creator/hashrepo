@@ -257,6 +257,15 @@ fn the_parser_refuses_everything_that_is_not_a_stub() {
 /// The magic is a GREP FENCE: `TFSSTUB1` appears only where the format is
 /// defined, documented, pinned, or asserted. A second in-tree speller of the
 /// magic is how a "contract" quietly forks.
+///
+/// `python/src/tensorfs/project.py` is a DELIBERATE second renderer and is
+/// admitted on one condition, which is itself a test: it renders and parses
+/// the committed corpus byte for byte, and `test_projection.py` runs both
+/// halves against each other. It exists because the Rust renderer cannot
+/// travel — python-gen-worker vendors the Python facade as SOURCE into a
+/// pure-Python wheel (pgw#1310), where no PyO3 extension is loadable — so
+/// refusing a Python renderer would not keep the contract unforked, it would
+/// leave the consumer unable to project a tree at all.
 #[test]
 fn the_stub_magic_is_unique_in_tree() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -271,7 +280,9 @@ fn the_stub_magic_is_unique_in_tree() {
         "crates/tensorfs-py/src/lib.rs",
         "docs/mixed-cas-layout.md",
         "python/src/tensorfs/_tensorfs.pyi",
+        "python/src/tensorfs/project.py",
         "python/tests/test_pointer_stubs.py",
+        "python/tests/test_projection.py",
         "README.md",
         "spec/v1/TFSSTUB1.md",
         "spec/v1/tfsstub1-vectors",

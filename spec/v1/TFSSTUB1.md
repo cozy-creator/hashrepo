@@ -43,6 +43,24 @@ What it does give: an identity that is stable across snapshots, equal for
 equal file bodies, distinct across planners (the tag is hashed), and derivable
 from the manifest alone.
 
+### Per manifest dialect
+
+The paragraph above argues its negative from a **TFM1** fact, so it holds only
+where that fact does. Stated as a rule over dialects:
+
+| manifest dialect | `body_sha256` |
+|---|---|
+| TFM1 (`TFM1.md`) | SHA-256 over the canonical file-body encoding — the planner tag then the body |
+| v1 JSON (`manifest.schema.json`, `tensorfs.manifest`) | the entry's `digest`, i.e. the whole-file SHA-256 |
+
+The v1 JSON manifest gives **every** entry a whole-file digest, tensor
+containers included, so in that dialect the whole-file hash *is* derivable
+from the manifest alone at zero read cost and the objection above does not
+apply. The invariant the field actually carries is the one both satisfy:
+**derivable from the manifest without reading a tensor byte, and equal for
+equal bodies within a dialect.** Do not compare a `body_sha256` across
+dialects; it is an identity, not a checksum a reader verifies.
+
 ## Not part of snapshot identity
 
 Stubs are **projection artifacts**. The manifest keeps the real tensor-planner
