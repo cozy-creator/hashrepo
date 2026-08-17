@@ -24,8 +24,8 @@ use crate::object::ObjectDigest;
 use crate::planner::{ByteSource as _, PlanError, PlannerId, plan};
 use crate::store::{ObjectStore, StoreError};
 use crate::tfm1::{
-    Entry, FileRecord, HeadTree, Snapshot, SnapshotBuilder, SnapshotId, Tfm1Error, TreeEntry,
-    case_fold, decode, validate_path, validate_record_run, validate_symlink_target,
+    Entry, FileBody, FileRecord, HeadTree, Snapshot, SnapshotBuilder, SnapshotId, Tfm1Error,
+    TreeEntry, case_fold, decode, validate_path, validate_record_run, validate_symlink_target,
 };
 use crate::workspace_source::RecordsSource;
 
@@ -158,6 +158,103 @@ pub struct GcReport {
     pub deleted: u64,
     pub bytes_deleted: u64,
     pub epoch: u64,
+}
+
+/// What one snapshot costs, in the three numbers that answer three different
+/// questions (`docs/mixed-cas-layout.md` §7).
+///
+/// - `logical` — sum of every file entry's `logical_size`: what a plain copy
+///   would occupy. A hardlink shares its carrier's body and is not counted
+///   twice.
+/// - `resident` — real bytes of the objects this root reaches, counted once
+///   each, INCLUDING the manifest object at the snapshot's own id.
+/// - `exclusive` — of those, the ones no other root reaches: the true "freed
+///   if this snapshot is deleted". The manifest is always among them.
+///
+/// An object the manifest names but the store does not hold contributes to
+/// `logical` and to neither of the other two.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SnapshotUsage {
+    pub id: SnapshotId,
+    pub logical: u64,
+    pub resident: u64,
+    pub exclusive: u64,
+}
+
+/// What one scrub removed. Both kinds are cache: trees and refs pin nothing,
+/// so a scrub never frees an object byte.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ScrubReport {
+    pub trees_removed: Vec<SnapshotId>,
+    pub refs_removed: Vec<String>,
+}
+
+/// One reachability walk over both object kinds.
+///
+/// Every root is one referencing identity: each `snapshots` row separately
+/// (exclusive attribution needs to tell them apart), the workspace object
+/// maps as one, the leases as one. Coarsening the latter two is exact for the
+/// question `exclusive` asks — attribution only ever names a snapshot, and any
+/// reference from either coarse root already pushes an object's count past
+/// one.
+#[derive(Default)]
+struct Mark {
+    reached: HashMap<ObjectDigest, u32>,
+    snapshots: Vec<SnapshotMark>,
+}
+
+struct SnapshotMark {
+    id: SnapshotId,
+    objects: HashSet<ObjectDigest>,
+    logical: u64,
+}
+
+impl Mark {
+    /// Folds one root's closure in. The closure is a set, so a manifest naming
+    /// the same chunk twice still counts as one referencing root.
+    fn add_root(&mut self, objects: &HashSet<ObjectDigest>) {
+        for digest in objects {
+            *self.reached.entry(*digest).or_default() += 1;
+        }
+    }
+
+    fn is_rooted(&self, digest: &ObjectDigest) -> bool {
+        self.reached.contains_key(digest)
+    }
+}
+
+/// Every object one manifest names, both kinds, into one set.
+///
+/// A tensor container contributes its data-record digests; a `blob-v1` entry
+/// contributes the one whole-file digest its body carries. The match is on the
+/// body kind and is exhaustive on purpose: a new body variant must decide how
+/// it is reached before this compiles, and dropping either arm is exactly the
+/// mutation that lets GC sweep a live object.
+fn manifest_objects(snapshot: &Snapshot, into: &mut HashSet<ObjectDigest>) {
+    for (_, entry) in snapshot.entries() {
+        let Entry::File { body, .. } = entry else {
+            continue;
+        };
+        match body {
+            FileBody::Tensor { records, .. } => {
+                for record in records {
+                    if let FileRecord::Data { digest, .. } = record {
+                        into.insert(*digest);
+                    }
+                }
+            }
+            // A blob body has no record list at all — one file, one digest.
+            // A zero-length blob names the digest of the empty string, which
+            // no lane ever admits, so it is not an object to reach.
+            FileBody::Blob {
+                logical_size,
+                digest,
+            } if *logical_size != 0 => {
+                into.insert(*digest);
+            }
+            FileBody::Blob { .. } => {}
+        }
+    }
 }
 
 /// The one metadata authority beside an object store root.
@@ -928,61 +1025,14 @@ impl WorkspaceStore {
             params![epoch],
         )?;
 
-        let mut roots: HashSet<ObjectDigest> = HashSet::new();
-        {
-            let mut map_digests =
-                tx.prepare("SELECT digest FROM object_maps WHERE digest IS NOT NULL")?;
-            let mut rows = map_digests.query([])?;
-            while let Some(row) = rows.next()? {
-                roots.insert(digest_from_row(row.get::<_, Vec<u8>>(0)?)?);
-            }
-        }
-        {
-            let mut ids = Vec::new();
-            {
-                let mut rooted = tx.prepare("SELECT id FROM snapshots")?;
-                let mut rows = rooted.query([])?;
-                while let Some(row) = rows.next()? {
-                    ids.push(digest_from_row(row.get::<_, Vec<u8>>(0)?)?);
-                }
-            }
-            for id in ids {
-                // A manifest is an object at its own id, so a root row roots
-                // the manifest itself as well as everything it names.
-                roots.insert(id);
-                let snapshot =
-                    self.read_manifest_object(&SnapshotId::from_bytes(*id.as_bytes()))?;
-                for (_, entry) in snapshot.entries() {
-                    if let Entry::File { body, .. } = entry {
-                        for record in body.records().iter() {
-                            if let FileRecord::Data { digest, .. } = record {
-                                roots.insert(*digest);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Leases are the third root source, and the only one that is not a
-        // committed fact: a pending-sync lease pins the closure a transfer is
-        // still reading, whose snapshot row may already have been deleted out
-        // from under it. Read inside the same transaction as the other two,
-        // so the whole root set is one consistent instant.
-        {
-            let mut pinned = tx.prepare("SELECT digest FROM lease_objects")?;
-            let mut rows = pinned.query([])?;
-            while let Some(row) = rows.next()? {
-                roots.insert(digest_from_row(row.get::<_, Vec<u8>>(0)?)?);
-            }
-        }
+        let marks = self.mark(&tx)?;
 
         let mut resident: Vec<(ObjectDigest, u64)> = Vec::new();
         self.store
             .each_object(|digest, length| resident.push((digest, length)))?;
 
         let mut report = GcReport {
-            roots: roots.len() as u64,
+            roots: marks.reached.len() as u64,
             resident: resident.len() as u64,
             epoch: epoch as u64,
             ..GcReport::default()
@@ -1007,12 +1057,12 @@ impl WorkspaceStore {
             collected
         };
         for (digest, marked) in &quarantined {
-            if roots.contains(digest) || !resident_set.contains(digest) {
+            if marks.is_rooted(digest) || !resident_set.contains(digest) {
                 tx.execute(
                     "DELETE FROM gc_quarantine WHERE digest = ?1",
                     params![digest.as_bytes().as_slice()],
                 )?;
-                if roots.contains(digest) {
+                if marks.is_rooted(digest) {
                     report.rescued += 1;
                 }
                 continue;
@@ -1032,7 +1082,7 @@ impl WorkspaceStore {
         let already: HashSet<ObjectDigest> =
             quarantined.iter().map(|(digest, _)| *digest).collect();
         for digest in resident_set {
-            if !roots.contains(&digest) && !already.contains(&digest) {
+            if !marks.is_rooted(&digest) && !already.contains(&digest) {
                 tx.execute(
                     "INSERT OR IGNORE INTO gc_quarantine (digest, epoch) VALUES (?1, ?2)",
                     params![digest.as_bytes().as_slice(), epoch],
@@ -1041,6 +1091,180 @@ impl WorkspaceStore {
             }
         }
 
+        tx.commit()?;
+        Ok(report)
+    }
+
+    /// The one reachability walk, shared by [`collect`] and [`usage`].
+    ///
+    /// Roots are what they have always been — the `snapshots` index, the
+    /// workspace heads' object maps, and the leases — and every one of them is
+    /// read inside the caller's transaction, so the whole root set is one
+    /// consistent instant. Symlink trees and `refs/` are NOT roots: they are
+    /// projections of a manifest, they pin nothing, and they are never walked
+    /// here. What widened is only the object set each snapshot root reaches:
+    /// tensor chunks, whole blobs, and the manifest object itself.
+    ///
+    /// [`collect`]: Self::collect
+    /// [`usage`]: Self::usage
+    fn mark(&self, connection: &Connection) -> Result<Mark, WorkspaceError> {
+        let mut marks = Mark::default();
+
+        // Every live workspace's object map, as one root. An object a
+        // workspace head still names is alive and is nobody's exclusive.
+        let mut heads: HashSet<ObjectDigest> = HashSet::new();
+        {
+            let mut statement =
+                connection.prepare("SELECT digest FROM object_maps WHERE digest IS NOT NULL")?;
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                heads.insert(digest_from_row(row.get::<_, Vec<u8>>(0)?)?);
+            }
+        }
+        marks.add_root(&heads);
+
+        // Leases, as one root. The only root source that is not a committed
+        // fact: a pending-sync lease pins the closure a transfer is still
+        // reading, whose snapshot row may already have been deleted under it.
+        let mut leased: HashSet<ObjectDigest> = HashSet::new();
+        {
+            let mut statement = connection.prepare("SELECT digest FROM lease_objects")?;
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                leased.insert(digest_from_row(row.get::<_, Vec<u8>>(0)?)?);
+            }
+        }
+        marks.add_root(&leased);
+
+        // One root per snapshot row, kept apart because exclusive attribution
+        // has to name the snapshot that owns an object.
+        let mut ids = Vec::new();
+        {
+            let mut statement = connection.prepare("SELECT id FROM snapshots")?;
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                ids.push(digest_from_row(row.get::<_, Vec<u8>>(0)?)?);
+            }
+        }
+        for id in ids {
+            let id = SnapshotId::from_bytes(*id.as_bytes());
+            let snapshot = self.read_manifest_object(&id)?;
+            let mut objects = HashSet::new();
+            // A manifest is an object at its own id, so a root row roots the
+            // manifest itself as well as everything it names.
+            objects.insert(ObjectDigest::from_bytes(*id.as_bytes()));
+            manifest_objects(&snapshot, &mut objects);
+            let logical = snapshot
+                .entries()
+                .iter()
+                .filter_map(|(_, entry)| match entry {
+                    Entry::File { body, .. } => Some(body.logical_size()),
+                    _ => None,
+                })
+                .sum();
+            marks.add_root(&objects);
+            marks.snapshots.push(SnapshotMark {
+                id,
+                objects,
+                logical,
+            });
+        }
+
+        Ok(marks)
+    }
+
+    /// The three numbers per snapshot of `docs/mixed-cas-layout.md` §7 —
+    /// logical, resident, exclusive — sorted by snapshot id.
+    ///
+    /// A by-product of marking, not a second traversal: this is [`collect`]'s
+    /// own walk, and `exclusive` is read straight off the referencing-root
+    /// count it already keeps. Held in one transaction, so the root set cannot
+    /// move between the walk and the attribution.
+    ///
+    /// [`collect`]: Self::collect
+    pub fn usage(&self) -> Result<Vec<SnapshotUsage>, WorkspaceError> {
+        let mut connection = self.connection.lock().expect("metadata mutex is healthy");
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let marks = self.mark(&tx)?;
+
+        let mut lengths: HashMap<ObjectDigest, u64> = HashMap::new();
+        self.store.each_object(|digest, length| {
+            lengths.insert(digest, length);
+        })?;
+
+        let mut usage: Vec<SnapshotUsage> = marks
+            .snapshots
+            .iter()
+            .map(|snapshot| {
+                let mut resident = 0;
+                let mut exclusive = 0;
+                for digest in &snapshot.objects {
+                    let Some(length) = lengths.get(digest) else {
+                        continue;
+                    };
+                    resident += length;
+                    if marks.reached.get(digest) == Some(&1) {
+                        exclusive += length;
+                    }
+                }
+                SnapshotUsage {
+                    id: snapshot.id,
+                    logical: snapshot.logical,
+                    resident,
+                    exclusive,
+                }
+            })
+            .collect();
+        usage.sort_by_key(|entry| *entry.id.as_bytes());
+        tx.commit()?;
+        Ok(usage)
+    }
+
+    /// Removes what the projected layout can no longer justify: a tree whose
+    /// root row is gone, and a ref that names a snapshot which is not rooted
+    /// or whose content is unreadable.
+    ///
+    /// Trees and refs pin nothing, so this frees no object bytes and can never
+    /// unroot one — deleting a live root's objects is not a failure mode this
+    /// call has. What it must not do is remove a LIVE root's tree, and it
+    /// cannot: the root set is read and acted on inside one write transaction,
+    /// which is the same transaction `seal_snapshot` and `delete_snapshot`
+    /// commit their row through, so no row can appear or vanish under it. A
+    /// projection that lands after its own root was deleted leaves a tree the
+    /// next scrub takes.
+    pub fn scrub(&self) -> Result<ScrubReport, WorkspaceError> {
+        let mut connection = self.connection.lock().expect("metadata mutex is healthy");
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut rooted: HashSet<SnapshotId> = HashSet::new();
+        {
+            let mut statement = tx.prepare("SELECT id FROM snapshots")?;
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                let digest = digest_from_row(row.get::<_, Vec<u8>>(0)?)?;
+                rooted.insert(SnapshotId::from_bytes(*digest.as_bytes()));
+            }
+        }
+
+        let layout = self.layout();
+        let mut report = ScrubReport::default();
+        for id in layout.tree_ids()? {
+            if !rooted.contains(&id) && layout.remove_tree(&id)? {
+                report.trees_removed.push(id);
+            }
+        }
+        for name in layout.ref_names()? {
+            let dangling = match layout.read_ref(&name) {
+                Ok(Some(id)) => !rooted.contains(&id),
+                // Absent: another remover won, nothing to report. Unreadable:
+                // a ref is written by one `rename` of whole bytes, so garbage
+                // content is garbage, not a torn read.
+                Ok(None) => false,
+                Err(_) => true,
+            };
+            if dangling && layout.remove_ref(&name)? {
+                report.refs_removed.push(name);
+            }
+        }
         tx.commit()?;
         Ok(report)
     }

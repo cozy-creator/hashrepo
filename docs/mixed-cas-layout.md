@@ -331,6 +331,15 @@ only writer. What each layer protects:
   rooted snapshot — its manifest pins its objects. Found anyway, they mean
   the tree's root is gone: the whole tree is garbage, removed as above.
 
+**Landed as `WorkspaceStore::scrub` (#71).** It reads the root set and acts
+inside ONE metadata write transaction — the same transaction `seal_snapshot`
+and `delete_snapshot` commit their row through — so no row can appear or
+vanish under it and a live root's tree can never be judged garbage. It removes
+no objects at all, which is what makes "a scrub racing a deletion costs a live
+root nothing" a structural fact rather than a timing argument. Two names it
+deliberately leaves alone: a `.building-…` directory belongs to an in-flight
+projection in some process, and a `.swap-…` file to an in-flight `set_ref`.
+
 ## 7. Dedup accounting
 
 `du` behaves honestly once you know which question each form answers (numbers
@@ -350,6 +359,27 @@ because it needs the whole root set: mark from every manifest root, count
 each object's referencing roots, attribute single-root objects. GC's mark
 phase already walks exactly this; the accounting is a by-product, not a second
 traversal.
+
+**Landed as `WorkspaceStore::usage` (#71)**, over the same `mark` that
+`collect` runs. Three things the design did not say, found by implementing it:
+
+- **`resident` includes the manifest object**, because a manifest is an object
+  at its own id and the root reaches it. `logical` does not — it is what a
+  plain copy of the *files* would occupy. The asymmetry is each number
+  answering its own question, and it makes a snapshot's `exclusive` never
+  zero: deleting a root always frees at least its manifest.
+- **A live workspace head makes nothing exclusive.** Heads and leases are
+  roots, so an object a workspace still names has a second referent and is not
+  freed by deleting a snapshot. `exclusive` is the *freed-if-deleted* number
+  or it is nothing, so this is the correct answer and not a rough edge.
+- **Grouping all heads as one root and all leases as one root is exact** for
+  this question, even though each snapshot must stay its own root. Attribution
+  only ever names a snapshot, and a reference from either coarse group already
+  pushes an object's count past one — which is the whole test.
+
+Proven numerically rather than by agreement with itself: the fixture in
+`crates/tensorfs-core/tests/gc.rs` deletes a root and asserts that collection
+reclaims *exactly* the byte count `exclusive` promised.
 
 ## 8. What each existing issue becomes
 
