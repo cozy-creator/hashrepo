@@ -61,7 +61,12 @@ orders — 11.56 GB, 17.4% of that DiT.
 
 **The floor.** No declared run may be smaller than **1 MiB**
 (`MIN_SEAM_PART_BYTES`); a fusion whose runs fall below it produces NO cut
-points and the tensor grids plainly. This is the memo's rejection of
+points and the tensor grids plainly. **This value is FROZEN for v1** — it is a
+boundary-deciding input, so snapshot identity is a pure function of (file
+bytes, contract@version, this constant, `MAX_OBJECT_SIZE`). Moving it would
+make identical inputs chunk differently across planner versions, silently
+breaking dedup and identity; like the 64 MiB grid, it changes only with a
+format version bump, never as a tunable. This is the memo's rejection of
 row-granular splitting expressed as a number: a file cut entirely at the floor
 still fits TFM1's 1M-record bound at 1 TiB, while a KB-scale row shuffle blows
 through it. Because the floor is a pure function of the tensor's extent and
