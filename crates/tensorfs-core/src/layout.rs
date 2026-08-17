@@ -377,8 +377,8 @@ impl<'store> Layout<'store> {
         }
         // Whatever a removal already took the name away from. It is
         // unreachable by construction — no name resolves to it and no lease
-        // can make it live again — so it goes on sight, and the only thing
-        // that can have delayed it is a reader that still holds its bytes.
+        // can make it live again — so it goes on sight, and only a handle
+        // that refuses its deletion can have delayed it.
         for directory in [self.snapshots_dir(), self.refs_dir()] {
             for entry in read_dir_or_empty(&directory)? {
                 let name = entry.file_name();
@@ -518,7 +518,7 @@ impl<'store> Layout<'store> {
     /// So the name goes first, by `rename` into a `.removed-…` scratch name
     /// nothing else can reach, and the bytes go second. The rename is the
     /// claim: exactly one remover can win it, the loser is told `NotFound`
-    /// and reports the honest `false`, and no two removers ever meet inside
+    /// and reports the honest `Absent`, and no two removers ever meet inside
     /// one artifact. A delete that then fails leaves only unreachable scratch
     /// that [`reap_scratch`] takes on sight, so it is not a removal failure
     /// and is not reported as one: the caller asked for the name to be gone,
