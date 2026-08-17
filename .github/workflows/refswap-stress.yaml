@@ -1,0 +1,42 @@
+name: refswap-stress
+
+# TEMPORARY (#103): measures the Windows ref-swap flake rate. Deleted before
+# the fix merges; the numbers it produces go on the issue.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [103-windows-ref-swap]
+
+permissions:
+  contents: read
+
+jobs:
+  stress:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.0
+      - uses: Swatinem/rust-cache@v2
+      - name: ref swap, 200 runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p tensorfs-core --all-features --test projection --no-run \
+            --message-format=json > build.json
+          bin=$(jq -r 'select(.reason == "compiler-artifact")
+            | select(.target.name == "projection")
+            | .executable // empty' build.json | tail -1)
+          echo "binary: ${bin}"
+          failed=0
+          for run in $(seq 1 200); do
+            "${bin}" --exact a_ref_swap_is_atomic_under_concurrent_readers \
+              > run.log 2>&1 ||
+              { failed=$((failed + 1))
+                grep -E 'panicked|the ref was|a swap invalidated' run.log | head -3; }
+          done
+          echo "::notice::shard ${{ matrix.shard }}: ${failed} failures in 200 runs"
