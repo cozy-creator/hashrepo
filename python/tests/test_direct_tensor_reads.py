@@ -400,14 +400,14 @@ def test_matches_the_reference_safetensors_implementation(
                 assert tuple(expected.shape) == view.shape, name
 
 
-def test_a_small_non_tensor_file_can_be_extracted_to_a_path(
+def test_a_small_non_tensor_file_can_be_materialized_to_a_path(
     fixture: dict[str, object], tmp_path: Path
 ) -> None:
     """The one remaining reason to create a file, for path-only consumers."""
 
     cas = LocalCAS(Path(str(fixture["cas_root"])))
     with open_tensors(cas, fixture["ref"]) as tensors:  # type: ignore[arg-type]
-        target = tensors.extract("config.json", tmp_path / "out" / "config.json")
+        target = tensors.materialize("config.json", tmp_path / "out" / "config.json")
     assert json.loads(target.read_bytes())["architectures"] == ["Fixture"]
 
 
@@ -429,12 +429,12 @@ def _large_sparse_snapshot(tmp_path: Path) -> tuple[LocalCAS, CASRef]:
     return cas, cas.store_manifest(RepositoryManifest((entry,)))
 
 
-def test_extraction_has_no_size_cap_and_streams_any_file(tmp_path: Path) -> None:
+def test_materialization_has_no_size_cap_and_streams_any_file(tmp_path: Path) -> None:
     """No hard cap -- ruled by Paul, 2026-08-16.
 
     "no hard-cap on materialization size; we just want to avoid large
     non-tensor files being in tensorfs (our chunked CAS system)". The control
-    is scope at ingestion, not a limit here: extraction streams record by
+    is scope at ingestion, not a limit here: the hatch streams record by
     record, so a large file costs O(one block) of memory, and refusing it
     would only push a legitimate caller back toward a worse copy path. An
     earlier revision shipped a 512 MiB `FileTooLarge` ceiling; this test pins
@@ -444,7 +444,7 @@ def test_extraction_has_no_size_cap_and_streams_any_file(tmp_path: Path) -> None
     cas, ref = _large_sparse_snapshot(tmp_path)
     destination = tmp_path / "out" / "model.safetensors"
     with open_tensors(cas, ref) as tensors:
-        target = tensors.extract("model.safetensors", destination)
+        target = tensors.materialize("model.safetensors", destination)
     assert target.stat().st_size == 513 << 20
 
 
@@ -469,14 +469,14 @@ def test_the_dtype_table_matches_the_rust_planner() -> None:
     assert pinned == DTYPE_BITS
 
 
-def test_extraction_honours_a_tightened_bound(
+def test_materialization_honours_a_tightened_bound(
     fixture: dict[str, object], tmp_path: Path
 ) -> None:
     cas = LocalCAS(Path(str(fixture["cas_root"])))
     destination = tmp_path / "config.json"
     with open_tensors(cas, fixture["ref"]) as tensors:  # type: ignore[arg-type]
         with pytest.raises(FileTooLarge):
-            tensors.extract("config.json", destination, limit=2)
+            tensors.materialize("config.json", destination, limit=2)
     assert not destination.exists()
 
 

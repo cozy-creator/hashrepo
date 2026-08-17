@@ -247,27 +247,42 @@ reader's lifetime. It reads the whole object even when the wanted tensor is a
 2 KB slice of a packed 64 MiB one. `verify=False` skips it and is what makes the
 single-object case a true zero-copy `memoryview`. Both are measured below.
 
-## Small files: the one bounded escape hatch
+## `materialize()`: the last tier of the access ladder
 
 Some artifacts are not tensor-shaped and their consumer can only take a path: an
 AOT-Inductor `.so` that must be `dlopen`ed, or config JSON a third-party
 constructor insists on reading from a directory.
 
 ```python
-tensors.extract("compiled/graph.so", scratch / "graph.so")
+tensors.materialize("compiled/graph.so", scratch / "graph.so")
 ```
 
-`TensorReader.extract` writes **one named file**, atomically, verifying its
+`TensorReader.materialize` writes **one named file**, atomically, verifying its
 digest, streaming record by record — a ranged read per object, appended to the
 destination, O(one block) of memory regardless of file size.
+
+**It is the LAST tier of three — Paul's #1303 ruling, 2026-08-17**, which also
+renamed it from `extract()`:
+
+1. symlink snapshot + native reads (this document's `TensorView` / `read_file`);
+2. symlink snapshot + FUSE, for third-party code that needs file semantics on a
+   tensor file — available only where FUSE is (`cozy-local`, dev boxes; **not**
+   RunPod pods, which have neither `/dev/fuse` nor `CAP_SYS_ADMIN`);
+3. `materialize()`.
+
+The seam is PERMANENT — a consumer that genuinely cannot do better must have an
+answer — and it is **not separately priced or metered**; it is simply the
+least-preferred tier. On a FUSE-less pod an external binary that insists on a
+real file lands here legitimately and permanently. The ideal is that our own
+code never reaches for it.
 
 **There is no size cap — ruled by Paul, 2026-08-16**: *"no hard-cap on
 materialization size; we just want to avoid large non-tensor files being in
 tensorfs (our chunked CAS system)."* The control is SCOPE at ingestion, not a
-limit at extraction: CAS holds repos only (large tensor files plus their small
+limit here: CAS holds repos only (large tensor files plus their small
 config/metadata), datasets and compiled-graph artifacts never enter it (see
 DESIGN-RULINGS "CAS scope: repos only"), so there is nothing oversized to
-extract in a well-formed store. Preferring small extractions is guidance, not
+materialize in a well-formed store. Preferring small copies is guidance, not
 an enforced bound — an earlier revision shipped a 512 MiB `FileTooLarge`
 ceiling here, which this ruling retires.
 
@@ -381,7 +396,7 @@ and the correction makes the work much smaller.
 **pgw has exactly one weights materialization: `cas.materialize_repository` at
 `models/cozy_snapshot.py:251`.** Every `from_pretrained` call consumes the tree
 that one call publishes. The other `cas.materialize` (`aot_delivery.py:201`) is a
-compiled AOT graph tarball, not weights — that is what `extract` is for.
+compiled AOT graph tarball, not weights — that is what `materialize` is for.
 
 pgw is also already fluent in this style. It has four independent
 non-materializing patterns today: streaming `safe_open` + `get_tensor` loops
@@ -395,8 +410,8 @@ which is the closest existing analogue to this API).
 | `materialize_repository` then `from_pretrained(dir)` | `from_config(cfg)` + `load_state_dict(lazy_mapping)` |
 | `safe_open(path)` / `load_file(path)` | iterate the `TensorReader` mapping |
 | `quantize_tree_w8a8` / `w4a4` / `svdq_*` | `TensorWriter` read-transform-write loop |
-| config/tokenizer `from_pretrained` | `read_file` + `from_dict`, or `extract` the few-KB JSON |
-| `cas.materialize` of the AOT tarball | `extract` |
+| config/tokenizer `from_pretrained` | `read_file` + `from_dict`, or `materialize` the few-KB JSON |
+| `cas.materialize` of the AOT tarball | `materialize` |
 | eight hand-rolled header parsers | `TensorReader` metadata |
 
 Natural seam: `contract_loaded_component` (`models/loading.py:1417`), the
@@ -490,7 +505,7 @@ the suite is run five times, and the claim counts only at red 5/5.
   bit-identical object digests;
 - a tensor larger than one object can be streamed in without becoming
   contiguous;
-- the extraction hatch refuses an oversized file, writes nothing when it
+- the `materialize()` hatch refuses an oversized file, writes nothing when it
   refuses, and cannot have its ceiling widened by a caller;
 - a buffer outlives the reader that produced it.
 
