@@ -1,0 +1,43 @@
+{
+  "format": 1,
+  "magic": "TFSSTUB1",
+  "hash": "sha256",
+  "fixture_encoding": "raw-ascii-v1",
+  "golden": [
+    {
+      "name": "zero-size",
+      "fixture": "fixtures/zero-size.stub",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "description": "a tensor container with no bytes: the size field is 0, not absent"
+    },
+    {
+      "name": "small",
+      "fixture": "fixtures/small.stub",
+      "body_sha256": "282b3117279a0a877c02fbb13b941aa588bcfb729898dd73a636427dbeeec8c3",
+      "size": 4096,
+      "description": "the common case: a few kibibytes of weights behind ~128 bytes of stub"
+    },
+    {
+      "name": "four-gigabyte",
+      "fixture": "fixtures/four-gigabyte.stub",
+      "body_sha256": "2d21e748e9784e67b28d515339f0d26643e9cab454c6482f5894a91893a23bc0",
+      "size": 4000000000,
+      "description": "the doc's example size; stat sees the stub, this field sees the truth"
+    },
+    {
+      "name": "max-u64-size",
+      "fixture": "fixtures/max-u64-size.stub",
+      "body_sha256": "3054de2d971204d7d5628a806c5cba2caa09d273b0a77144dc9f7f93d4e12497",
+      "size": 18446744073709551615,
+      "description": "u64::MAX: the size is a JSON number a consumer must not read as a float"
+    },
+    {
+      "name": "real-safetensors-body",
+      "fixture": "fixtures/real-safetensors-body.stub",
+      "body_sha256": "5e53fdbabb6617055274f3b1cb2df3aa5a049fdf28e59f05ad569cf4140e0601",
+      "size": 4192,
+      "description": "the body digest of an actual two-record safetensors entry"
+    }
+  ]
+}

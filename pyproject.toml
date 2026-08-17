@@ -36,6 +36,16 @@ dev = [
     "mypy>=1.10",
     "pytest>=9.0",
     "ruff>=0.6",
+    # The pointer-stub suite tests the loud-failure claim against the REAL
+    # readers a stub will meet, not against our own parsers: a stub must fail
+    # at safetensors' and gguf's parse site rather than look like absence.
+    # `numpy` is `gguf`'s dependency, capped because numpy 2.2+ writes PEP 695
+    # `type` aliases in its stubs, which mypy rejects while `python_version`
+    # is this project's real 3.11 floor. Lifting the cap means lying about
+    # that floor, so the cap stays until the floor moves.
+    "gguf>=0.10",
+    "numpy>=1.26,<2.2",
+    "safetensors>=0.4",
 ]
 
 [build-system]
@@ -71,6 +81,7 @@ testpaths = ["python/tests"]
 python_version = "3.11"
 strict = true
 files = ["python/src", "python/tests"]
+
 
 [tool.ruff]
 line-length = 100

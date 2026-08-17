@@ -28,6 +28,7 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
+use tensorfs_core::layout::{self, Layout, STUB_MAGIC};
 use tensorfs_core::object::{self, ObjectDigest};
 use tensorfs_core::planner::{self, ByteSource, PlannerId, RegionKind};
 use tensorfs_core::source::FileByteSource;
@@ -60,6 +61,12 @@ create_exception!(
     TensorfsError,
     "The canonical planner refused a source."
 );
+create_exception!(
+    "tensorfs._tensorfs",
+    LayoutError,
+    TensorfsError,
+    "A snapshot tree or ref could not be projected, read, or removed."
+);
 
 /// Flattens an error and its whole `source()` chain into one message. The
 /// chain carries the actionable half: "object store read failed" alone names
@@ -77,6 +84,10 @@ fn describe(error: &dyn Error) -> String {
 
 fn store_error(error: tensorfs_core::store::StoreError) -> PyErr {
     StoreError::new_err(describe(&error))
+}
+
+fn layout_error(error: layout::LayoutError) -> PyErr {
+    LayoutError::new_err(describe(&error))
 }
 
 fn plan_error(error: planner::PlanError) -> PyErr {
@@ -479,6 +490,7 @@ pub struct PySnapshotEntry {
     logical_size: Option<u64>,
     records: Option<Vec<Py<PyFileRecord>>>,
     digest: Option<String>,
+    body_sha256: Option<String>,
     target: Option<String>,
     ordinal: Option<u64>,
 }
@@ -524,6 +536,14 @@ impl PySnapshotEntry {
     #[getter]
     fn digest(&self) -> Option<&str> {
         self.digest.as_deref()
+    }
+
+    /// A file entry's TFM1 body digest (bare hex): SHA-256 over the entry's
+    /// canonical body encoding. This is the value a pointer stub carries, and
+    /// the only file-level identity a tensor container has.
+    #[getter]
+    fn body_sha256(&self) -> Option<&str> {
+        self.body_sha256.as_deref()
     }
 
     #[getter]
@@ -808,6 +828,63 @@ impl PyObjectStore {
         })
     }
 
+    /// Whether this filesystem let the store create a symlink at open. False
+    /// means the projection writes copies instead: dedup lost, correctness
+    /// kept.
+    #[getter]
+    fn supports_symlinks(&self) -> bool {
+        self.inner.supports_symlinks()
+    }
+
+    /// Projects one snapshot as `snapshots/<id>/…` and returns the tree path.
+    ///
+    /// Zero bytes are copied: directories are directories, blob-planner files
+    /// are relative symlinks into `objects/`, and tensor-planner files — which
+    /// have no single inode to point at — are `TFSSTUB1` pointer stubs
+    /// (`spec/v1/TFSSTUB1.md`). The tree is disposable and pins nothing.
+    fn project_snapshot(&self, py: Python<'_>, snapshot: &PySnapshot) -> PyResult<PathBuf> {
+        let store = Arc::clone(&self.inner);
+        let decoded = snapshot.inner.clone();
+        py.detach(move || Layout::new(&store).project(&decoded))
+            .map_err(layout_error)
+    }
+
+    /// Removes one projected tree. A tree is cache, not evidence, so this
+    /// frees nothing the manifest cannot rebuild.
+    fn remove_snapshot_tree(&self, py: Python<'_>, snapshot_id: &str) -> PyResult<bool> {
+        let id = SnapshotId::from_bytes(parse_hex32(snapshot_id)?);
+        let store = Arc::clone(&self.inner);
+        py.detach(move || Layout::new(&store).remove_tree(&id))
+            .map_err(layout_error)
+    }
+
+    /// Points `refs/<name>` at one snapshot, replacing any previous value by
+    /// one `rename(2)`: a concurrent reader sees the old id or the new one and
+    /// never a gap.
+    fn set_ref(&self, py: Python<'_>, name: &str, snapshot_id: &str) -> PyResult<()> {
+        let id = SnapshotId::from_bytes(parse_hex32(snapshot_id)?);
+        let store = Arc::clone(&self.inner);
+        let name = name.to_owned();
+        py.detach(move || Layout::new(&store).set_ref(&name, &id))
+            .map_err(layout_error)
+    }
+
+    fn read_ref(&self, py: Python<'_>, name: &str) -> PyResult<Option<String>> {
+        let store = Arc::clone(&self.inner);
+        let name = name.to_owned();
+        let found = py
+            .detach(move || Layout::new(&store).read_ref(&name))
+            .map_err(layout_error)?;
+        Ok(found.map(|id| hex_of(id.as_bytes())))
+    }
+
+    fn remove_ref(&self, py: Python<'_>, name: &str) -> PyResult<bool> {
+        let store = Arc::clone(&self.inner);
+        let name = name.to_owned();
+        py.detach(move || Layout::new(&store).remove_ref(&name))
+            .map_err(layout_error)
+    }
+
     fn __repr__(&self) -> String {
         format!("ObjectStore(root={:?})", self.root)
     }
@@ -905,6 +982,7 @@ fn decode_snapshot(py: Python<'_>, data: &[u8]) -> PyResult<PySnapshot> {
                     logical_size: None,
                     records: None,
                     digest: None,
+                    body_sha256: None,
                     target: None,
                     ordinal: None,
                 },
@@ -927,6 +1005,7 @@ fn decode_snapshot(py: Python<'_>, data: &[u8]) -> PyResult<PySnapshot> {
                         tfm1::FileBody::Blob { digest, .. } => Some(hex_of(digest.as_bytes())),
                         tfm1::FileBody::Tensor { .. } => None,
                     },
+                    body_sha256: Some(hex_of(body.body_sha256().as_bytes())),
                     target: None,
                     ordinal: None,
                 },
@@ -938,6 +1017,7 @@ fn decode_snapshot(py: Python<'_>, data: &[u8]) -> PyResult<PySnapshot> {
                     logical_size: None,
                     records: None,
                     digest: None,
+                    body_sha256: None,
                     target: Some(target.clone()),
                     ordinal: None,
                 },
@@ -949,6 +1029,7 @@ fn decode_snapshot(py: Python<'_>, data: &[u8]) -> PyResult<PySnapshot> {
                     logical_size: None,
                     records: None,
                     digest: None,
+                    body_sha256: None,
                     target: None,
                     ordinal: Some(*ordinal),
                 },
@@ -960,6 +1041,23 @@ fn decode_snapshot(py: Python<'_>, data: &[u8]) -> PyResult<PySnapshot> {
         inner: snapshot,
         entries,
     })
+}
+
+/// Renders one pointer stub. `body_sha256` is a file entry's TFM1 body digest
+/// and `size` its logical size; both come from the manifest, so rendering a
+/// stub reads no tensor bytes. The bytes are the contract — see
+/// `spec/v1/TFSSTUB1.md` and `spec/v1/tfsstub1-vectors/`.
+#[pyfunction]
+fn stub_bytes<'py>(py: Python<'py>, body_sha256: &str, size: u64) -> PyResult<Bound<'py, PyBytes>> {
+    let digest = parse_digest(body_sha256)?;
+    Ok(PyBytes::new(py, &layout::stub_bytes(&digest, size)))
+}
+
+/// Reads one pointer stub as `(body_sha256, size)`, or `None` when the bytes
+/// are not a stub. The magic decides in eight bytes.
+#[pyfunction]
+fn parse_stub(data: &[u8]) -> Option<(String, u64)> {
+    layout::parse_stub(data).map(|stub| (hex_of(stub.body_sha256.as_bytes()), stub.size))
 }
 
 /// The snapshot id of canonical TFM1 bytes, without decoding them.
@@ -1056,6 +1154,8 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("StoreError", py.get_type::<StoreError>())?;
     module.add("FormatError", py.get_type::<FormatError>())?;
     module.add("PlanError", py.get_type::<PlanError>())?;
+    module.add("LayoutError", py.get_type::<LayoutError>())?;
+    module.add("STUB_MAGIC", PyBytes::new(py, STUB_MAGIC))?;
 
     module.add_class::<PyAdmittedObject>()?;
     module.add_class::<PyTempCollection>()?;
@@ -1071,6 +1171,8 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyRecordsReader>()?;
 
     module.add_function(wrap_pyfunction!(decode_snapshot, module)?)?;
+    module.add_function(wrap_pyfunction!(stub_bytes, module)?)?;
+    module.add_function(wrap_pyfunction!(parse_stub, module)?)?;
     module.add_function(wrap_pyfunction!(snapshot_id_of, module)?)?;
     module.add_function(wrap_pyfunction!(decode_pack, module)?)?;
     module.add_function(wrap_pyfunction!(encode_pack, module)?)?;
