@@ -415,8 +415,9 @@ fn the_no_symlink_fallback_projects_copies_that_read_identically() {
 /// POSIX defines — `FileRenameInfoEx` with `FILE_RENAME_FLAG_POSIX_SEMANTICS`
 /// — measured no better. So what Windows promises, and what this asserts, is
 /// that a miss is transient: reading again while the swaps run resolves it.
-/// `read_ref` does that retry itself, against the store's state and never a
-/// clock, so the misses counted here are the ones that survived it.
+/// The reading again is the CALLER's, here and everywhere: a retry inside
+/// `read_ref` can only wait on a peer's progress, and `scrub` proved a peer
+/// can be waiting on the reader (#103).
 #[test]
 fn a_ref_swap_is_atomic_under_concurrent_readers() {
     const SWAPS: usize = 2_000;

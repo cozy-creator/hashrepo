@@ -1308,11 +1308,16 @@ impl WorkspaceStore {
         for name in layout.ref_names()? {
             let dangling = match layout.read_ref(&name) {
                 Ok(Some(id)) => !rooted.contains(&id),
-                // Absent: another remover won, nothing to report. Unreadable:
-                // a ref is written by one `rename` of whole bytes, so garbage
-                // content is garbage, not a torn read.
+                // Absent: another remover won, nothing to report. Garbage
+                // content: a ref is written by one `rename` of whole bytes, so
+                // garbage is garbage and not a torn read.
                 Ok(None) => false,
-                Err(_) => true,
+                Err(LayoutError::UnreadableRef(_)) => true,
+                // A failed `open` is not evidence about the CONTENT — on
+                // Windows a live ref transiently refuses to open while a swap
+                // replaces it (#103). Deleting on that would cost a live root
+                // its ref for losing a race.
+                Err(_) => false,
             };
             if dangling && layout.remove_ref(&name)? {
                 report.refs_removed.push(name);

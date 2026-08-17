@@ -21,6 +21,7 @@
 #![cfg(any(unix, windows))]
 
 use std::collections::HashMap;
+use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tensorfs_core::object::ObjectDigest;
@@ -352,6 +353,37 @@ fn a_scrub_takes_dangling_trees_and_refs_and_leaves_live_ones() {
         &ObjectDigest::from_bytes(*doomed.as_bytes())
     ));
     Consistency::scan(scratch.path()).assert_intact("after a scrub");
+}
+
+/// A ref whose `open` fails is left alone: a failed `open` says nothing about
+/// the CONTENT, and on Windows a live ref transiently refuses to open while a
+/// swap replaces it (#103). Only unrooted bytes, or bytes that are not an id,
+/// make a ref dangling.
+///
+/// Unix-only because the refusal has to be manufactured, and a mode is the
+/// portable way to manufacture one; the failure it stands in for is Windows'.
+#[cfg(unix)]
+#[test]
+fn a_scrub_keeps_a_ref_it_could_not_open() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let scratch = Scratch::new("gc-scrub-unreadable");
+    let store = WorkspaceStore::open(scratch.path()).expect("store opens");
+    let live = sealed_only(&store, "live", &[("a.bin", b"live snapshot bytes")]);
+    store.layout().set_ref("live", &live).expect("ref writes");
+
+    let path = scratch.path().join("refs").join("live");
+    let readable = fs::metadata(&path).expect("ref stats").permissions();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("ref closes");
+    let report = store.scrub().expect("scrub runs");
+    fs::set_permissions(&path, readable).expect("ref reopens");
+
+    assert_eq!(
+        report.refs_removed,
+        Vec::<String>::new(),
+        "a scrub deleted a ref it could not read"
+    );
+    assert_eq!(store.layout().read_ref("live").unwrap(), Some(live));
 }
 
 /// A scrub racing snapshot deletions never removes a live root's tree, its
