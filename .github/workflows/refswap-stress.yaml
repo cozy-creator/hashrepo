@@ -36,8 +36,8 @@ jobs:
           for run in $(seq 1 20); do
             "${swap}" --exact a_ref_swap_is_atomic_under_concurrent_readers > run.log 2>&1 ||
               { failed=$((failed + 1))
-                grep -E 'panicked|the ref was|a swap invalidated' run.log | head -3; }
+                grep -A 3 -E 'panicked' run.log | head -12; }
             "${race}" --exact a_scrub_racing_a_deletion_never_costs_a_live_root > race.log 2>&1 ||
-              { failed=$((failed + 1)); grep -E 'panicked|assert' race.log | head -3; }
+              { failed=$((failed + 1)); grep -A 3 -E 'panicked' race.log | head -12; }
           done
           echo "::notice::shard ${{ matrix.shard }}: ${failed} failures in 20 swap + 20 scrub-race runs"
