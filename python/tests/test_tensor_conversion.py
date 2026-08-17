@@ -11,14 +11,17 @@ touching one tensor:
 
 from __future__ import annotations
 
+import inspect
 import json
 import random
 import struct
+import textwrap
 from pathlib import Path
 
 import pytest
-from repo_ingest import ingest_with_grid
+from repo_ingest import ingest_file, ingest_with_grid
 from tensorfs import (
+    FileEntry,
     LocalCAS,
     RepositoryManifest,
     TensorError,
@@ -27,6 +30,7 @@ from tensorfs import (
     read_entry,
 )
 from tensorfs.manifest import MAX_CHUNK_SIZE
+from tensorfs.native import plan_and_hash_bytes
 
 # One tensor above 64 MiB so both directions cross an object boundary.
 _TENSORS: tuple[tuple[str, str, tuple[int, ...]], ...] = (
@@ -265,3 +269,166 @@ def test_the_result_matches_the_reference_safetensors_implementation(
             if name == "text_encoder.b":
                 continue  # numpy has no bfloat16
             assert reference.get_tensor(name).tobytes() == bodies[name], name
+
+
+# ---------------------------------------------------------------------------
+# The double-hash fence (#61)
+#
+# `plan_seal_job` re-plans every committed file and reuses an object only when
+# an admitted region matches the planner's `(offset, length)` exactly. If the
+# write API picks boundaries the planner would not, NOTHING matches and seal
+# re-reads and re-hashes the whole file -- the API becomes slower than
+# `save_file` while still looking correct. So the grid is not asserted against
+# a hand-written list of lengths; it is asserted against the canonical planner
+# itself, digest for digest.
+# ---------------------------------------------------------------------------
+
+
+def _grid(entry: FileEntry) -> list[tuple[int, str]]:
+    """A committed file's object grid, spelled the way the planner spells it."""
+
+    return [(chunk.length, str(chunk.digest).removeprefix("sha256:")) for chunk in entry.chunks]
+
+
+def test_the_written_grid_is_exactly_the_grid_the_planner_would_choose(
+    source: dict[str, object],
+) -> None:
+    cas = LocalCAS(Path(str(source["root"])) / "cas")
+    manifest: RepositoryManifest = source["manifest"]  # type: ignore[assignment]
+    entry = manifest.files[0]
+
+    composed = read_entry(cas, entry)
+    plan = plan_and_hash_bytes(composed)
+
+    assert plan.planner == "safetensors-v1"
+    assert plan.file_size == entry.size_bytes
+    # Every object the writer admitted is one the planner would have chosen,
+    # in the same order and at the same length. A re-plan at seal therefore
+    # admits zero additional objects.
+    assert [(o.length, o.digest) for o in plan.objects] == _grid(entry)
+
+
+def test_a_boundary_the_planner_would_not_choose_is_caught(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The red arm for the fence above: perturb one boundary, stay byte-exact.
+
+    The composed *bytes* are unchanged -- only where the writer cut them is.
+    That is exactly the regression the fence exists to catch, and it is
+    invisible to every other assertion in this file.
+    """
+
+    body = random.Random("fence").randbytes(4 << 20)
+    shape = (len(body) // 4,)
+
+    canonical = TensorWriter(LocalCAS(tmp_path / "canonical"), "model.safetensors")
+    canonical.add("w", "F32", shape, body)
+    good = canonical.finish()
+
+    # Half-sized objects: still wire-legal, still the same file, wrong grid.
+    monkeypatch.setattr("tensorfs.writer.MAX_CHUNK_SIZE", 1 << 20)
+    perturbed = TensorWriter(LocalCAS(tmp_path / "perturbed"), "model.safetensors")
+    perturbed.add("w", "F32", shape, body)
+    bad = perturbed.finish()
+
+    assert read_entry(LocalCAS(tmp_path / "canonical"), good) == read_entry(
+        LocalCAS(tmp_path / "perturbed"), bad
+    )
+    assert good.digest == bad.digest, "the perturbation must not change the file"
+
+    plan = plan_and_hash_bytes(read_entry(LocalCAS(tmp_path / "canonical"), good))
+    reference = [(o.length, o.digest) for o in plan.objects]
+    assert reference == _grid(good)
+    assert reference != _grid(bad)
+
+
+def test_the_composed_file_is_byte_identical_to_save_file(tmp_path: Path) -> None:
+    """The oracle #61 asks for: `safetensors.save_file` then ingest, compared.
+
+    The comparison runs all the way to the snapshot id, not just the bytes:
+    same file, same planner grid, same manifest digest. It holds because
+    ``TensorWriter`` lays tensors out in the order they were added and a
+    conversion adds them in the order it read them -- which for any file the
+    reference library wrote is the order that library chose.
+    """
+
+    numpy = pytest.importorskip("numpy")
+    safetensors_numpy = pytest.importorskip("safetensors.numpy")
+
+    # Deliberately NOT the order the reference library lays these out in, so
+    # the test proves the layout came from the file rather than from luck.
+    weights = {
+        "block.0.scale": numpy.arange(16, dtype=numpy.uint8).reshape(4, 4),
+        "block.1.weight": (numpy.arange(256, dtype=numpy.float32) * 7).reshape(16, 16),
+        "block.0.weight": numpy.arange(4096, dtype=numpy.float32).reshape(64, 64),
+    }
+    reference = tmp_path / "reference.safetensors"
+    safetensors_numpy.save_file(weights, reference)
+    raw = reference.read_bytes()
+
+    # The reference library orders the header itself; read that order back out
+    # rather than guessing at it.
+    header = json.loads(raw[8 : 8 + struct.unpack("<Q", raw[:8])[0]])
+    order = [name for name in header if name != "__metadata__"]
+    assert order != list(weights), "the fixture must exercise a reordering"
+
+    cas = LocalCAS(tmp_path / "cas")
+    writer = TensorWriter(cas, "reference.safetensors")
+    for name in order:
+        array = weights[name]
+        dtype = {"float32": "F32", "uint8": "U8"}[str(array.dtype)]
+        writer.add(name, dtype, array.shape, array.tobytes())
+    composed = writer.finish()
+
+    assert read_entry(cas, composed) == raw
+    ingested = ingest_file(cas, reference, manifest_path="reference.safetensors")
+    assert composed == ingested, "same digest, same size, same object grid"
+    assert cas.store_manifest(RepositoryManifest((composed,))) == cas.store_manifest(
+        RepositoryManifest((ingested,))
+    ), "the same snapshot id"
+
+
+# ---------------------------------------------------------------------------
+# The complexity gate (#61)
+#
+# Paul's constraint was "without needing to be complex". The loop it replaces
+# is `python-gen-worker/src/gen_worker/models/w8a8.py:993-1022`, 30 lines. So
+# the loop is written here as a real function, run end to end, and measured.
+# ---------------------------------------------------------------------------
+
+
+def _conversion_loop(cas: LocalCAS, manifest: RepositoryManifest, target: str) -> FileEntry:
+    """Read one tensor at a time, transform one of them, write them back."""
+
+    with open_tensors(cas, manifest) as source:
+        writer = TensorWriter(cas, manifest.files[0].path)
+        for name in source:
+            view = source[name]
+            if name == target:
+                writer.add(name, "U8", view.shape, bytes(view.nbytes // 4))
+            else:
+                writer.inherit(view)
+        return writer.finish()
+
+
+def test_the_conversion_loop_is_no_more_complex_than_save_file(
+    source: dict[str, object],
+) -> None:
+    cas = LocalCAS(Path(str(source["root"])) / "cas")
+    manifest: RepositoryManifest = source["manifest"]  # type: ignore[assignment]
+    bodies: dict[str, bytes] = source["bodies"]  # type: ignore[assignment]
+
+    entry = _conversion_loop(cas, manifest, "denoiser.small")
+
+    with open_tensors(cas, RepositoryManifest((entry,))) as out:
+        assert out["denoiser.small"].dtype == "U8"
+        assert out["text_encoder.a"].tobytes() == bodies["text_encoder.a"]
+
+    body = [
+        line
+        for line in textwrap.dedent(inspect.getsource(_conversion_loop)).splitlines()
+        if line.strip() and not line.strip().startswith(('"""', "#"))
+    ]
+    # 30 lines is `w8a8.py:993-1022`, the loop this replaces. Longer than that
+    # and the API failed its own acceptance criterion.
+    assert len(body) <= 30, len(body)

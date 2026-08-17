@@ -437,3 +437,38 @@ def test_extraction_honours_a_tightened_bound(
         with pytest.raises(FileTooLarge):
             tensors.extract("config.json", destination, limit=2)
     assert not destination.exists()
+
+
+def test_a_piece_is_a_borrowed_view_of_the_mapped_object_not_a_copy(
+    fixture: dict[str, object],
+) -> None:
+    """Identify the zero-copy path; do not assume it was taken.
+
+    Every other assertion in this file compares bytes, and a reader that
+    copied each object into a fresh buffer would satisfy all of them. What
+    distinguishes the two is *where the returned memory lives*: a borrowed
+    view's underlying object is the reader's own mmap of the CAS object.
+    """
+
+    cas = LocalCAS(Path(str(fixture["cas_root"])))
+    bodies: dict[str, bytes] = fixture["bodies"]  # type: ignore[assignment]
+
+    with open_tensors(cas, fixture["ref"]) as tensors:  # type: ignore[arg-type]
+        view = tensors["small.alpha"]
+        piece = next(view.pieces())
+
+        # The piece is a window into a mapping the reader holds, not a buffer
+        # of its own -- and a strictly smaller window, since this tensor
+        # shares its object with the other small ones.
+        mapped = [handle for handle in tensors._maps.values() if handle is piece.obj]
+        assert len(mapped) == 1, "the piece is not backed by any mapped object"
+        assert piece.readonly
+        assert piece.nbytes == view.nbytes < len(mapped[0]), "a window, not the object"
+        assert bytes(piece) == bodies["small.alpha"]
+
+    # The tensor spanning several objects borrows from each of them in turn,
+    # so nothing is concatenated until the caller asks for it.
+    with open_tensors(cas, fixture["ref"]) as tensors:  # type: ignore[arg-type]
+        pieces = list(tensors["dense.weight"].pieces())
+        assert len({id(piece.obj) for piece in pieces}) == len(pieces) > 1
+        assert all(piece.obj in tensors._maps.values() for piece in pieces)

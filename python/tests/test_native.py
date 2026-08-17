@@ -10,6 +10,10 @@ agreeing with itself.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import tempfile
+from importlib import metadata
 from pathlib import Path
 
 import pytest
@@ -431,3 +435,48 @@ def test_the_wheel_ships_no_daemon_and_no_console_script() -> None:
     package = _module_directory()
     assert not (package / "_bin").exists(), "an unshipped daemon directory reached the package"
     assert not hasattr(native, "daemon_binary")
+
+
+def test_the_distribution_declares_no_runtime_dependency() -> None:
+    """`torch` must never become a `tensorfs` dependency (#56, #61).
+
+    tensorfs hands out buffers and the consumer decides whether they become
+    `torch.frombuffer`, numpy, or nothing. A torch import inside tensorfs
+    would drag a multi-gigabyte dependency into a storage library and invert
+    the layering -- so the empty runtime dependency set is asserted, not
+    assumed, and asserted from the INSTALLED metadata rather than from
+    `pyproject.toml`, because that is what a consumer resolves against.
+    """
+
+    declared = metadata.requires("tensorfs") or []
+    runtime = [
+        requirement
+        for requirement in declared
+        if "extra ==" not in requirement.replace('"', "'")
+    ]
+    assert runtime == [], runtime
+    assert not any("torch" in requirement for requirement in declared), declared
+
+
+def test_importing_tensorfs_imports_no_tensor_framework() -> None:
+    """The negative stated as a state assertion, in a clean interpreter.
+
+    Run out of process: this test session has already imported numpy and
+    safetensors for other arms, so an in-process `sys.modules` check would
+    prove nothing.
+    """
+
+    probe = (
+        "import sys, tensorfs, tensorfs.native;"
+        "banned = sorted(m for m in sys.modules if m.split('.')[0]"
+        " in {'torch', 'tensorflow', 'jax'});"
+        "print(banned)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=tempfile.gettempdir(),
+    )
+    assert result.stdout.strip() == "[]", result.stdout

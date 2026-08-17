@@ -183,7 +183,12 @@ jobs:
           from pathlib import Path
           from tempfile import TemporaryDirectory
 
-          from tensorfs import LocalCAS
+          from tensorfs import (
+              LocalCAS,
+              RepositoryManifest,
+              TensorWriter,
+              open_tensors,
+          )
           from tensorfs.native import ObjectStore, RecordsReader, FileRecord
 
           with TemporaryDirectory() as root:
@@ -199,6 +204,14 @@ jobs:
               cas = LocalCAS(Path(root))
               ref = cas.put_bytes(b"sdist-facade")
               assert cas.verify_object(ref).read_bytes() == b"sdist-facade"
+
+          body = bytes(range(32))
+          with TemporaryDirectory() as root:
+              cas = LocalCAS(Path(root))
+              writer = TensorWriter(cas, "model.safetensors")
+              writer.add("block.0.weight", "F32", (2, 4), body)
+              with open_tensors(cas, RepositoryManifest((writer.finish(),))) as tensors:
+                  assert tensors["block.0.weight"].tobytes() == body
 
           print("the sdist builds from source and works")
           PY
@@ -226,40 +239,40 @@ jobs:
           - name: macos-aarch64
             runner: macos-15
     steps:
+      # TWO interpreters, and which two is the point. `abi3-py311` claims one
+      # wheel serves every CPython from 3.11 up; installing it only on the
+      # version it happened to be built against tests none of that claim. The
+      # floor is where an abi3 mistake actually surfaces.
       - uses: actions/setup-python@v5
+        id: floor
         with:
-          python-version: "3.12"
+          python-version: "3.11"
+      - uses: actions/setup-python@v5
+        id: newest
+        with:
+          python-version: "3.13"
       - uses: actions/download-artifact@v4
         with:
           name: wheels-${{ matrix.name }}
           path: dist/
 
-      - name: Create a clean venv
+      - name: Write the smoke script
         shell: bash
         run: |
           set -euo pipefail
-          venv="${RUNNER_TEMP}/wheel-smoke"
-          python -m venv "${venv}"
-          echo "VENV_PYTHON=${venv}/bin/python" >> "${GITHUB_ENV}"
-
-      # Everything the previous publish workflow proved about the pure-Python
-      # wheel, still proved -- plus the equivalents for the compiled half.
-      - name: Install into a clean venv and prove the guarantees
-        shell: bash
-        run: |
-          set -euo pipefail
-          "${VENV_PYTHON}" -m pip install --quiet --upgrade pip
-          "${VENV_PYTHON}" -m pip install --quiet dist/*.whl mypy
-          cd "${RUNNER_TEMP}"
-
-          "${VENV_PYTHON}" - <<'PY'
+          cat > "${RUNNER_TEMP}/smoke.py" <<'PY'
           import sys
           from importlib.resources import files
           from pathlib import Path
           from tempfile import TemporaryDirectory
 
-          from tensorfs import LocalCAS
-          from tensorfs import native
+          from tensorfs import (
+              LocalCAS,
+              RepositoryManifest,
+              TensorWriter,
+              native,
+              open_tensors,
+          )
 
           # The pure-Python facade is untouched by this change.
           assert files("tensorfs").joinpath("py.typed").is_file()
@@ -281,22 +294,59 @@ jobs:
               )
               assert reader.read_at(0, reader.length) == b"native-smoke"
 
+          # An import smoke does not prove the extension works, and neither
+          # does a CAS round trip: what the wheel exists to deliver is a
+          # NAMED TENSOR read out of a committed snapshot without a file. So
+          # write two tensors, read one back, and check the borrow.
+          weight = bytes(range(32))
+          bias = bytes(range(32, 48))
+          with TemporaryDirectory() as root:
+              cas = LocalCAS(Path(root))
+              writer = TensorWriter(cas, "model.safetensors")
+              writer.add("block.0.weight", "F32", (2, 4), weight)
+              writer.add("block.0.bias", "F32", (4,), bias)
+              manifest = RepositoryManifest((writer.finish(),))
+              with open_tensors(cas, manifest) as tensors:
+                  assert sorted(tensors) == ["block.0.bias", "block.0.weight"]
+                  view = tensors["block.0.weight"]
+                  assert view.dtype == "F32" and view.shape == (2, 4), view
+                  assert view.tobytes() == weight
+                  assert tensors["block.0.bias"].tobytes() == bias
+                  # Zero copy: the piece is a window into a mapped CAS object.
+                  piece = next(view.pieces())
+                  assert piece.readonly
+                  assert any(piece.obj is m for m in tensors._maps.values())
+
           # Every platform ships the same thing, and the FUSE daemon is not
           # part of it -- pods cannot mount FUSE; the daemon is shelved on
           # the `shelf/tensorfsd` branch.
           assert not (extension.parent / "_bin").exists(), "the wheel carries an unshipped binary"
-          print("wheel smoke passed")
+          print(f"wheel smoke passed on {sys.version.split()[0]}")
           PY
 
-      # Typing must survive the extension boundary. PyO3 emits no type
-      # information, so this passes only because `_tensorfs.pyi` ships.
-      - name: Strict typing survives the extension boundary
+      # Everything the previous publish workflow proved about the pure-Python
+      # wheel, still proved -- plus the equivalents for the compiled half, on
+      # both ends of the range one abi3 wheel claims to cover.
+      - name: Install into clean venvs and prove the guarantees
         shell: bash
         run: |
           set -euo pipefail
-          cd "${RUNNER_TEMP}"
-          "${VENV_PYTHON}" -m mypy --strict -c 'from tensorfs import LocalCAS'
-          "${VENV_PYTHON}" -m mypy --strict -c 'from tensorfs.native import ObjectStore, RecordsReader, FileRecord'
+          for interpreter in \
+            "${{ steps.floor.outputs.python-path }}" \
+            "${{ steps.newest.outputs.python-path }}"; do
+            tag="$("${interpreter}" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+            venv="${RUNNER_TEMP}/wheel-smoke-${tag}"
+            "${interpreter}" -m venv "${venv}"
+            "${venv}/bin/python" -m pip install --quiet --upgrade pip
+            "${venv}/bin/python" -m pip install --quiet dist/*.whl mypy
+            (cd "${RUNNER_TEMP}" && "${venv}/bin/python" smoke.py)
+
+            # Typing must survive the extension boundary. PyO3 emits no type
+            # information, so this passes only because `_tensorfs.pyi` ships.
+            (cd "${RUNNER_TEMP}" \
+              && "${venv}/bin/python" -m mypy --strict -c 'from tensorfs import LocalCAS' \
+              && "${venv}/bin/python" -m mypy --strict -c 'from tensorfs.native import ObjectStore, RecordsReader, FileRecord')
+          done
 
 
   # GitHub has no musl runner, so the musllinux wheels are installed inside an
@@ -336,7 +386,13 @@ jobs:
           from pathlib import Path
           from tempfile import TemporaryDirectory
 
-          from tensorfs import LocalCAS, native
+          from tensorfs import (
+              LocalCAS,
+              RepositoryManifest,
+              TensorWriter,
+              native,
+              open_tensors,
+          )
 
           with TemporaryDirectory() as root:
               cas = LocalCAS(Path(root))
@@ -351,6 +407,18 @@ jobs:
                   store, [native.FileRecord.data(admitted.digest, admitted.length)]
               )
               assert reader.read_at(0, reader.length) == b"musl-native"
+
+          # And the thing the wheel is FOR: a named tensor out of a committed
+          # snapshot, with no file anywhere.
+          body = bytes(range(32))
+          with TemporaryDirectory() as root:
+              cas = LocalCAS(Path(root))
+              writer = TensorWriter(cas, "model.safetensors")
+              writer.add("block.0.weight", "F32", (2, 4), body)
+              with open_tensors(cas, RepositoryManifest((writer.finish(),))) as tensors:
+                  view = tensors["block.0.weight"]
+                  assert view.dtype == "F32" and view.shape == (2, 4), view
+                  assert view.tobytes() == body
 
           print("musl wheel works")
           PY

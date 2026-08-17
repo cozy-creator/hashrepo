@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -12,6 +11,20 @@ from typing import BinaryIO
 
 from .manifest import RepositoryManifest
 from .refs import CASRef
+
+try:
+    import fcntl
+except ModuleNotFoundError as exc:  # pragma: no cover - not reachable on POSIX
+    # There is no Windows wheel and `import tensorfs` cannot succeed there:
+    # the store's advisory locking is `fcntl.flock`, and `msvcrt.locking` is
+    # byte-range with no shared mode, so it is not a drop-in. Say that here
+    # rather than leaving a bare `No module named 'fcntl'`, which names the
+    # symptom and not the support boundary. Restoring Windows means writing a
+    # real POSIX-lock replacement (tensorfs#57), not editing a wheel matrix.
+    raise ImportError(
+        "tensorfs supports Linux and macOS only. This interpreter has no "
+        "`fcntl` module, so the content store cannot take its advisory locks."
+    ) from exc
 
 _COPY_BUFFER = 1 << 20
 

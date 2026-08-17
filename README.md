@@ -216,11 +216,17 @@ for every architecture — manylinux and musllinux on x86_64 and aarch64, and
 macOS on both architectures, with no QEMU anywhere. There is no Windows wheel:
 `local.py` locks with `fcntl`, so `import tensorfs` cannot succeed there. The
 Rust half builds on Windows fine; the Python half is what needs a real
-POSIX-lock replacement first. Each
-wheel is installed into a clean venv and must pass `mypy --strict` across the
-extension boundary, a `LocalCAS` round trip, and a native `ObjectStore` plus
-`RecordsReader` round trip. The sdist is separately built and installed from
-source and used. Publication then goes through PyPI
+POSIX-lock replacement first, and until it has one the import raises an
+`ImportError` naming the supported platforms rather than a bare
+`No module named 'fcntl'`. Each
+wheel is installed into clean venvs on **CPython 3.11 and 3.13** — the abi3
+floor and the newest supported release, because one wheel serving the whole
+range is a claim, and installing it only on the version it was built against
+tests none of it — and must pass `mypy --strict` across the extension
+boundary, a `LocalCAS` round trip, a native `ObjectStore` plus
+`RecordsReader` round trip, and a **named tensor read out of a committed
+snapshot**: an import smoke does not prove the extension works. The sdist is
+separately built and installed from source and used. Publication then goes through PyPI
 Trusted Publishing and the exact version endpoint is verified, including that
 every published wheel is abi3 and every promised platform tag arrived. Tags
 whose name does not match `pyproject.toml`, or whose commit is not on `main`,

@@ -326,3 +326,49 @@ def test_repository_tree_round_trips_with_portable_paths(tmp_path: Path) -> None
     assert contents == {"config.json": b"{}", "nested/weights.bin": b"weights"}
 
 
+
+
+_NO_FCNTL_PROBE = """
+import sys
+
+class RefuseFcntl:
+    def find_spec(self, name, path=None, target=None):
+        if name == "fcntl":
+            raise ModuleNotFoundError("No module named 'fcntl'", name="fcntl")
+        return None
+
+sys.modules.pop("fcntl", None)
+sys.meta_path.insert(0, RefuseFcntl())
+try:
+    import tensorfs
+except ImportError as exc:
+    print(f"{type(exc).__name__}: {exc}")
+else:
+    print("IMPORTED")
+"""
+
+
+def test_an_interpreter_without_fcntl_is_refused_by_name() -> None:
+    """The platform boundary announces itself (tensorfs#57).
+
+    There is no Windows wheel because `LocalCAS` locks with `fcntl`. A user
+    who installs the sdist there gets an import failure either way; what this
+    fixes is *which* failure. A bare `No module named 'fcntl'` names a missing
+    stdlib module and invites the reader to go install one. The support
+    boundary is the actual answer, so it is what gets raised.
+
+    Simulated rather than skipped: refusing `fcntl` through `sys.meta_path`
+    reproduces the Windows import exactly, and runs on the platforms CI has.
+    """
+
+    result = subprocess.run(
+        [sys.executable, "-c", _NO_FCNTL_PROBE],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=tempfile.gettempdir(),
+    )
+    message = result.stdout.strip()
+    assert message.startswith("ImportError: "), message
+    assert "Linux and macOS only" in message, message
+    assert "fcntl" in message, message
