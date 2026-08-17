@@ -64,8 +64,7 @@ pub struct ScratchReap {
     pub trees_removed: u64,
     pub swaps_removed: u64,
     /// Artifacts a removal had already unlinked from the namespace, whose
-    /// bytes only this reap could finally take — a Windows reader holding a
-    /// file open is the one thing that defers them.
+    /// bytes only this reap could finally take.
     pub unlinked_removed: u64,
     /// What was reclaimed, recorded BEFORE each removal.
     ///
@@ -113,12 +112,12 @@ pub enum Removal {
     /// Nothing was there — including the case of losing a removal race, which
     /// is a success for everyone who wanted the name gone.
     Absent,
-    /// The name is still there and this caller did nothing wrong: another
-    /// handle is inside the artifact, which on Windows refuses the rename that
-    /// takes the name away. It says nothing about rights and nothing about the
-    /// artifact — the same call succeeds once that handle closes — so the
-    /// artifact stays and the next scrub takes it, exactly like one left by a
-    /// crash. POSIX never returns this.
+    /// The name is still there and this caller did nothing wrong: Windows
+    /// transiently refused the `open` a rename needs. It says nothing about
+    /// this caller's rights and nothing about the artifact — the identical
+    /// call succeeds moments later — so the artifact stays, is still garbage,
+    /// and the next scrub takes it exactly like one left by a crash. POSIX
+    /// never returns this.
     Deferred,
 }
 
@@ -511,22 +510,20 @@ impl<'store> Layout<'store> {
     /// Takes one live name away and deletes what it named, in that order.
     ///
     /// Deleting a live name in place is the wrong primitive under
-    /// concurrency, and Windows says so out loud. Two removers of one tree
+    /// concurrency, and Windows says so out loud: two removers of one tree
     /// both call `remove_dir_all` on the same directory and the loser gets
     /// `ERROR_ACCESS_DENIED`, not `NotFound` — a scrub racing a deletion
-    /// failed for doing exactly what it is for (#109). A reader holding one
-    /// file inside a tree refuses the whole removal for the same reason,
-    /// where POSIX would unlink the name and keep the bytes for the reader.
+    /// failed for doing exactly what it is for (#109).
     ///
     /// So the name goes first, by `rename` into a `.removed-…` scratch name
     /// nothing else can reach, and the bytes go second. The rename is the
     /// claim: exactly one remover can win it, the loser is told `NotFound`
     /// and reports the honest `false`, and no two removers ever meet inside
-    /// one artifact. A delete that then fails — a Windows reader still has
-    /// the bytes open — leaves only unreachable scratch that
-    /// [`reap_scratch`] takes on sight, so it is not a removal failure and
-    /// is not reported as one: the caller asked for the name to be gone, and
-    /// it is.
+    /// one artifact. A delete that then fails leaves only unreachable scratch
+    /// that [`reap_scratch`] takes on sight, so it is not a removal failure
+    /// and is not reported as one: the caller asked for the name to be gone,
+    /// and it is. What Windows can still refuse is the claim itself, which is
+    /// [`Removal::Deferred`] and also not a failure.
     ///
     /// [`reap_scratch`]: Self::reap_scratch
     fn unlink_scratch(&self, path: &Path, scratch_dir: &Path) -> Result<Removal, LayoutError> {
@@ -534,7 +531,7 @@ impl<'store> Layout<'store> {
         match fs::rename(path, &claimed) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Removal::Absent),
-            Err(error) if is_share_refusal(&error) => return Ok(Removal::Deferred),
+            Err(error) if is_transient_refusal(&error) => return Ok(Removal::Deferred),
             Err(error) => return Err(error.into()),
         }
         delete_scratch(&claimed);
@@ -690,20 +687,27 @@ fn scratch_token() -> String {
     )
 }
 
-/// Windows refuses to rename or delete an artifact another handle is inside:
-/// `ERROR_ACCESS_DENIED` (5) for a directory whose contents are open, and
-/// `ERROR_SHARING_VIOLATION` (32) for a file. Neither is a statement about
-/// this caller's rights — the identical call succeeds once the other handle
-/// closes — and neither has a POSIX equivalent, where a rename cannot be
-/// refused for a busy artifact. So this clause is Windows-only, deliberately:
-/// on POSIX every one of these errors is real and propagates.
+/// Windows transiently refuses the `open` a rename needs, with
+/// `ERROR_ACCESS_DENIED` (5) or `ERROR_SHARING_VIOLATION` (32).
+///
+/// This is #103's window seen from the renamer's side: an `open` of a name a
+/// `MoveFileEx(REPLACE_EXISTING)` is replacing — which is every `set_ref` — is
+/// refused for the same reason a reader's `open` is, and a removal has to open
+/// the name to take it away. A handle held on the artifact without
+/// `FILE_SHARE_DELETE` refuses it too; a handle held BY THIS LIBRARY does not,
+/// because `std` opens with all three share flags, measured 5/5 on the runner.
+///
+/// Neither code is a statement about this caller's rights, and neither has a
+/// POSIX equivalent — a rename there cannot be refused for a busy name — so
+/// this clause is Windows-only, deliberately: on POSIX every one of these
+/// errors is real and propagates.
 #[cfg(windows)]
-fn is_share_refusal(error: &io::Error) -> bool {
+fn is_transient_refusal(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(5 | 32))
 }
 
 #[cfg(not(windows))]
-const fn is_share_refusal(_error: &io::Error) -> bool {
+const fn is_transient_refusal(_error: &io::Error) -> bool {
     false
 }
 

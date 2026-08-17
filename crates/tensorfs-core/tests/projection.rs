@@ -764,19 +764,19 @@ fn deleting_a_snapshot_removes_its_tree_and_only_its_tree() {
     ));
 }
 
-/// A removal gives the NAME up first and deletes the bytes second, so a
-/// reader holding one file open cannot keep a tree projected or a ref alive,
-/// and the bytes it is still holding are taken by the next reap.
+/// A removal never FAILS because someone is reading the artifact, and it
+/// never lies about what it did.
 ///
-/// Windows is where this is load-bearing and where it was red: there
-/// `remove_dir_all` of a tree with an open file inside refuses with
-/// `ERROR_ACCESS_DENIED`, and so does the loser of a removal race — which is
-/// how a scrub racing a deletion failed for doing exactly its job, and how
-/// that failure became a three-hour hang (#109). POSIX unlinks the name and
-/// keeps the bytes for the reader, which is the behaviour asserted here for
-/// both.
+/// The deterministic half of #109, whose racing half is `gc.rs`. POSIX unlinks
+/// the name and keeps the bytes for the reader. Windows was measured doing the
+/// same on the runner — `std` opens with `FILE_SHARE_DELETE` and
+/// `remove_dir_all` deletes with POSIX semantics, so a held file is no
+/// obstacle, 5/5 — but it can still refuse the rename a removal needs
+/// transiently, which is `Removal::Deferred`, a report and not an error. So
+/// this holds each platform to its own contract and holds every outcome to
+/// what the filesystem says afterwards.
 #[test]
-fn a_removal_gives_up_the_name_while_a_reader_still_holds_the_bytes() {
+fn a_removal_never_fails_because_a_reader_holds_the_bytes() {
     let root = TempRoot::new("unlink-held");
     let store = WorkspaceStore::open(&root.0).unwrap();
     let fixture = Fixture::new();
@@ -790,7 +790,7 @@ fn a_removal_gives_up_the_name_while_a_reader_still_holds_the_bytes() {
     let held_ref = fs::File::open(&ref_path).unwrap();
 
     // Neither removal may fail: an open handle is a normal state of the
-    // store, not an error in the caller.
+    // store, not an error in the caller.  A Windows refusal is `Deferred`.
     let tree_outcome = layout.remove_tree(&id).unwrap();
     let ref_outcome = layout.remove_ref("held").unwrap();
     if cfg!(unix) {

@@ -1041,8 +1041,8 @@ impl PyObjectStore {
     /// frees nothing the manifest cannot rebuild.
     ///
     /// `False` means this call did not take the name: nothing was there, or —
-    /// on Windows only — another handle is inside the tree and refuses the
-    /// rename that removes it, which leaves the tree for the next scrub.
+    /// on Windows only — the rename that takes it away was refused
+    /// transiently, which leaves the tree for the next scrub.
     fn remove_snapshot_tree(&self, py: Python<'_>, snapshot_id: &str) -> PyResult<bool> {
         let id = SnapshotId::from_bytes(parse_hex32(snapshot_id)?);
         let store = Arc::clone(&self.inner);

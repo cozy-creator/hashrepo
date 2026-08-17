@@ -364,16 +364,18 @@ only writer. What each layer protects:
   loud: two removers of one tree — a scrub and a `delete_snapshot`, which is
   the normal state of affairs here — both call `remove_dir_all` on it and the
   loser gets `ERROR_ACCESS_DENIED`, not `NotFound`, so a scrub failed for doing
-  exactly what it exists to do. A reader holding one file inside the tree
-  refuses the whole removal the same way. So `remove_tree` and `remove_ref`
+  exactly what it exists to do. So `remove_tree` and `remove_ref`
   rename the live name into a `.removed-…` scratch name nothing can reach and
   delete only that: the rename is the claim, exactly one remover wins it, the
   loser is told `NotFound` and reports `Absent`, and a delete that then fails
   leaves unreachable scratch the next reap takes rather than a removal failure.
 - **And the removal contract is per-platform, because Windows cannot give the
-  POSIX one.** A rename cannot take a name Windows has an open handle inside —
-  Defender or an indexer touching a freshly projected file is enough — so a
-  removal reports one of three outcomes rather than a `bool`: `Taken`,
+  POSIX one.** Taking a name means opening it, and §1's window refuses that
+  `open` transiently on the renamer's side exactly as it does on a reader's —
+  9 of 100 racing-test runs on `windows-latest` hit it once. (A held file is
+  NOT the cause: `std` opens with `FILE_SHARE_DELETE` and `remove_dir_all`
+  deletes with POSIX semantics, measured 5/5 on master's own removal path.) So
+  a removal reports one of three outcomes rather than a `bool`: `Taken`,
   `Absent`, or `Deferred`. `Deferred` says nothing about the caller's rights
   and nothing about the artifact: the identical call succeeds once the handle
   closes, the artifact is untouched and still garbage, and the next scrub takes
@@ -408,9 +410,8 @@ resource can still be accounted for afterwards.
 
 `.removed-…` is the third scratch name and the only one decided without a
 lease: a removal already took its name away, so nothing can reach it and no
-holder can make it live again. It goes on sight, and the one thing that defers
-it is a reader still holding its bytes — a Windows-only wait, since POSIX frees
-them at the unlink.
+holder can make it live again. It goes on sight, and only a handle that refuses
+its deletion can defer it.
 
 No clock is involved, deliberately: a grace long enough to protect a 30 GB
 projection is long enough to strand one until the disk fills.
