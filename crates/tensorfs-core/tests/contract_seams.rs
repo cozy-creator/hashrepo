@@ -676,3 +676,13 @@ fn the_shipped_library_is_pinned_by_digest() {
         "a shipped contract changed without a version bump"
     );
 }
+
+/// The floor decides chunk boundaries, so it is identity, not tuning
+/// (spec/v1/contracts/README.md "The floor", frozen for v1). If this test is
+/// red you are changing snapshot identity for every seam-cut file in every
+/// store: that requires a format version bump, a new vector corpus, and a
+/// migration story — not an edit.
+#[test]
+fn seam_floor_is_frozen_for_v1() {
+    assert_eq!(tensorfs_core::contract::MIN_SEAM_PART_BYTES, 1024 * 1024);
+}

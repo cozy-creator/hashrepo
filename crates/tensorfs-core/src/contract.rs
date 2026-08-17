@@ -375,6 +375,12 @@ impl Pattern {
 /// The check is a pure function of the tensor's extent and the declaration, so
 /// the fused packaging and the split packaging cross it at exactly the same
 /// size — a fusion never degrades on one side only.
+///
+/// FROZEN for v1 (Paul, 2026-08-17): this constant decides chunk boundaries,
+/// so it is part of snapshot identity exactly like `MAX_OBJECT_SIZE`. Moving
+/// it makes identical inputs chunk differently across planner versions —
+/// silent dedup loss with no red anywhere. It changes only with a format
+/// version bump. `seam_floor_is_frozen_for_v1` pins it.
 pub const MIN_SEAM_PART_BYTES: u64 = 1024 * 1024;
 
 /// One part of a fused tensor: the role suffix it carries in the split
