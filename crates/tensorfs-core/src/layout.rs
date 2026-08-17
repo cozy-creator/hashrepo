@@ -455,7 +455,10 @@ impl<'store> Layout<'store> {
     /// Linux too, so the symlink's two advantages — `readlink` and free
     /// traversal — both evaporate under exactly the concurrency a ref exists
     /// to survive. `open`-then-`read` of a rename-swapped name yields the old
-    /// id or the new one on every platform, and nothing else.
+    /// id or the new one and nothing else — **on POSIX**. Windows' rename is
+    /// not atomic to a concurrent opener and cannot be made so, so there the
+    /// `open` itself transiently fails and [`Self::read_ref`] looks again
+    /// (#103); a Windows tool reading the file directly must do the same.
     pub fn set_ref(&self, name: &str, id: &SnapshotId) -> Result<(), LayoutError> {
         let refs = self.refs_dir();
         let destination = refs.join(validated_ref_name(name)?);
@@ -485,19 +488,63 @@ impl<'store> Layout<'store> {
     }
 
     /// Reads `refs/<name>`: the id it names, or `None` when there is no such
-    /// ref. One `open` plus one `read`, so a concurrent swap is invisible.
+    /// ref. One `open` plus one `read`, so a concurrent swap is invisible —
+    /// except on Windows, where [`Self::open_lost_a_race`] says when to look
+    /// again.
     pub fn read_ref(&self, name: &str) -> Result<Option<SnapshotId>, LayoutError> {
-        let path = self.refs_dir().join(validated_ref_name(name)?);
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
+        let name = validated_ref_name(name)?;
+        let path = self.refs_dir().join(name);
+        let bytes = loop {
+            match fs::read(&path) {
+                Ok(bytes) => break bytes,
+                Err(error) if self.open_lost_a_race(name, &error) => continue,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error.into()),
+            }
         };
         String::from_utf8(bytes)
             .ok()
             .and_then(|text| SnapshotId::parse_hex(text.trim()))
             .map(Some)
             .ok_or_else(|| LayoutError::UnreadableRef(name.to_owned()))
+    }
+
+    /// Whether a failed `open` of a ref is Windows losing a race with a swap
+    /// rather than the answer to the question.
+    ///
+    /// `rename(2)` is atomic to a concurrent opener; Windows' superseding
+    /// rename is not, so an `open` of a name being replaced transiently
+    /// returns ERROR_FILE_NOT_FOUND or ERROR_ACCESS_DENIED — measured on CI
+    /// at roughly 2 opens per million, and `FileRenameInfoEx`'s POSIX
+    /// semantics does not close the window (#103).
+    ///
+    /// **The loop this drives is bounded by the store's state, never by a
+    /// clock or a count.** A retry happens only while the store proves the
+    /// failed answer wrong: the directory lists the name the `open` could not
+    /// find, or a staged file says a swap is between `write` and `rename`
+    /// right now. Once the store is quiescent neither holds, so a ref that is
+    /// genuinely absent and a ref this process genuinely may not read both
+    /// return on the first attempt.
+    #[cfg(windows)]
+    fn open_lost_a_race(&self, name: &str, error: &io::Error) -> bool {
+        let Ok(listing) = fs::read_dir(self.refs_dir()) else {
+            // An unreadable refs directory is the answer, not a race.
+            return false;
+        };
+        let mut listing = listing.flatten().map(|entry| entry.file_name());
+        match error.kind() {
+            io::ErrorKind::NotFound => listing.any(|entry| entry == *name),
+            io::ErrorKind::PermissionDenied => {
+                listing.any(|entry| entry.to_string_lossy().starts_with(SWAP_PREFIX))
+            }
+            _ => false,
+        }
+    }
+
+    /// POSIX renames atomically for an opener, so the first answer is it.
+    #[cfg(not(windows))]
+    const fn open_lost_a_race(&self, _name: &str, _error: &io::Error) -> bool {
+        false
     }
 
     pub fn remove_ref(&self, name: &str) -> Result<bool, LayoutError> {
