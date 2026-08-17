@@ -31,8 +31,9 @@ use sha2::{Digest as _, Sha256};
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::PlannerId;
 use tensorfs_core::sync::{
-    CompleteStatus, DownloadGrant, GrantsPlan, PackClaim, PackGrant, ProgressSink, StagedPack,
-    SyncPlan, SyncTransport, TransportError, manifest_object_digest,
+    BlobGrant, BlobPart, BlobPartReport, CompleteStatus, DownloadGrant, GrantsPlan, PackClaim,
+    PackGrant, ProgressSink, StagedPack, SyncPlan, SyncTransport, TransportError,
+    manifest_object_digest,
 };
 use tensorfs_core::tfm1::{Entry, FileRecord, SnapshotId, decode};
 use tensorfs_core::tfp1;
@@ -274,6 +275,44 @@ fn walk(dir: &Path, report: &mut Consistency) {
     }
 }
 
+/// What a transport whose corpus never reaches the blob lane answers if the
+/// engine ever asks. It never should — a lane it never lists cannot be
+/// driven — so this is a loud refusal rather than a silent success.
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// Splits `fake-blob-put://<upload-id>/<digest-hex>/<part-number>`. The
+/// staging URL carries the upload identity, exactly as a presigned part URL
+/// does, so a re-grant that changed the upload id genuinely writes somewhere
+/// else and the parts already landed are orphaned.
+fn parse_blob_part_url(url: &str) -> Result<(String, [u8; 32], u32), TransportError> {
+    let bad = |what: &str| TransportError::Refused {
+        code: "bad_request".to_owned(),
+        detail: format!("{what}: {url}"),
+    };
+    let tail = url
+        .strip_prefix("fake-blob-put://")
+        .ok_or_else(|| bad("not a blob part url"))?;
+    let (head, number) = tail.rsplit_once('/').ok_or_else(|| bad("no part number"))?;
+    let (upload_id, hex) = head.rsplit_once('/').ok_or_else(|| bad("no digest"))?;
+    let digest = parse_hex_digest(hex).ok_or_else(|| bad("undecodable digest"))?;
+    let number = number.parse().map_err(|_| bad("undecodable part number"))?;
+    Ok((upload_id.to_owned(), *digest.as_bytes(), number))
+}
+
+pub fn blob_lane_absent() -> TransportError {
+    TransportError::Refused {
+        code: "blob_lane_unsupported".to_owned(),
+        detail: "this transport lists no blob-lane objects".to_owned(),
+    }
+}
+
 /// The on-disk shape `ObjectStore::collect_abandoned_temps` will consider.
 ///
 /// Spelled out here rather than imported, because the point is to check the
@@ -507,11 +546,48 @@ pub struct Faults {
     pub forget_sessions: bool,
     /// Transient I/O failures to burn on downloads before succeeding.
     pub fail_downloads: u32,
+    /// The pack-payload bound this hub declares. Zero means the wire's own
+    /// 64 MiB. A test lowers it to put small objects in the blob lane and
+    /// exercise the multipart path without moving 64 MiB.
+    pub pack_payload_bound: u64,
+    /// Transient I/O failures to burn on blob PART uploads before succeeding.
+    pub fail_blob_parts: u32,
+    /// Expire the blob grant ONCE, after this many parts have landed. `Some(0)`
+    /// expires the first part. Modelling the lease running out mid-blob is
+    /// what makes a resume claim testable: some parts are at the store and
+    /// some are not.
+    pub expire_blob_parts_after: Option<u32>,
+    /// Silently corrupt this part number's bytes as they land, the way a
+    /// store that computes no checksum of its own would accept them. Only the
+    /// admission-time stream hash can catch it.
+    pub corrupt_blob_part: Option<u32>,
+    /// Drop this digest from every blob-grant answer.
+    pub omit_blob_grant: Option<[u8; 32]>,
+    /// Answer a re-grant with a FRESH upload id, orphaning the parts already
+    /// landed — the defect th#2064 found in its own resume promise.
+    pub forget_blob_upload_id: bool,
+    /// Put every missing object in the blob lane regardless of size, so the
+    /// client meets a remote that partitioned wrongly.
+    pub blob_lane_everything: bool,
 }
+
+/// `(pack lane, blob lane)` — what one declare or re-probe answers with.
+type LaneViews = (Vec<(ObjectDigest, u64)>, Vec<(ObjectDigest, u64)>);
 
 struct PackRow {
     staging_key: String,
     objects: Vec<[u8; 32]>,
+}
+
+/// One blob's live multipart upload, modelled the way the hub models it: an
+/// upload id, a uniform part size, and the etags the client has reported.
+/// The part BYTES live in `HubState::blob_parts`, which stands in for the
+/// object store — the hub cannot see them until it assembles them.
+struct BlobUpload {
+    upload_id: String,
+    length: u64,
+    part_size: u64,
+    reported: BTreeMap<u32, String>,
 }
 
 struct Session {
@@ -520,12 +596,25 @@ struct Session {
     closure: Vec<([u8; 32], u64)>,
     manifest: Vec<u8>,
     packs: BTreeMap<String, PackRow>,
+    blobs: BTreeMap<[u8; 32], BlobUpload>,
 }
 
 #[derive(Default)]
 pub struct HubState {
     pub objects: HashMap<[u8; 32], Vec<u8>>,
     staged: HashMap<String, Vec<u8>>,
+    /// The store's view of a multipart upload: `(upload_id, part_number)` to
+    /// bytes. Keyed by upload id and not by digest, so adopting the same
+    /// upload on a re-grant is what makes a resume find its parts — and
+    /// answering with a new id genuinely orphans them.
+    blob_parts: HashMap<(String, u32), Vec<u8>>,
+    /// Part PUTs the client actually made, per digest.
+    pub blob_part_puts: HashMap<[u8; 32], u32>,
+    /// Blob grant calls the client made, per digest.
+    pub blob_grant_calls: HashMap<[u8; 32], u32>,
+    /// Monotonic, so `forget_blob_upload_id` really does mint a NEW id every
+    /// time rather than a stable one that accidentally resumes.
+    blob_regrants: u64,
     pub head: Option<SnapshotId>,
     sessions: HashMap<String, Session>,
     next: u64,
@@ -566,6 +655,46 @@ impl FaultHub {
     /// objects and head it already holds — the "the outage ends" transition.
     pub fn heal(&self) {
         self.state.borrow_mut().faults = Faults::default();
+    }
+
+    /// The payload bound this hub declares, and therefore the lane split.
+    fn payload_bound(state: &HubState) -> u64 {
+        if state.faults.pack_payload_bound == 0 {
+            tfp1::MAX_PACK_PAYLOAD
+        } else {
+            state.faults.pack_payload_bound
+        }
+    }
+
+    /// Whether one blob's reported parts cover it, which is the blob-lane
+    /// equivalent of a staged pack: the bytes are at the store and the hub
+    /// has what it needs to assemble them.
+    fn blob_is_staged(session: &Session, digest: &[u8; 32]) -> bool {
+        session.blobs.get(digest).is_some_and(|upload| {
+            let expected = upload.length.div_ceil(upload.part_size).max(1) as usize;
+            upload.reported.len() == expected
+        })
+    }
+
+    /// The missing set split into the two lanes, in canonical order.
+    fn lane_views(state: &HubState, session: &Session) -> LaneViews {
+        let bound = Self::payload_bound(state);
+        let mut packs = Vec::new();
+        let mut blobs = Vec::new();
+        for (digest, length) in Self::missing_view(state, session) {
+            if state.faults.blob_lane_everything || length > bound {
+                // A blob whose parts are all reported is staged: the bytes
+                // are at the store and the hub has what it needs to assemble
+                // them, so it drops out of the lane exactly as a staged pack
+                // drops out of the pack lane.
+                if !Self::blob_is_staged(session, digest.as_bytes()) {
+                    blobs.push((digest, length));
+                }
+            } else {
+                packs.push((digest, length));
+            }
+        }
+        (packs, blobs)
     }
 
     fn missing_view(state: &HubState, session: &Session) -> Vec<(ObjectDigest, u64)> {
@@ -642,6 +771,7 @@ impl SyncTransport for FaultHub {
             closure,
             manifest: tfm1_bytes.to_vec(),
             packs: BTreeMap::new(),
+            blobs: BTreeMap::new(),
         };
         let have = session
             .closure
@@ -649,14 +779,15 @@ impl SyncTransport for FaultHub {
             .filter(|(digest, _)| state.objects.contains_key(digest))
             .map(|(digest, _)| ObjectDigest::from_bytes(*digest))
             .collect();
-        let missing = Self::missing_view(&state, &session);
+        let (missing, missing_blobs) = Self::lane_views(&state, &session);
         let plan = SyncPlan {
             snapshot_id: id,
             session: key.clone(),
             have,
             staged_packs: Vec::new(),
             missing,
-            max_pack_payload: tfp1::MAX_PACK_PAYLOAD,
+            missing_blobs,
+            max_pack_payload: Self::payload_bound(&state),
             max_packs_per_request: MAX_PACKS_PER_REQUEST,
         };
         state.sessions.insert(key, session);
@@ -704,6 +835,7 @@ impl SyncTransport for FaultHub {
                 detail: "too many packs".to_owned(),
             });
         }
+        let bound = Self::payload_bound(&state);
         let missing_now: HashMap<[u8; 32], u64> = {
             let session = &state.sessions[session_key];
             Self::missing_view(&state, session)
@@ -735,6 +867,14 @@ impl SyncTransport for FaultHub {
                         detail: format!("{digest} is not a missing object of this snapshot"),
                     });
                 };
+                // The lanes cannot be confused: a pack grant naming a blob-lane
+                // object is refused here exactly as the hub refuses it.
+                if *size > bound {
+                    return Err(TransportError::Refused {
+                        code: "object_exceeds_pack_payload".to_owned(),
+                        detail: format!("{digest} belongs to the blob lane"),
+                    });
+                }
                 payload += size;
             }
             let expected = 12 + 48 * claim.objects.len() as u64 + payload;
@@ -771,11 +911,226 @@ impl SyncTransport for FaultHub {
             session.packs.insert(sha, row);
         }
         let session = &state.sessions[session_key];
+        let (missing, missing_blobs) = Self::lane_views(&state, session);
         Ok(GrantsPlan {
             grants,
             staged_packs: Self::staged_rows(&state, session),
-            missing: Self::missing_view(&state, session),
+            missing,
+            missing_blobs,
         })
+    }
+
+    fn blob_grants(
+        &self,
+        session_key: &str,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<BlobGrant>, TransportError> {
+        let mut state = self.state.borrow_mut();
+        if digests.len() > tensorfs_core::sync::BLOB_GRANT_BATCH {
+            return Err(TransportError::Refused {
+                code: "bad_request".to_owned(),
+                detail: "too many blob digests".to_owned(),
+            });
+        }
+        let bound = Self::payload_bound(&state);
+        let forget = state.faults.forget_blob_upload_id;
+        let omit = state.faults.omit_blob_grant;
+        let lane_everything = state.faults.blob_lane_everything;
+        let Some(session) = state.sessions.get(session_key) else {
+            return Err(TransportError::Refused {
+                code: "unknown-session".to_owned(),
+                detail: session_key.to_owned(),
+            });
+        };
+        let sizes: HashMap<[u8; 32], u64> = session.closure.iter().copied().collect();
+        let existing: HashMap<[u8; 32], (String, u64)> = session
+            .blobs
+            .iter()
+            .map(|(digest, upload)| (*digest, (upload.upload_id.clone(), upload.part_size)))
+            .collect();
+
+        let mut opened: Vec<([u8; 32], BlobUpload)> = Vec::new();
+        let mut answers = Vec::new();
+        for digest in digests {
+            *state
+                .blob_grant_calls
+                .entry(*digest.as_bytes())
+                .or_default() += 1;
+            if omit == Some(*digest.as_bytes()) {
+                continue;
+            }
+            let Some(length) = sizes.get(digest.as_bytes()).copied() else {
+                return Err(TransportError::Refused {
+                    code: "bad_request".to_owned(),
+                    detail: format!("{digest} is not an object of this snapshot"),
+                });
+            };
+            // A blob grant naming a pack-lane digest is refused, the mirror of
+            // the refusal in `pack_grants`.
+            if length <= bound && !lane_everything {
+                return Err(TransportError::Refused {
+                    code: "object_below_blob_lane".to_owned(),
+                    detail: format!("{digest} belongs to the pack lane"),
+                });
+            }
+            // Part size is the SERVER's, uniform, last part excepted.
+            let part_size = bound.max(1);
+            let (upload_id, part_size) = match existing.get(digest.as_bytes()) {
+                Some((id, size)) if !forget => (id.clone(), *size),
+                _ => (
+                    format!("upload-{}-{}", session_key, hex_bytes(digest.as_bytes())),
+                    part_size,
+                ),
+            };
+            let upload_id = if forget {
+                state.blob_regrants += 1;
+                format!("{upload_id}-refreshed-{}", state.blob_regrants)
+            } else {
+                upload_id
+            };
+            let count = length.div_ceil(part_size).max(1);
+            let mut parts = Vec::new();
+            let mut uploaded_parts = Vec::new();
+            for index in 0..count {
+                let number = (index + 1) as u32;
+                let size = part_size.min(length - index * part_size);
+                if state.blob_parts.contains_key(&(upload_id.clone(), number)) {
+                    uploaded_parts.push(number);
+                }
+                parts.push(BlobPart {
+                    part_number: number,
+                    size_bytes: size,
+                    url: format!(
+                        "fake-blob-put://{upload_id}/{}/{number}",
+                        hex_bytes(digest.as_bytes())
+                    ),
+                    headers: vec![("x-amz-part-number".to_owned(), number.to_string())],
+                });
+            }
+            opened.push((
+                *digest.as_bytes(),
+                BlobUpload {
+                    upload_id: upload_id.clone(),
+                    length,
+                    part_size,
+                    reported: BTreeMap::new(),
+                },
+            ));
+            answers.push(BlobGrant {
+                digest: *digest,
+                length,
+                staging_key: format!("snapshots/staging/{session_key}/{digest}.blob"),
+                upload_id,
+                part_size,
+                parts,
+                uploaded_parts,
+            });
+        }
+        let session = state.sessions.get_mut(session_key).expect("session exists");
+        for (digest, upload) in opened {
+            // Re-granting keeps whatever etags were already reported unless
+            // the upload id changed, which is exactly what orphans them.
+            match session.blobs.get_mut(&digest) {
+                Some(live) if live.upload_id == upload.upload_id => {}
+                _ => {
+                    session.blobs.insert(digest, upload);
+                }
+            }
+        }
+        Ok(answers)
+    }
+
+    fn upload_blob_part(
+        &self,
+        part: &BlobPart,
+        bytes: &[u8],
+        _progress: ProgressSink<'_>,
+    ) -> Result<String, TransportError> {
+        let mut state = self.state.borrow_mut();
+        if state.faults.fail_blob_parts > 0 {
+            state.faults.fail_blob_parts -= 1;
+            return Err(TransportError::Io("injected part carrier fault".to_owned()));
+        }
+        if let Some(after) = state.faults.expire_blob_parts_after
+            && state.blob_part_puts.values().copied().sum::<u32>() >= after
+        {
+            state.faults.expire_blob_parts_after = None;
+            return Err(TransportError::Expired(
+                "injected blob grant expiry".to_owned(),
+            ));
+        }
+        if bytes.len() as u64 != part.size_bytes {
+            return Err(TransportError::Refused {
+                code: "bad_request".to_owned(),
+                detail: format!(
+                    "part {} is {} bytes, the grant says {}",
+                    part.part_number,
+                    bytes.len(),
+                    part.size_bytes
+                ),
+            });
+        }
+        let (upload_id, digest, number) = parse_blob_part_url(&part.url)?;
+        *state.blob_part_puts.entry(digest).or_default() += 1;
+        // The store accepts whatever arrives and names it; it computes no
+        // digest of its own, which is exactly why the hub must stream-hash
+        // the assembled object at admission.
+        let mut landed = bytes.to_vec();
+        if state.faults.corrupt_blob_part == Some(part.part_number) {
+            landed[0] ^= 0xFF;
+        }
+        let etag = format!("\"{}\"", sha256_hex(&landed));
+        state.blob_parts.insert((upload_id, number), landed);
+        Ok(etag)
+    }
+
+    fn report_blob_parts(
+        &self,
+        session_key: &str,
+        digest: &ObjectDigest,
+        parts: &[BlobPartReport],
+    ) -> Result<(), TransportError> {
+        let mut state = self.state.borrow_mut();
+        let landed: HashMap<(String, u32), String> = state
+            .blob_parts
+            .iter()
+            .map(|((id, number), bytes)| {
+                ((id.clone(), *number), format!("\"{}\"", sha256_hex(bytes)))
+            })
+            .collect();
+        let Some(session) = state.sessions.get_mut(session_key) else {
+            return Err(TransportError::Refused {
+                code: "unknown-session".to_owned(),
+                detail: session_key.to_owned(),
+            });
+        };
+        let Some(upload) = session.blobs.get_mut(digest.as_bytes()) else {
+            return Err(TransportError::Refused {
+                code: "bad_request".to_owned(),
+                detail: format!("{digest} has no live upload in this session"),
+            });
+        };
+        for part in parts {
+            let key = (upload.upload_id.clone(), part.part_number);
+            match landed.get(&key) {
+                Some(etag) if *etag == part.etag => {
+                    upload.reported.insert(part.part_number, part.etag.clone());
+                }
+                Some(_) => {
+                    return Err(TransportError::Refused {
+                        code: "part_etag_mismatch".to_owned(),
+                        detail: format!("part {} etag does not match", part.part_number),
+                    });
+                }
+                None => {
+                    return Err(TransportError::Refused {
+                        code: "part_missing".to_owned(),
+                        detail: format!("part {} was never uploaded", part.part_number),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     fn upload_pack(
@@ -845,6 +1200,51 @@ impl SyncTransport for FaultHub {
                 .map(|pack| pack.staging_key.clone())
                 .collect::<Vec<_>>(),
         );
+        // The blob lane admits AT MOST ONE blob per call, because each
+        // admission streams a whole object. `promote_incomplete` is the
+        // progress mechanism, never a timeout.
+        let ready: Vec<([u8; 32], String, Vec<u32>)> = session
+            .blobs
+            .iter()
+            .filter(|(digest, _)| {
+                !state.objects.contains_key(*digest) && Self::blob_is_staged(session, digest)
+            })
+            .map(|(digest, upload)| {
+                (
+                    *digest,
+                    upload.upload_id.clone(),
+                    upload.reported.keys().copied().collect(),
+                )
+            })
+            .collect();
+        if let Some((digest, upload_id, numbers)) = ready.into_iter().next() {
+            let mut assembled = Vec::new();
+            for number in numbers {
+                let Some(bytes) = state.blob_parts.get(&(upload_id.clone(), number)) else {
+                    return Ok(CompleteStatus::Incomplete {
+                        code: "upload_incomplete".to_owned(),
+                    });
+                };
+                assembled.extend_from_slice(bytes);
+            }
+            // Stream-hashed exactly once, here, against the declared digest.
+            // Wire parts never entered identity.
+            if sha256_hex(&assembled) != hex_bytes(&digest) {
+                // Terminal, and the staging state is destroyed with it.
+                state.blob_parts.retain(|(id, _), _| *id != upload_id);
+                if let Some(session) = state.sessions.get_mut(session_key) {
+                    session.blobs.remove(&digest);
+                }
+                return Ok(CompleteStatus::Failed {
+                    code: "blob_digest_mismatch".to_owned(),
+                });
+            }
+            state.objects.insert(digest, assembled);
+            state.blob_parts.retain(|(id, _), _| *id != upload_id);
+            return Ok(CompleteStatus::Incomplete {
+                code: "promote_incomplete".to_owned(),
+            });
+        }
         let mut promoted_this_call = 0_usize;
         for key in &staged_pack_keys {
             let Some(pack) = state.staged.get(key).cloned() else {
@@ -932,8 +1332,20 @@ impl SyncTransport for FaultHub {
     fn download(
         &self,
         grant: &DownloadGrant,
+        sink: &mut dyn std::io::Write,
         _progress: ProgressSink<'_>,
-    ) -> Result<Vec<u8>, TransportError> {
+    ) -> Result<u64, TransportError> {
+        let served = self.served_bytes(grant)?;
+        sink.write_all(&served)
+            .map_err(|error| TransportError::Io(error.to_string()))?;
+        Ok(served.len() as u64)
+    }
+}
+
+impl FaultHub {
+    /// What this hub would put on the wire for one grant, faults included.
+    /// Split out so `download` is only the streaming half.
+    fn served_bytes(&self, grant: &DownloadGrant) -> Result<Vec<u8>, TransportError> {
         let mut state = self.state.borrow_mut();
         if state.faults.fail_downloads > 0 {
             state.faults.fail_downloads -= 1;
@@ -1070,10 +1482,36 @@ pub struct RecordedRequest {
     pub body: Vec<u8>,
 }
 
+/// Ports handed out by [`FaultServer::dead_address`], which no server in this
+/// binary may then bind.
+///
+/// The Windows runner proved the need: `dead_address` frees an ephemeral port
+/// and the very next test's server was handed the same one, so a connect that
+/// had to be refused was answered with JSON instead. A port promised dead
+/// stays dead for the rest of the process.
+static DEAD_PORTS: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+
+fn dead_ports() -> std::sync::MutexGuard<'static, Vec<u16>> {
+    DEAD_PORTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 impl FaultServer {
-    /// Binds a loopback listener that plays `answers` in order.
+    /// Binds a loopback listener that plays `answers` in order, never on a
+    /// port some other test was promised is dead.
     pub fn start(answers: Vec<Reply>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback binds");
+        let mut rejected = Vec::new();
+        let listener = loop {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("loopback binds");
+            let port = listener.local_addr().expect("bound address").port();
+            if !dead_ports().contains(&port) {
+                break listener;
+            }
+            // Held, not dropped, so the next bind cannot be handed it again.
+            rejected.push(listener);
+        };
+        drop(rejected);
         let address = listener.local_addr().expect("bound address");
         let (sender, requests) = mpsc::channel();
         thread::spawn(move || {
@@ -1098,10 +1536,15 @@ impl FaultServer {
     }
 
     /// A base URL nothing is listening on, for connect-failure coverage.
+    ///
+    /// The port is recorded in [`DEAD_PORTS`] before it is released, so no
+    /// later [`FaultServer::start`] can bind it and turn a refusal the test
+    /// requires into an answer it must never get.
     #[must_use]
     pub fn dead_address() -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("loopback binds");
         let port = listener.local_addr().expect("bound address").port();
+        dead_ports().push(port);
         drop(listener);
         format!("http://127.0.0.1:{port}")
     }
@@ -1432,9 +1875,39 @@ impl SyncTransport for DirTransport {
             have,
             staged_packs: Vec::new(),
             missing: self.missing_view(&value),
+            // Every object this transport's corpora carry is a pack-lane
+            // object; the blob lane is empty by construction, which is why
+            // the three blob methods below refuse rather than pretend.
+            missing_blobs: Vec::new(),
             max_pack_payload: tfp1::MAX_PACK_PAYLOAD,
             max_packs_per_request: MAX_PACKS_PER_REQUEST,
         })
+    }
+
+    fn blob_grants(
+        &self,
+        _session: &str,
+        _digests: &[ObjectDigest],
+    ) -> Result<Vec<BlobGrant>, TransportError> {
+        Err(blob_lane_absent())
+    }
+
+    fn upload_blob_part(
+        &self,
+        _part: &BlobPart,
+        _bytes: &[u8],
+        _progress: ProgressSink<'_>,
+    ) -> Result<String, TransportError> {
+        Err(blob_lane_absent())
+    }
+
+    fn report_blob_parts(
+        &self,
+        _session: &str,
+        _digest: &ObjectDigest,
+        _parts: &[BlobPartReport],
+    ) -> Result<(), TransportError> {
+        Err(blob_lane_absent())
     }
 
     fn pack_grants(
@@ -1498,6 +1971,7 @@ impl SyncTransport for DirTransport {
             grants,
             staged_packs,
             missing: self.missing_view(&value),
+            missing_blobs: Vec::new(),
         })
     }
 
@@ -1605,8 +2079,13 @@ impl SyncTransport for DirTransport {
     fn download(
         &self,
         grant: &DownloadGrant,
+        sink: &mut dyn std::io::Write,
         _progress: ProgressSink<'_>,
-    ) -> Result<Vec<u8>, TransportError> {
-        std::fs::read(&grant.url).map_err(|error| TransportError::Io(error.to_string()))
+    ) -> Result<u64, TransportError> {
+        let bytes =
+            std::fs::read(&grant.url).map_err(|error| TransportError::Io(error.to_string()))?;
+        sink.write_all(&bytes)
+            .map_err(|error| TransportError::Io(error.to_string()))?;
+        Ok(bytes.len() as u64)
     }
 }

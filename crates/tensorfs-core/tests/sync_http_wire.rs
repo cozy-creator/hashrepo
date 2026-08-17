@@ -346,20 +346,40 @@ fn downloads_enforce_the_granted_length_and_map_403_to_expired() {
         url: url.to_owned(),
     };
 
-    let bytes = client
-        .download(&grant(&format!("{base}/get-1")), ProgressSink::silent())
+    let mut bytes = Vec::new();
+    let written = client
+        .download(
+            &grant(&format!("{base}/get-1")),
+            &mut bytes,
+            ProgressSink::silent(),
+        )
         .expect("exact length succeeds");
     assert_eq!(bytes, b"NINEBYTES");
+    assert_eq!(written, 9);
 
+    let mut partial = Vec::new();
     let short = client
-        .download(&grant(&format!("{base}/get-2")), ProgressSink::silent())
+        .download(
+            &grant(&format!("{base}/get-2")),
+            &mut partial,
+            ProgressSink::silent(),
+        )
         .expect_err("length lies refuse");
     assert!(matches!(short, TransportError::Io(_)));
 
+    let mut nothing = Vec::new();
     let expired = client
-        .download(&grant(&format!("{base}/get-3")), ProgressSink::silent())
+        .download(
+            &grant(&format!("{base}/get-3")),
+            &mut nothing,
+            ProgressSink::silent(),
+        )
         .expect_err("403 maps to expiry");
     assert!(matches!(expired, TransportError::Expired(_)));
+    assert!(
+        nothing.is_empty(),
+        "an expired grant must not have written anything into the sink"
+    );
 }
 
 #[test]
@@ -449,7 +469,8 @@ fn a_download_reports_bytes_while_the_object_is_still_arriving() {
         }
     };
 
-    let fetched = client.download(&grant, ProgressSink::new(&sink));
+    let mut fetched_bytes = Vec::new();
+    let fetched = client.download(&grant, &mut fetched_bytes, ProgressSink::new(&sink));
     server.join().expect("the server thread finishes");
     assert!(
         saw_stall.try_recv().is_err(),
@@ -457,7 +478,8 @@ fn a_download_reports_bytes_while_the_object_is_still_arriving() {
          the whole transfer is invisible until it ends"
     );
     let fetched = fetched.expect("the download completes");
-    assert_eq!(fetched, body);
+    assert_eq!(fetched, body.len() as u64);
+    assert_eq!(fetched_bytes, body);
 
     let beats = beats.borrow().clone();
     assert!(
@@ -523,4 +545,232 @@ fn an_upload_reports_its_bytes_without_changing_the_framing() {
          end-of-transfer beat",
         beats.get()
     );
+}
+
+// ---------------------------------------------------------------------------
+// The blob lane (th#2064)
+// ---------------------------------------------------------------------------
+
+/// `missing_blobs` on the declare answer, in the spelling the hub emits.
+///
+/// It is ADDITIVE: a hub with nothing above the pack bound answers `[]`, and
+/// an older hub omits the field entirely. Both must parse as an empty blob
+/// lane rather than as a failure.
+#[test]
+fn declare_parses_the_additive_blob_lane() {
+    let id = SnapshotId::of(b"manifest bytes");
+    let big = digest_of(b"a dataset video");
+    let small = digest_of(b"config");
+    let canned = format!(
+        r#"{{"snapshot_id":"{id}","session_id":"sess-1","stage":"uploading",
+            "have":[],"staged_packs":[],
+            "missing":[{{"digest":"{small}","size_bytes":4096}}],
+            "missing_blobs":[{{"digest":"{big}","size_bytes":69206016}}],
+            "max_pack_payload":67108864,"max_packs_per_request":16}}"#,
+    );
+    let without = format!(
+        r#"{{"snapshot_id":"{id}","session_id":"sess-2","stage":"uploading",
+            "have":[],"staged_packs":[],
+            "missing":[{{"digest":"{small}","size_bytes":4096}}],
+            "max_pack_payload":67108864,"max_packs_per_request":16}}"#,
+    );
+    let (base, _recorded) = loopback(vec![(201, canned), (201, without)]);
+    let client = transport(&base);
+
+    let plan = client.declare(b"manifest bytes", None).expect("parses");
+    assert_eq!(plan.missing, vec![(small, 4096)]);
+    assert_eq!(plan.missing_blobs, vec![(big, 69_206_016)]);
+
+    let plan = client.declare(b"manifest bytes", None).expect("parses");
+    assert!(
+        plan.missing_blobs.is_empty(),
+        "an omitted field is an empty lane, not a parse failure"
+    );
+    assert_eq!(plan.missing, vec![(small, 4096)]);
+}
+
+/// The blob-grant request and answer, in the landed spellings: tagged digests
+/// out, `upload_id` / `part_size` / `parts[].put_url` / `uploaded_parts` back.
+#[test]
+fn blob_grants_emit_and_parse_the_landed_wire() {
+    let big = digest_of(b"a dataset video");
+    let canned = format!(
+        r#"{{"grants":[{{"digest":"{big}","length":69206016,
+             "staging_key":"snapshots/staging/sess-1/{big}.blob",
+             "upload_id":"r2-upload-1","part_size":67108864,
+             "parts":[
+               {{"part_number":1,"size_bytes":67108864,"put_url":"http://example.invalid/p1",
+                 "headers":{{"x-amz-part-number":"1"}}}},
+               {{"part_number":2,"size_bytes":2097152,"put_url":"http://example.invalid/p2",
+                 "headers":{{}}}}],
+             "uploaded_parts":[1],
+             "expires_at":"2026-08-17T12:00:00Z"}}]}}"#,
+    );
+    let (base, recorded) = loopback(vec![(200, canned)]);
+
+    let grants = transport(&base)
+        .blob_grants("sess-1", &[big])
+        .expect("blob grants parse");
+    assert_eq!(grants.len(), 1);
+    let grant = &grants[0];
+    assert_eq!(grant.digest, big);
+    assert_eq!(grant.length, 69_206_016);
+    assert_eq!(grant.upload_id, "r2-upload-1");
+    assert_eq!(grant.part_size, 67_108_864);
+    assert_eq!(grant.uploaded_parts, vec![1]);
+    assert_eq!(grant.parts.len(), 2);
+    assert_eq!(grant.parts[1].part_number, 2);
+    assert_eq!(grant.parts[1].size_bytes, 2_097_152);
+    assert_eq!(grant.parts[0].url, "http://example.invalid/p1");
+    assert_eq!(
+        grant.parts[0].headers,
+        vec![("x-amz-part-number".to_owned(), "1".to_owned())]
+    );
+    // The parts must cover the object exactly, which is what the engine
+    // checks before it moves a byte.
+    assert_eq!(
+        grant.parts.iter().map(|part| part.size_bytes).sum::<u64>(),
+        grant.length
+    );
+
+    let request = recorded.recv().expect("request recorded");
+    assert_eq!(request.method, "POST");
+    assert_eq!(
+        request.path,
+        "/api/v1/repos/cozy/demo/snapshot-sync/sess-1/blob-grants"
+    );
+    assert_eq!(request.authorization.as_deref(), Some("Bearer tok"));
+    let body: serde_json::Value = serde_json::from_slice(&request.body).expect("body is JSON");
+    assert_eq!(body["digests"][0], big.to_string());
+}
+
+/// A part PUT replays the granted headers verbatim, states its length, and
+/// returns the store's etag — which the hub needs to complete the upload, so
+/// a 200 without one is a failure rather than an empty string.
+#[test]
+fn a_part_put_replays_its_grant_and_returns_the_etag() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback binds");
+    let address = listener.local_addr().expect("bound address");
+    let server = thread::spawn(move || {
+        let mut seen = Vec::new();
+        for reply in ["\"etag-1\"", ""] {
+            let (mut stream, _) = listener.accept().expect("accepts");
+            let mut buffer = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            loop {
+                let read = stream.read(&mut chunk).expect("reads");
+                buffer.extend_from_slice(&chunk[..read]);
+                if read == 0 || buffer.len() >= 6 && find_blank_line(&buffer).is_some() {
+                    let head_end = find_blank_line(&buffer).unwrap_or(buffer.len());
+                    if buffer.len() >= head_end + 4 + 6 {
+                        break;
+                    }
+                }
+                if read == 0 {
+                    break;
+                }
+            }
+            seen.push(String::from_utf8_lossy(&buffer).into_owned());
+            let etag = if reply.is_empty() {
+                String::new()
+            } else {
+                format!("etag: {reply}\r\n")
+            };
+            let response =
+                format!("HTTP/1.1 200 OK\r\n{etag}content-length: 0\r\nconnection: close\r\n\r\n");
+            stream.write_all(response.as_bytes()).expect("replies");
+        }
+        seen
+    });
+
+    let client = transport(&format!("http://{address}"));
+    let part = tensorfs_core::sync::BlobPart {
+        part_number: 7,
+        size_bytes: 6,
+        url: format!("http://{address}/part-7"),
+        headers: vec![("x-amz-part-number".to_owned(), "7".to_owned())],
+    };
+    let etag = client
+        .upload_blob_part(&part, b"SIXSIX", ProgressSink::silent())
+        .expect("the part lands");
+    assert_eq!(
+        etag, "\"etag-1\"",
+        "the etag is returned verbatim, quotes included"
+    );
+
+    let missing = client
+        .upload_blob_part(&part, b"SIXSIX", ProgressSink::silent())
+        .expect_err("a part with no etag cannot be completed");
+    assert!(matches!(missing, TransportError::Io(_)), "got {missing:?}");
+
+    let seen = server.join().expect("server thread finishes");
+    assert!(
+        seen[0].contains("PUT /part-7"),
+        "wrong request: {}",
+        seen[0]
+    );
+    assert!(
+        seen[0]
+            .to_ascii_lowercase()
+            .contains("x-amz-part-number: 7"),
+        "the granted headers are replayed verbatim: {}",
+        seen[0]
+    );
+    assert!(
+        seen[0].to_ascii_lowercase().contains("content-length: 6"),
+        "a presigned PUT must state its length, not switch to chunked framing: {}",
+        seen[0]
+    );
+    assert!(
+        seen[0].ends_with("SIXSIX"),
+        "the exact part bytes must be the body: {}",
+        seen[0]
+    );
+}
+
+/// Reporting part etags: the route, the tagged digest, and the part rows.
+#[test]
+fn blob_part_etags_are_reported_in_the_landed_spelling() {
+    let big = digest_of(b"a dataset video");
+    let (base, recorded) = loopback(vec![(200, "{}".to_owned())]);
+
+    transport(&base)
+        .report_blob_parts(
+            "sess-1",
+            &big,
+            &[
+                tensorfs_core::sync::BlobPartReport {
+                    part_number: 1,
+                    etag: "\"one\"".to_owned(),
+                },
+                tensorfs_core::sync::BlobPartReport {
+                    part_number: 2,
+                    etag: "\"two\"".to_owned(),
+                },
+            ],
+        )
+        .expect("the report lands");
+
+    let request = recorded.recv().expect("request recorded");
+    assert_eq!(request.method, "POST");
+    assert_eq!(
+        request.path,
+        "/api/v1/repos/cozy/demo/snapshot-sync/sess-1/blob-parts"
+    );
+    let body: serde_json::Value = serde_json::from_slice(&request.body).expect("body is JSON");
+    assert_eq!(body["digest"], big.to_string());
+    assert_eq!(body["parts"][0]["part_number"], 1);
+    assert_eq!(body["parts"][1]["etag"], "\"two\"");
+}
+
+/// A blob grant whose lease ran out surfaces as `Expired`, so the engine
+/// re-asks rather than replaying a URL the store has stopped honouring.
+#[test]
+fn an_expired_blob_grant_surfaces_as_expiry() {
+    let expired = r#"{"error":{"code":"session_expired","message":"declare again"}}"#;
+    let (base, _recorded) = loopback(vec![(410, expired.to_owned())]);
+    let error = transport(&base)
+        .blob_grants("sess-1", &[digest_of(b"big")])
+        .expect_err("an expired lease must not read as grants");
+    assert!(matches!(error, TransportError::Expired(_)), "got {error:?}");
 }

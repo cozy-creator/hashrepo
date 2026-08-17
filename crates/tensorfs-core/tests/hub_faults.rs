@@ -129,7 +129,7 @@ fn a_dead_download_grant_is_typed_not_silent() {
         url: format!("{}/object", server.base),
     };
     let error = transport(&server.base)
-        .download(&grant, ProgressSink::silent())
+        .download(&grant, &mut Vec::new(), ProgressSink::silent())
         .expect_err("404 must not read as bytes");
     assert!(matches!(error, TransportError::Refused { .. }));
 
@@ -140,7 +140,7 @@ fn a_dead_download_grant_is_typed_not_silent() {
         url: format!("{}/object", server.base),
     };
     let error = transport(&server.base)
-        .download(&grant, ProgressSink::silent())
+        .download(&grant, &mut Vec::new(), ProgressSink::silent())
         .expect_err("403 must not read as bytes");
     assert!(
         matches!(error, TransportError::Expired(_)),
@@ -196,7 +196,8 @@ fn broken_response_framing_never_yields_bytes() {
             length: payload.len() as u64,
             url: format!("{}/object", server.base),
         };
-        match transport(&server.base).download(&grant, ProgressSink::silent()) {
+        let mut bytes = Vec::new();
+        match transport(&server.base).download(&grant, &mut bytes, ProgressSink::silent()) {
             Err(error) => {
                 assert!(
                     matches!(
@@ -206,14 +207,14 @@ fn broken_response_framing_never_yields_bytes() {
                     "{name}: unexpected error shape {error:?}"
                 );
             }
-            Ok(bytes) => {
+            Ok(_) => {
                 // The only tolerable success is the exact honest payload; an
                 // overlong body that happens to contain a correct prefix must
                 // NOT be truncated into a false success.
                 assert_eq!(
                     bytes,
                     payload,
-                    "{name}: transport returned {} bytes that are not the object",
+                    "{name}: transport wrote {} bytes that are not the object",
                     bytes.len()
                 );
             }
@@ -260,7 +261,7 @@ fn a_partial_answer_to_a_whole_object_request_is_refused() {
         url: format!("{}/object", server.base),
     };
     let error = transport(&server.base)
-        .download(&grant, ProgressSink::silent())
+        .download(&grant, &mut Vec::new(), ProgressSink::silent())
         .expect_err("a short 206 must refuse");
     assert!(
         matches!(error, TransportError::Io(_)),

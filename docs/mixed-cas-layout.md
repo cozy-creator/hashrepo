@@ -200,6 +200,25 @@ staging promotion gains the stream-hash step for the blob lane; casgc's
 staging sweep must learn to abort expired multipart uploads
 (`AbortMultipartUpload`), which are otherwise invisibly billed.
 
+**Both halves have landed.** The hub is tensorhub th#2064 (`bcf5bcd`, with
+the empty-file fix in `b932c37`); the client is tensorfs#79. Three things the
+design did not say, found by implementing the client:
+
+- **A zero-length file reaches neither lane, and the client never offers it.**
+  A `blob-v1` entry of logical size 0 carries no data record at all, so the
+  empty digest is not in the client's closure. That is the client half of the
+  defect th#1338 found hub-side, and it holds by construction rather than by
+  a special case.
+- **An expired blob grant is a REPLAN, not a retry and not a failure.** The
+  blob goes back in the queue, the next round re-asks, and adopting the same
+  `upload_id` means only the parts that never landed are re-sent. Retrying a
+  URL whose lease has run out would spend the whole budget on 403s.
+- **Downloads did need something after all.** "Downloads need nothing new"
+  was true of the wire and false of the client: `download` returned a `Vec`,
+  so pulling a multi-gigabyte blob would have held it whole in RAM. It now
+  streams into the store's verifying writer, so nothing ever exists whole
+  anywhere and the admission boundary is unchanged.
+
 ## 4. Tensor files in a snapshot directory: pointer stubs
 
 A chunked file has no single inode to symlink. The choice is **absent vs
@@ -443,7 +462,11 @@ changes, hub-side anything, and Windows fallback behaviour.
   through `tensorfs.native`.
 - **tensorfs#71** — GC + accounting over the unified store.
 - **th#2064** (tracker) — multipart direct-R2 blob grants; hub re-pins the Go
-  module; TFP1 untouched.
+  module; TFP1 untouched. **Landed** (`bcf5bcd`, `b932c37`), with the client
+  leg in **tensorfs#79**: `SyncTransport` grows `blob_grants` /
+  `upload_blob_part` / `report_blob_parts`, push partitions on the bound the
+  remote declares, and `download` streams into the verifying writer instead
+  of returning bytes.
 - **pgw#1295** (tracker, rewritten a second time) — publish = tree
   construction; **pgw#1308** — the consumption cutover carrying §9's audit
   table.
