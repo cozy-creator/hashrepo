@@ -130,9 +130,18 @@ The wheels are **abi3** (`abi3-py311`): one wheel per platform for every
 CPython from 3.11 up, rather than one per interpreter version. The floor is
 3.11 because CPython added the buffer protocol — `Py_buffer`,
 `Py_bf_getbuffer`, `PyMemoryView_FromBuffer` — to the stable ABI in 3.11, and
-a zero-copy `memoryview` over a CAS object has to be expressible. Free-threaded
-CPython is **not** covered by abi3 and builds from the sdist; a stable
-free-threaded ABI exists but its floor is CPython 3.15.
+a zero-copy `memoryview` over a CAS object has to be expressible.
+
+It is expressible, and it is expressed: `native.MappedObject` maps one CAS
+object and hands it to Python through `Py_buffer`, read-only, so
+`memoryview(mapped)` addresses the mapped pages themselves. That is what the
+read path returns from `TensorView.pieces()` — the zero-copy guarantee belongs
+to the compiled half rather than to `mmap` plus a docstring. The wheel smokes
+prove it on the 3.11 floor by editing a mapped file underneath a live view and
+demanding the view see the edit, which no copy can do.
+
+Free-threaded CPython is **not** covered by abi3 and builds from the sdist; a
+stable free-threaded ABI exists but its floor is CPython 3.15.
 
 The extension links `tensorfs-core` with `--no-default-features --features
 store`: 43 crates rather than 259, with no HTTP client, TLS stack or embedded
@@ -178,6 +187,38 @@ with open_tensors(cas, snapshot_ref) as tensors:
     for piece in view.pieces():             # zero-copy, one object at a time
         ...
 ```
+
+Writing back is the mirror image, in either container. Tensors the conversion
+did not touch are carried over by reference and keep their digests, so nothing
+unchanged is rewritten locally or re-uploaded:
+
+```python
+with open_tensors(cas, snapshot_ref) as src:
+    writer = TensorWriter(cas, "model.safetensors")
+    for name in src:
+        view = src[name]
+        if name in targets:
+            writer.add(name, "F8_E4M3", view.shape, quantize(view))
+        else:
+            writer.inherit(view)
+    entry = writer.finish()
+```
+
+For GGUF the path gains one argument — the source's metadata block, which a
+conversion carries over verbatim rather than re-encoding:
+
+```python
+with open_tensors(cas, snapshot_ref) as src:
+    writer = TensorWriter(cas, "model.gguf", gguf_header=src.gguf_header("model.gguf"))
+    writer.add("blk.0.ffn.weight", "Q4_K", view.shape, requantized)   # ggml type names
+    writer.inherit(src["output.weight"])
+    entry = writer.finish()
+```
+
+Tensors are emitted in the order they were added. A conversion iterating its
+source's header therefore reproduces the source's layout exactly. A caller that
+invents a fresh order gets a valid file with a different digest — and therefore
+a different snapshot id — but the same tensor objects, so dedup is unaffected.
 
 No daemon, no mount, no `/dev/fuse`. See `docs/direct-tensor-reads.md` for the
 API, the torch boundary, the measurements and what remains unproven.

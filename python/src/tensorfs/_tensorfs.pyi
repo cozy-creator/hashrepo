@@ -137,6 +137,23 @@ class PackObject:
     @property
     def length(self) -> int: ...
 
+class MappedObject:
+    """One CAS object mapped read-only and exported as a C buffer.
+
+    `memoryview(MappedObject(path))` addresses the mapped pages directly --
+    that is the whole zero-copy claim, owned by the extension rather than by
+    the facade. The buffer keeps a strong reference to the instance, so the
+    mapping outlives every view taken of it.
+    """
+
+    def __init__(self, path: str | PathLike[str]) -> None: ...
+    @property
+    def path(self) -> Path: ...
+    @property
+    def length(self) -> int: ...
+    def __len__(self) -> int: ...
+    def __buffer__(self, flags: int, /) -> memoryview: ...
+
 class ObjectStore:
     def __init__(self, root: str | PathLike[str]) -> None: ...
     @property

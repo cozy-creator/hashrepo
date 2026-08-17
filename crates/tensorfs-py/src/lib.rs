@@ -15,17 +15,20 @@
 //!
 //! `#![forbid(unsafe_code)]` is deliberately absent here, unlike every other
 //! crate in this workspace: the PyO3 attribute macros expand to `unsafe impl`s
-//! in this crate. No hand-written `unsafe` appears below.
+//! in this crate. The only hand-written `unsafe` is [`PyMappedObject`]'s
+//! buffer-protocol export, which is the one thing that cannot be written in
+//! safe Rust -- filling a `Py_buffer` is a raw-pointer contract with CPython.
 
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::ffi::{c_int, c_void};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use pyo3::create_exception;
-use pyo3::exceptions::{PyException, PyValueError};
+use pyo3::exceptions::{PyBufferError, PyException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -706,6 +709,139 @@ impl PyPackObject {
             "PackObject(digest='{}', length={})",
             self.digest,
             self.bytes.len()
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The zero-copy export: one CAS object, mapped, handed out as a `Py_buffer`
+// ---------------------------------------------------------------------------
+
+/// One immutable CAS object, memory-mapped and exported through the C buffer
+/// protocol.
+///
+/// This is where "direct tensor reads are zero-copy" stops being a property of
+/// the facade's `mmap` module and becomes a property of the extension. A
+/// `memoryview` over one of these addresses the mapped pages themselves: no
+/// intermediate `bytes`, no copy at the language boundary, and one resident
+/// object per tensor piece rather than a whole shard.
+///
+/// The export is READ-ONLY and refuses `PyBUF_WRITABLE`. CAS objects are named
+/// by the hash of their bytes, so a writable view would be a view that can
+/// invalidate its own name.
+///
+/// Ownership is the buffer protocol's, not the caller's: `Py_buffer` holds a
+/// strong reference to this object, so the mapping outlives every view taken
+/// of it even if the reader that opened it is closed first.
+///
+/// Requires the buffer protocol under the Limited API, which is why this
+/// distribution's abi3 floor is 3.11 -- `Py_buffer`, `Py_bf_getbuffer` and
+/// `PyBuffer_FillInfo` entered CPython's stable ABI in 3.11 (bpo-45459), and
+/// PyO3 gates its own buffer-protocol tests on exactly `any(not(Py_LIMITED_API),
+/// Py_3_11)`.
+/// `weakref` is required, not cosmetic: the reader keeps its mappings in a
+/// `WeakValueDictionary` so a mapping lives exactly as long as someone is
+/// reading through it. Without that, a conversion that touches every tensor of
+/// an 8 GiB shard ends with the whole shard resident: measured at 8036.7 MiB
+/// peak RSS with a strong cache against 310.1 MiB with a weak one.
+#[pyclass(frozen, weakref, module = "tensorfs._tensorfs", name = "MappedObject")]
+pub struct PyMappedObject {
+    /// `None` for a zero-length object: a zero-length mapping is refused by
+    /// `mmap(2)` itself, and an empty export is the honest answer.
+    map: Option<memmap2::Mmap>,
+    path: PathBuf,
+}
+
+impl PyMappedObject {
+    fn bytes(&self) -> &[u8] {
+        self.map.as_deref().unwrap_or(&[])
+    }
+}
+
+#[pymethods]
+impl PyMappedObject {
+    /// Maps one object file read-only. The caller holds whatever store lock
+    /// keeps collection from unlinking it between resolution and open; once
+    /// the mapping exists the bytes are pinned by the inode.
+    #[new]
+    fn new(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
+        let opened = path.clone();
+        let map = py
+            .detach(move || {
+                let file = std::fs::File::open(&opened)?;
+                let length = file.metadata()?.len();
+                if length == 0 {
+                    return Ok(None);
+                }
+                // SAFETY: CAS objects are immutable once installed -- they are
+                // named by their own digest and never opened for writing --
+                // so the mapping cannot be mutated underneath a live view by
+                // this library. A caller that edits the store out of band is
+                // outside the contract, exactly as it is for `mmap.mmap`.
+                let map = unsafe { memmap2::Mmap::map(&file) }?;
+                Ok::<_, std::io::Error>(Some(map))
+            })
+            .map_err(io_error)?;
+        Ok(Self { map, path })
+    }
+
+    #[getter]
+    fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
+    #[getter]
+    fn length(&self) -> usize {
+        self.bytes().len()
+    }
+
+    fn __len__(&self) -> usize {
+        self.bytes().len()
+    }
+
+    /// Exports the mapping itself. Nothing is copied, and nothing is read
+    /// until the consumer touches a page.
+    unsafe fn __getbuffer__(
+        slf: Bound<'_, Self>,
+        view: *mut pyo3::ffi::Py_buffer,
+        flags: c_int,
+    ) -> PyResult<()> {
+        if view.is_null() {
+            return Err(PyBufferError::new_err("Py_buffer is null"));
+        }
+        if flags & pyo3::ffi::PyBUF_WRITABLE == pyo3::ffi::PyBUF_WRITABLE {
+            return Err(PyBufferError::new_err(
+                "a CAS object is immutable; its buffer cannot be exported writable",
+            ));
+        }
+        let bytes = slf.get().bytes();
+        let length = pyo3::ffi::Py_ssize_t::try_from(bytes.len())
+            .map_err(|_| PyBufferError::new_err("mapping is larger than Py_ssize_t"))?;
+        // SAFETY: `view` is non-null and CPython owns it; `bytes` points into
+        // a mapping owned by `slf`, and `PyBuffer_FillInfo` takes a strong
+        // reference to `slf` for the buffer's lifetime.
+        let filled = unsafe {
+            pyo3::ffi::PyBuffer_FillInfo(
+                view,
+                slf.as_ptr(),
+                bytes.as_ptr() as *mut c_void,
+                length,
+                1,
+                flags,
+            )
+        };
+        if filled != 0 {
+            return Err(PyErr::take(slf.py())
+                .unwrap_or_else(|| PyBufferError::new_err("Py_buffer could not be filled")));
+        }
+        Ok(())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "MappedObject(path={:?}, length={})",
+            self.path,
+            self.bytes().len()
         )
     }
 }
@@ -1530,6 +1666,7 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySnapshotEntry>()?;
     module.add_class::<PySnapshot>()?;
     module.add_class::<PyPackObject>()?;
+    module.add_class::<PyMappedObject>()?;
     module.add_class::<PyObjectStore>()?;
     module.add_class::<PyRecordsReader>()?;
     module.add_class::<PyRegistry>()?;

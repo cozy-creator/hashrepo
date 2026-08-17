@@ -48,3 +48,9 @@ tensorfs-core = { path = "../tensorfs-core", default-features = false, features 
 # free-threaded ABI exists (`abi3t`) but its floor is CPython 3.15, which is
 # unreleased. Free-threaded interpreters therefore build from the sdist.
 pyo3 = { version = "0.29.2", features = ["abi3-py311"] }
+
+# The read path's zero-copy claim has to be OWNED by the extension rather than
+# by the facade's `mmap` module, so the mapping lives here and is handed to
+# Python through `Py_buffer`. memmap2 is the mapping primitive and nothing
+# else -- no allocator, no runtime, no C.
+memmap2 = "0.9"

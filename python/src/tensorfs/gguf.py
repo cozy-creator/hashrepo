@@ -79,10 +79,19 @@ GGML_NAME: dict[int, str] = {
     41: "Q1_0", 42: "Q2_0",
 }
 
+# The reverse of GGML_NAME, so a `TensorView`'s dtype round-trips back into the
+# type id a directory entry has to carry.
+GGML_ID: dict[str, int] = {name: identifier for identifier, name in GGML_NAME.items()}
+
 # GGUF metadata value type ids -> fixed width, for the ones that have one.
 _FIXED_WIDTH = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
 _TYPE_STRING = 8
 _TYPE_ARRAY = 9
+
+# The Rust planner refuses anything below this (crates/tensorfs-core/src/
+# planner/gguf.rs), so composing a file that violates it would produce a
+# snapshot our own ingest path would reject.
+MIN_ALIGNMENT = 8
 
 
 class GGUFError(ValueError):
@@ -184,11 +193,41 @@ def _tensor_nbytes(shape: tuple[int, ...], elements: int, block_bytes: int) -> i
     return total
 
 
-def parse(read: Callable[[int, int], bytes], size: int) -> Iterator[GGUFTensor]:
-    """Yield every tensor a GGUF file declares, in declaration order.
+@dataclass(frozen=True, slots=True)
+class GGUFHeader:
+    """Everything before the data section, plus where the data section starts.
 
-    ``read(offset, length)`` supplies bytes; no tensor body is ever requested.
+    ``metadata`` is the encoded key/value block **verbatim** — the bytes
+    between the 24-byte prefix and the tensor directory. Carrying it as bytes
+    rather than as decoded values is deliberate: a conversion rewrites tensors,
+    not model metadata, and re-encoding a value it never looked at is a chance
+    to change a file for no reason.
     """
+
+    version: int
+    alignment: int
+    metadata_count: int
+    metadata: bytes
+    directory_start: int
+    directory_end: int
+    data_start: int
+    tensors: tuple[GGUFTensor, ...]
+
+
+def tensor_nbytes(ggml_type: int, shape: tuple[int, ...]) -> int:
+    """Encoded size of a tensor with these GGUF dimensions."""
+
+    layout = GGML_LAYOUT.get(ggml_type)
+    if layout is None:
+        raise GGUFError(f"unsupported ggml type {ggml_type}")
+    elements, block_bytes = layout
+    if not shape:
+        raise GGUFError("a GGUF tensor needs at least one dimension")
+    return _tensor_nbytes(shape, elements, block_bytes)
+
+
+def read_header(read: Callable[[int, int], bytes], size: int) -> GGUFHeader:
+    """Parse the whole directory, reading no tensor body."""
 
     cursor = _Cursor(read, size)
     if size < 24 or cursor.take(4) != MAGIC:
@@ -211,6 +250,9 @@ def parse(read: Callable[[int, int], bytes], size: int) -> Iterator[GGUFTensor]:
                 raise GGUFError("general.alignment must be a power of two")
             continue
         _skip_value(cursor, value_type, 0)
+
+    directory_start = cursor.position
+    metadata = read(24, directory_start - 24) if directory_start > 24 else b""
 
     declared: list[GGUFTensor] = []
     for _ in range(tensor_count):
@@ -238,19 +280,93 @@ def parse(read: Callable[[int, int], bytes], size: int) -> Iterator[GGUFTensor]:
             )
         )
 
+    directory_end = cursor.position
     # Tensor offsets are relative to the aligned start of the data section.
-    data_start = (cursor.position + alignment - 1) & ~(alignment - 1)
+    data_start = align_up(directory_end, alignment)
+    absolute: list[GGUFTensor] = []
     for tensor in declared:
-        absolute = data_start + tensor.offset
-        if absolute + tensor.nbytes > size:
+        start = data_start + tensor.offset
+        if start + tensor.nbytes > size:
             raise GGUFError(f"GGUF tensor {tensor.name!r} runs past the end of the file")
-        yield GGUFTensor(
-            name=tensor.name,
-            ggml_type=tensor.ggml_type,
-            dtype=tensor.dtype,
-            shape=tensor.shape,
-            offset=absolute,
-            nbytes=tensor.nbytes,
-            block_elements=tensor.block_elements,
-            block_bytes=tensor.block_bytes,
+        absolute.append(
+            GGUFTensor(
+                name=tensor.name,
+                ggml_type=tensor.ggml_type,
+                dtype=tensor.dtype,
+                shape=tensor.shape,
+                offset=start,
+                nbytes=tensor.nbytes,
+                block_elements=tensor.block_elements,
+                block_bytes=tensor.block_bytes,
+            )
         )
+    return GGUFHeader(
+        version=version,
+        alignment=alignment,
+        metadata_count=metadata_count,
+        metadata=metadata,
+        directory_start=directory_start,
+        directory_end=directory_end,
+        data_start=data_start,
+        tensors=tuple(absolute),
+    )
+
+
+def parse(read: Callable[[int, int], bytes], size: int) -> Iterator[GGUFTensor]:
+    """Yield every tensor a GGUF file declares, in declaration order.
+
+    ``read(offset, length)`` supplies bytes; no tensor body is ever requested.
+    """
+
+    return iter(read_header(read, size).tensors)
+
+
+def align_up(value: int, alignment: int) -> int:
+    return (value + alignment - 1) & ~(alignment - 1)
+
+
+def encode_symbol(value: bytes) -> bytes:
+    return struct.pack("<Q", len(value)) + value
+
+
+def encode_prefix(version: int, tensor_count: int, metadata_count: int) -> bytes:
+    """The 24 bytes every GGUF file opens with."""
+
+    return MAGIC + struct.pack("<IQQ", version, tensor_count, metadata_count)
+
+
+def encode_tensor_info(
+    name: str, shape: tuple[int, ...], ggml_type: int, offset: int
+) -> bytes:
+    """One tensor directory entry, spelled exactly as the readers expect.
+
+    ``shape`` is GGUF's own ``ne`` order — fastest-varying dimension first —
+    which is the order :class:`GGUFTensor` reports, so a tensor read out of one
+    file and written into another needs no transposition of its geometry.
+    """
+
+    encoded = name.encode("utf-8")
+    if not 0 < len(encoded) <= MAX_TENSOR_NAME_LEN:
+        raise GGUFError(f"GGUF tensor name {name!r} is not a usable name")
+    if not 1 <= len(shape) <= MAX_DIMENSIONS:
+        raise GGUFError(f"GGUF tensor {name!r} cannot have {len(shape)} dimensions")
+    return (
+        encode_symbol(encoded)
+        + struct.pack("<I", len(shape))
+        + b"".join(struct.pack("<Q", dimension) for dimension in shape)
+        + struct.pack("<IQ", ggml_type, offset)
+    )
+
+
+def type_id(dtype: str) -> int:
+    """The ggml type id a :class:`~tensorfs.tensors.TensorView` dtype names."""
+
+    identifier = GGML_ID.get(dtype)
+    if identifier is None and dtype.startswith("GGML_"):
+        try:
+            identifier = int(dtype.removeprefix("GGML_"))
+        except ValueError:
+            identifier = None
+    if identifier is None or identifier not in GGML_LAYOUT:
+        raise GGUFError(f"unknown ggml type {dtype!r}")
+    return identifier

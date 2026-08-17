@@ -432,3 +432,90 @@ def test_the_conversion_loop_is_no_more_complex_than_save_file(
     # 30 lines is `w8a8.py:993-1022`, the loop this replaces. Longer than that
     # and the API failed its own acceptance criterion.
     assert len(body) <= 30, len(body)
+
+
+# ---------------------------------------------------------------------------
+# Emission order (#61's recorded design point)
+#
+# `TensorWriter` emits in insertion order; `safetensors.save_file` sorts. The
+# question left open on the issue was whether a caller that invents a fresh
+# order therefore "will not dedup against a hub copy". Measured rather than
+# assumed: it does dedup. Order decides the FILE's identity -- its digest, and
+# so the snapshot id -- and nothing else. The object grid is per tensor and
+# objects are named by their own bytes, so every tensor object is shared with
+# the canonically ordered copy and only the header object differs.
+#
+# That is why the writer keeps insertion order rather than adopting a canonical
+# one: the order a conversion needs is its SOURCE's order, which is the only
+# order that makes the untouched half of a checkpoint byte-identical.
+# ---------------------------------------------------------------------------
+
+
+def test_reordering_costs_the_header_object_and_nothing_else(tmp_path: Path) -> None:
+    bodies = {
+        "block.0.weight": random.Random("w0").randbytes(4096),
+        "block.1.weight": random.Random("w1").randbytes(2048),
+        "block.2.weight": random.Random("w2").randbytes(1024),
+    }
+    names = list(bodies)
+
+    def compose(root: str, order: list[str]) -> FileEntry:
+        cas = LocalCAS(tmp_path / root)
+        writer = TensorWriter(cas, "model.safetensors")
+        for name in order:
+            writer.add(name, "U8", (len(bodies[name]),), bodies[name])
+        return writer.finish()
+
+    forward = compose("forward", names)
+    backward = compose("backward", list(reversed(names)))
+
+    # A different file, therefore a different snapshot id. That is the whole
+    # cost, and it is real.
+    assert forward.digest != backward.digest
+    assert forward.size_bytes == backward.size_bytes
+
+    forward_objects = [str(chunk.digest) for chunk in forward.chunks]
+    backward_objects = [str(chunk.digest) for chunk in backward.chunks]
+
+    # Every tensor object survives the reordering. Only the header differs, and
+    # exactly one object is new on each side.
+    assert set(forward_objects[1:]) == set(backward_objects[1:])
+    assert set(backward_objects) - set(forward_objects) == {backward_objects[0]}
+    assert len(set(forward_objects) ^ set(backward_objects)) == 2
+
+    # And the reordered file is still a correct file.
+    cas = LocalCAS(tmp_path / "backward")
+    with open_tensors(cas, RepositoryManifest((backward,))) as out:
+        assert list(out) == list(reversed(names))
+        for name, body in bodies.items():
+            assert out[name].tobytes() == body, name
+
+
+def test_a_corrupted_object_is_caught_while_the_file_digest_is_taken(
+    tmp_path: Path,
+) -> None:
+    """`finish()` verifies every object it folds in, in the same single pass.
+
+    It used to call `verify_object` and then read the object again for the
+    whole-file hash -- two SHA-256 passes over the same bytes, which is the
+    exact double-hash `ObjectStore::admit_regions` warns about. Collapsing them
+    must not have collapsed the check, so the check is asserted directly.
+    """
+
+    cas = LocalCAS(tmp_path / "cas")
+    seed = TensorWriter(cas, "seed.safetensors")
+    seed.add("w", "U8", (4096,), random.Random("corrupt").randbytes(4096))
+    entry = seed.finish()
+
+    with open_tensors(cas, RepositoryManifest((entry,))) as src:
+        view = src["w"]
+        writer = TensorWriter(cas, "out.safetensors")
+        writer.inherit(view)
+
+    # Rewrite the object under its own name, keeping the length.
+    victim = cas.object_path(entry.chunks[1].digest)
+    victim.chmod(0o644)
+    victim.write_bytes(bytes(4096))
+
+    with pytest.raises(TensorError, match="do not match their digest"):
+        writer.finish()

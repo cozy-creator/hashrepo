@@ -97,6 +97,9 @@ jobs:
           # Typing has to survive the extension boundary too. PyO3 emits none,
           # so this passes only because `_tensorfs.pyi` ships in the wheel.
           /tmp/tensorfs-wheel/bin/mypy --strict -c 'from tensorfs.native import ObjectStore, RecordsReader'
+          # The buffer export has to type-check as a buffer, which is what the
+          # stub's `__buffer__` promises across the extension boundary.
+          /tmp/tensorfs-wheel/bin/mypy --strict -c 'from tensorfs.native import MappedObject; v: memoryview = memoryview(MappedObject("o"))'
 
   go:
     runs-on: ubuntu-latest

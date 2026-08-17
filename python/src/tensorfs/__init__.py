@@ -17,6 +17,8 @@ from .project import (
 from .refs import CASRef
 from .tensors import (
     DTYPE_BITS,
+    GGUF_FORMAT,
+    SAFETENSORS_FORMAT,
     BlockLayout,
     FileTooLarge,
     TensorError,
@@ -30,6 +32,8 @@ from .writer import TensorWriter
 
 __all__ = [
     "DTYPE_BITS",
+    "GGUF_FORMAT",
+    "SAFETENSORS_FORMAT",
     "STUB_MAGIC",
     "TENSOR_SUFFIXES",
     "BlockLayout",
