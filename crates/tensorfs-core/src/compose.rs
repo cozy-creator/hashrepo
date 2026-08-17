@@ -19,7 +19,9 @@ use std::fmt::Write as _;
 
 use thiserror::Error;
 
-use crate::planner::{MAX_OBJECT_SIZE, PlanError, TensorFormat, gguf, safetensors};
+use crate::planner::{
+    ByteSource as _, MAX_OBJECT_SIZE, PlanError, TensorFormat, gguf, safetensors,
+};
 use crate::store::{ObjectStore, StoreError};
 use crate::tfm1::{FileBody, FileRecord};
 use crate::workspace_source::RecordsSource;
@@ -48,6 +50,13 @@ pub enum ComposeError {
     Store(#[from] StoreError),
 }
 
+/// What a composition does with a source tensor the caller did not name.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Unnamed {
+    Refuse,
+    Drop,
+}
+
 /// Re-keys one committed tensor container: every tensor survives under the
 /// name `names` maps it to, and every tensor's objects are inherited verbatim.
 ///
@@ -59,6 +68,31 @@ pub fn rekey(
     body: &FileBody,
     names: &BTreeMap<String, String>,
 ) -> Result<FileBody, ComposeError> {
+    compose(store, body, names, Unnamed::Refuse)
+}
+
+/// Composes a trimmed container: exactly the tensors `names` maps survive, in
+/// the source's own data order, and the rest are omitted.
+///
+/// Omitting a tensor omits its records, which is the whole mechanism: a sync
+/// of the subset computes its missing objects from the record list it has, so
+/// the trimmed bytes are never requested and never downloaded. Trimming and
+/// renaming are one operation because they are one header rewrite; pass
+/// identity pairs to trim without renaming.
+pub fn subset(
+    store: &ObjectStore,
+    body: &FileBody,
+    names: &BTreeMap<String, String>,
+) -> Result<FileBody, ComposeError> {
+    compose(store, body, names, Unnamed::Drop)
+}
+
+fn compose(
+    store: &ObjectStore,
+    body: &FileBody,
+    names: &BTreeMap<String, String>,
+    unnamed: Unnamed,
+) -> Result<FileBody, ComposeError> {
     let FileBody::Tensor {
         format, records, ..
     } = body
@@ -67,8 +101,10 @@ pub fn rekey(
     };
     let source = RecordsSource::new(store, records);
     let composed = match format {
-        TensorFormat::SafetensorsV1 => compose_safetensors(store, records, &source, names)?,
-        TensorFormat::GgufV1 => compose_gguf(store, records, &source, names)?,
+        TensorFormat::SafetensorsV1 => {
+            compose_safetensors(store, records, &source, names, unnamed)?
+        }
+        TensorFormat::GgufV1 => compose_gguf(store, records, &source, names, unnamed)?,
     };
     Ok(FileBody::Tensor {
         format: *format,
@@ -83,13 +119,15 @@ const fn record_length(record: &FileRecord) -> u64 {
     }
 }
 
-/// Resolves each source tensor, in the source's own data order, to the name it
-/// keeps in the composed file. Every source tensor must be named, and no two
-/// may collide.
+/// Resolves the source tensors that survive, in the source's own data order,
+/// to the names they keep. No two may collide, and a name the source does not
+/// hold is always a refusal — a trim that silently keeps nothing would be a
+/// typo that looks like a working composition.
 fn select<'a, T>(
     tensors: &'a [T],
     name_of: impl Fn(&'a T) -> &'a str,
     names: &'a BTreeMap<String, String>,
+    unnamed: Unnamed,
 ) -> Result<Vec<(&'a str, &'a T)>, ComposeError> {
     let mut kept = Vec::with_capacity(tensors.len());
     let mut taken = HashSet::new();
@@ -97,9 +135,13 @@ fn select<'a, T>(
     for tensor in tensors {
         let old = name_of(tensor);
         sources.insert(old);
-        let new = names
-            .get(old)
-            .ok_or_else(|| ComposeError::UnnamedTensor(old.to_owned()))?;
+        let new = match (names.get(old), unnamed) {
+            (Some(new), _) => new,
+            (None, Unnamed::Drop) => continue,
+            (None, Unnamed::Refuse) => {
+                return Err(ComposeError::UnnamedTensor(old.to_owned()));
+            }
+        };
         if !taken.insert(new.as_str()) {
             return Err(ComposeError::DuplicateName(new.clone()));
         }
@@ -166,10 +208,16 @@ fn compose_safetensors(
     records: &[FileRecord],
     source: &RecordsSource<&ObjectStore>,
     names: &BTreeMap<String, String>,
+    unnamed: Unnamed,
 ) -> Result<Vec<FileRecord>, ComposeError> {
     let layout =
         safetensors::read_layout(source)?.ok_or(ComposeError::Unreadable("safetensors"))?;
-    let kept = select(&layout.tensors, |tensor| tensor.name.as_str(), names)?;
+    let kept = select(
+        &layout.tensors,
+        |tensor| tensor.name.as_str(),
+        names,
+        unnamed,
+    )?;
     for (name, _) in &kept {
         if name.is_empty() || *name == SAFETENSORS_METADATA_KEY {
             return Err(ComposeError::UnusableName((*name).to_owned()));
@@ -235,21 +283,38 @@ fn compose_gguf(
     records: &[FileRecord],
     source: &RecordsSource<&ObjectStore>,
     names: &BTreeMap<String, String>,
+    unnamed: Unnamed,
 ) -> Result<Vec<FileRecord>, ComposeError> {
     let layout = gguf::read_layout(source)?.ok_or(ComposeError::Unreadable("gguf"))?;
-    let kept = select(&layout.tensors, |tensor| tensor.name.as_str(), names)?;
+    let kept = select(
+        &layout.tensors,
+        |tensor| tensor.name.as_str(),
+        names,
+        unnamed,
+    )?;
     for (name, _) in &kept {
         if name.len() as u64 > gguf::MAX_TENSOR_NAME_LEN || name.as_bytes().contains(&0) {
             return Err(ComposeError::UnusableName((*name).to_owned()));
         }
     }
 
-    // The metadata block is untouched by a re-key: tensor names live in the
-    // directory, and the counts above them do not change. So the whole domain
-    // before the directory is inherited, and only the directory and the
-    // padding that follows it are new bytes.
-    let mut composed = inherit(records, 0, layout.directory_start)
-        .ok_or_else(|| ComposeError::NotObjectAligned("the metadata block".to_owned()))?;
+    // Tensor names live in the directory, so a re-key leaves the metadata
+    // block byte-identical and it is inherited whole. Dropping a tensor is the
+    // one thing that reaches it: the tensor count sits in its fixed prefix, so
+    // a trim rewrites that domain and nothing else in it.
+    let mut composed = if kept.len() == layout.tensors.len() {
+        inherit(records, 0, layout.directory_start)
+            .ok_or_else(|| ComposeError::NotObjectAligned("the metadata block".to_owned()))?
+    } else {
+        let span =
+            usize::try_from(layout.directory_start).map_err(|_| ComposeError::HeaderTooLarge)?;
+        let mut metadata = vec![0_u8; span];
+        source
+            .read_exact_at(0, &mut metadata)
+            .map_err(|error| ComposeError::Plan(PlanError::Read(error)))?;
+        metadata[8..16].copy_from_slice(&(kept.len() as u64).to_le_bytes());
+        admit(store, &metadata)?
+    };
 
     let mut directory = Vec::new();
     let mut offset = 0_u64;
