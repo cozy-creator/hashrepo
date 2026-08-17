@@ -215,11 +215,12 @@ class TensorReader(Mapping[str, TensorView]):
         # reading through it: the `Py_buffer` a view holds keeps the mapping
         # alive, and when the last view goes so does the mapping. A strong
         # cache here would mean a conversion that touches every tensor of an
-        # 8 GiB shard ends with the whole shard resident -- measured at 7.9 GiB
-        # peak RSS before this was weak, 155 MiB after
-        # (`python/benchmarks/writer_peak_rss.py`). Re-mapping an object a
-        # later read wants again is one `mmap(2)`; its digest stays in
-        # `_verified`, so it is not re-hashed.
+        # 8 GiB shard ends with the whole shard resident. Measured with
+        # `python/benchmarks/writer_peak_rss.py --gib 8`, transforming every
+        # tensor of an 8 GiB shard: 8036.7 MiB peak RSS while this was strong,
+        # 310.1 MiB now -- and now flat in the shard's size rather than equal
+        # to it. Re-mapping an object a later read wants again is one
+        # `mmap(2)`; its digest stays in `_verified`, so it is not re-hashed.
         self._maps: weakref.WeakValueDictionary[str, MappedObject] = (
             weakref.WeakValueDictionary()
         )

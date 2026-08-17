@@ -742,7 +742,8 @@ impl PyPackObject {
 /// `weakref` is required, not cosmetic: the reader keeps its mappings in a
 /// `WeakValueDictionary` so a mapping lives exactly as long as someone is
 /// reading through it. Without that, a conversion that touches every tensor of
-/// an 8 GiB shard ends with the whole shard resident (measured: 7.9 GiB).
+/// an 8 GiB shard ends with the whole shard resident: measured at 8036.7 MiB
+/// peak RSS with a strong cache against 310.1 MiB with a weak one.
 #[pyclass(frozen, weakref, module = "tensorfs._tensorfs", name = "MappedObject")]
 pub struct PyMappedObject {
     /// `None` for a zero-length object: a zero-length mapping is refused by

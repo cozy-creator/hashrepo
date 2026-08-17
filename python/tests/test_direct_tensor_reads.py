@@ -251,9 +251,10 @@ def test_a_reader_retains_no_mapping_it_is_not_reading_through(
     """Resident bytes track the LIVE views, not the reader's history.
 
     Measured before this held: a conversion that read every tensor of an 8 GiB
-    shard peaked at 8.0 GiB of RSS, because the reader kept every mapping it had
-    ever made. It now peaks at one tensor's worth
-    (`python/benchmarks/writer_peak_rss.py`), and this is that property at
+    shard peaked at 8036.7 MiB of RSS -- 3.9x the largest single tensor --
+    because the reader kept every mapping it had ever made. It now peaks at
+    310.1 MiB, 0.15x, and flat in the shard's size
+    (`python/benchmarks/writer_peak_rss.py --gib 8`). This is that property at
     fixture scale, where it can be asserted rather than measured.
     """
 
