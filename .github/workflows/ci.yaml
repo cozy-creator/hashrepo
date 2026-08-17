@@ -47,6 +47,10 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # A hung test must cost minutes, not a runner-day: `a_scrub_racing_a_…`
+    # hangs on windows-latest roughly one run in six and took a master job
+    # three hours before anyone looked (#109). The suite itself runs in eight.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91.0
