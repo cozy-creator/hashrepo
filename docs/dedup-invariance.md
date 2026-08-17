@@ -59,11 +59,40 @@ of byte re-ordering on a ~50 GB load; disk-order = memory-order made disk→VRAM
 Read-time **rename** costs nothing at load; read-time **permute/fuse-reorder** re-introduces
 exactly that reorder cost. So derived snapshots serve the non-hot direction and one-time
 conversions; the canonical stored copy is laid out **load-order-optimal for the contract
-actually served**, and a pair that is hot in *both* directions pays real bytes for its
-re-arranged tensors — a deliberate speed-over-storage trade, not a dedup failure. Two
-corollaries: manifest record order should equal the served contract's memory order
-(sequential streaming, network→VRAM pipelining); and no seam mechanism may compromise load
-order — chunk *boundaries* can move, byte *order* cannot.
+actually served**. Two corollaries: manifest record order should equal the served contract's
+memory order (sequential streaming, network→VRAM pipelining); and no seam mechanism may
+compromise load order — chunk *boundaries* can move, byte *order* cannot.
+
+The corpus audit (`research/checkpoint-variant-corpus-2026-08.md`, F5) bounds how often the
+hot-path cost even arises: SDXL single-file↔diffusers is **95.4% of bytes rename-only**
+(residue: one outer-axis CLIP-G qkv fuse of 0.315 GB + 4 MB of legacy reshapes), and
+DiT-family spellings are ~100% rename — so deriving IS hot-path-safe for our families, and
+the tiers below are a contingency, not a need.
+
+### Dual-layout tiers, for pairs hot in both directions
+
+Ranked by implementation cost against bytes + seconds saved:
+
+- **Tier 1 — partial-dual storage (recommended default; near-zero implementation).** B's
+  manifest `inherit()`s every rename-only tensor's chunks from A and admits real chunks only
+  for the re-arranged tensors, transform paid once at definition time. Both directions boot
+  at full sequential speed; cost = the re-arranged fraction (SDXL: 4.6% ≈ 0.32 GB; llama-GGUF:
+  ~10%), never 2×. This is #80's composition applied to a transform — no new machinery.
+- **Tier 2 — GPU-side re-arrangement (moderate implementation; dissolves tier-1 bytes for
+  dense tensors).** The measured reorder penalty was CPU/disk-side; an in-VRAM permute runs
+  at device memory bandwidth (~ms/GB — ~1 s on 50 GB, against a ~10 s load). Upload the
+  stored orientation contiguously, permute on device before parameter assignment (we own the
+  `from_config` + `load_state_dict` path; scratch = one largest-tensor buffer, freed per
+  tensor). Honest limits: works for dense dtypes and for **block-aligned** permutes of
+  quantized tensors (row permutations like the rope-permute move whole quant blocks);
+  arbitrary element-level permutes of block-quantized tensors need dequant→requant — math,
+  out of layout scope — and stay tier 1.
+- **Tier 3 — stored deltas per class: mostly NO.** Pure transpose/permute shares no runs in
+  either direction on disk (that is *why* tier 2 exists). Fuse/split and outer-axis slices
+  decompose into shared runs, but seams already capture that at zero delta. Row-granular
+  shuffles are expressible as record runs in principle, but rows are KB-scale — record
+  cardinality explodes toward the 1M bound and read performance dies. Reject as a mechanism
+  class; nothing here beats tiers 1+2.
 
 Both are decidable mechanically from a layout-contract pair (same tensor multiset + dtypes +
 element counts ⇒ viewable; run-preserving ⇒ also chunk-shareable). Consequence for the
@@ -124,14 +153,24 @@ blob-planner variant — never the tensor lane.
 reshape and already byte-identical). Admission-time transform *detection* stays rejected as
 #81 records; §3's view-expressibility is the whole answer.
 
-## 6. Expected-bytes ranking (where the redundant bytes actually are)
+## 6. Expected-bytes ranking — now corpus-measured, not speculated
 
-1. **Repack/rename/shard twins** — the bulk of real-world duplication (ComfyUI single-file vs
-   diffusers trees vs HF reshards of the *same* weights). Already 100% free; needs only #69's
-   projection so both spellings are cheap to expose.
-2. **Fuse/split seams** — 12–52% of model bytes per affected pair; contract-directed cuts (§4).
-3. **Permuted twins (GGUF llama q/k, ~10%)** — view-expressible via generalized permute; free
-   once #81's adapters land.
-4. **Precision twins** — large bytes, but casts are math: real conversion pipeline, out of
-   dedup's scope by ruling.
-5. **Finetunes/merges/quants** — genuinely distinct weights; zero shareable; do not chase.
+The variant-corpus audit (`cozy-creator-tracker/research/checkpoint-variant-corpus-2026-08.md`)
+measured the wild; cite it rather than re-deriving. Ranking updated with its numbers:
+
+1. **Repack/rename twins** — the bulk of real duplication: SDXL ships two 6.94 GB single-files
+   differing only in a 0.17 GB baked VAE (6.77 GB redundant per pair, F4); single-file↔tree
+   pairs are 95.4–100% rename-only by bytes (F5). Already free; ingestion should re-pack
+   foreign spellings into our canonical **single-file** packaging (Paul's no-sharding ruling)
+   and keep the other spellings as derived views.
+2. **Cross-model component sharing** — Wan 5B and A14B ship a byte-identical 11.4 GB UMT5-XXL
+   (F1); realistic endpoint sets start 30–50% warm by bytes from chunk residency alone. Zero
+   new design needed.
+3. **Fuse/split seams** — 0.315 GB per SDXL pair in the wild (F5); up to ~52% of model bytes
+   for ecosystems fusing qkv + gate/up (measured here). Contract-directed cuts (§4).
+4. **Permuted twins (GGUF llama q/k, ~10%)** — view-expressible via generalized permute.
+5. **Precision twins** — casts are math (out of scope by ruling); the corpus flags a
+   provenance-link gap (F2's fp16-fix VAE under ≥4 whole-file digests, one byte-equal to the
+   fp16 cast of another) — flagged there, not proposed here.
+6. **Finetunes/merges/quants** — full-retrain SDXL tunes share ~0 with base (F3); 14 GGUF
+   quant levels of one model are all distinct bytes (F7). Zero shareable; do not chase.
