@@ -96,15 +96,17 @@ is weaker, and this is the honest statement of it** (#103, measured).
   measured over and failed 18 of 180 runs anyway, so the window is not the
   superseded file's delete-pending state alone. That experiment is not in the
   tree: it cost the crate's `forbid(unsafe_code)` and bought nothing.
-- **So the Windows contract is: a miss is transient and heals.** `read_ref`
-  retries a failed `open` while the store proves the failure wrong — the
-  directory lists the name the `open` could not find, or a staged `.swap-…`
-  file says a ref is between `write` and `rename`. A quiescent store returns
-  the first answer, so a genuinely absent ref and a ref this process genuinely
-  may not read do not spin. No clock, no attempt count. Measured, that absorbs
-  about a quarter of the misses (55 of 600 runs still saw one to three
-  survive), so **a Windows caller must still be able to read again**; what it
-  may rely on is that reading again resolves.
+- **So the Windows contract is: a miss is transient and heals, and the CALLER
+  reads again.** `read_ref` reports the failure instead of retrying inside the
+  library. A retry there can only wait on a peer's progress, and a peer can be
+  waiting on the reader's caller: `scrub` holds the metadata transaction across
+  its ref reads, so a retry inside `read_ref` deadlocked a scrub against the
+  writer it was waiting for (it hung a Windows CI job for three hours). Nothing
+  that reads a ref may block on one being written.
+- **A failed `open` is never evidence about a ref's CONTENT.** `scrub` deletes
+  a ref only for an id that is not rooted or for genuinely unparseable bytes —
+  never for an `open` that failed, which on Windows would cost a live root its
+  ref for losing a race.
 - **A Windows tool reading `refs/main` itself inherits the weaker contract**:
   `type refs\main` can miss while a swap is in flight, and must read again.
   POSIX tools need no such thing.

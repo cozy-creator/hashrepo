@@ -488,63 +488,25 @@ impl<'store> Layout<'store> {
     }
 
     /// Reads `refs/<name>`: the id it names, or `None` when there is no such
-    /// ref. One `open` plus one `read`, so a concurrent swap is invisible —
-    /// except on Windows, where [`Self::open_lost_a_race`] says when to look
-    /// again.
+    /// ref. One `open` plus one `read`, and it never waits: on Windows the
+    /// `open` can transiently fail while a swap replaces the name (#103), and
+    /// that failure is REPORTED rather than retried, because the only state a
+    /// retry could wait on is a peer's progress — and a peer can be waiting
+    /// on this reader's caller. `scrub` held a transaction across exactly that
+    /// wait and deadlocked the store. A caller that wants the ref reads again;
+    /// nothing that reads a ref may block on one that is being written.
     pub fn read_ref(&self, name: &str) -> Result<Option<SnapshotId>, LayoutError> {
-        let name = validated_ref_name(name)?;
-        let path = self.refs_dir().join(name);
-        let bytes = loop {
-            match fs::read(&path) {
-                Ok(bytes) => break bytes,
-                Err(error) if self.open_lost_a_race(name, &error) => continue,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-                Err(error) => return Err(error.into()),
-            }
+        let path = self.refs_dir().join(validated_ref_name(name)?);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
         };
         String::from_utf8(bytes)
             .ok()
             .and_then(|text| SnapshotId::parse_hex(text.trim()))
             .map(Some)
             .ok_or_else(|| LayoutError::UnreadableRef(name.to_owned()))
-    }
-
-    /// Whether a failed `open` of a ref is Windows losing a race with a swap
-    /// rather than the answer to the question.
-    ///
-    /// `rename(2)` is atomic to a concurrent opener; Windows' superseding
-    /// rename is not, so an `open` of a name being replaced transiently
-    /// returns ERROR_FILE_NOT_FOUND or ERROR_ACCESS_DENIED — measured on CI
-    /// at roughly 2 opens per million, and `FileRenameInfoEx`'s POSIX
-    /// semantics does not close the window (#103).
-    ///
-    /// **The loop this drives is bounded by the store's state, never by a
-    /// clock or a count.** A retry happens only while the store proves the
-    /// failed answer wrong: the directory lists the name the `open` could not
-    /// find, or a staged file says a swap is between `write` and `rename`
-    /// right now. Once the store is quiescent neither holds, so a ref that is
-    /// genuinely absent and a ref this process genuinely may not read both
-    /// return on the first attempt.
-    #[cfg(windows)]
-    fn open_lost_a_race(&self, name: &str, error: &io::Error) -> bool {
-        let Ok(listing) = fs::read_dir(self.refs_dir()) else {
-            // An unreadable refs directory is the answer, not a race.
-            return false;
-        };
-        let mut listing = listing.flatten().map(|entry| entry.file_name());
-        match error.kind() {
-            io::ErrorKind::NotFound => listing.any(|entry| entry == *name),
-            io::ErrorKind::PermissionDenied => {
-                listing.any(|entry| entry.to_string_lossy().starts_with(SWAP_PREFIX))
-            }
-            _ => false,
-        }
-    }
-
-    /// POSIX renames atomically for an opener, so the first answer is it.
-    #[cfg(not(windows))]
-    const fn open_lost_a_race(&self, _name: &str, _error: &io::Error) -> bool {
-        false
     }
 
     pub fn remove_ref(&self, name: &str) -> Result<bool, LayoutError> {
