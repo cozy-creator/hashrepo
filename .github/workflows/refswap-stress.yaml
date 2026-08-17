@@ -1,7 +1,8 @@
 name: refswap-stress
 
 # TEMPORARY (#103): measures the Windows ref-swap flake rate. Deleted before
-# the fix merges; the numbers it produces go on the issue.
+# the fix merges; the numbers it produces go on the issue. 20 runs a shard
+# because #102's per-swap fsync made one run ~30s.
 
 on:
   workflow_dispatch:
@@ -22,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91.0
       - uses: Swatinem/rust-cache@v2
-      - name: ref swap, 200 runs
+      - name: ref swap, 20 runs
         shell: bash
         run: |
           set -euo pipefail
@@ -33,10 +34,10 @@ jobs:
             | .executable // empty' build.json | tail -1)
           echo "binary: ${bin}"
           failed=0
-          for run in $(seq 1 200); do
+          for run in $(seq 1 20); do
             "${bin}" --exact a_ref_swap_is_atomic_under_concurrent_readers \
               > run.log 2>&1 ||
               { failed=$((failed + 1))
                 grep -E 'panicked|the ref was|a swap invalidated' run.log | head -3; }
           done
-          echo "::notice::shard ${{ matrix.shard }}: ${failed} failures in 200 runs"
+          echo "::notice::shard ${{ matrix.shard }}: ${failed} failures in 20 runs"
