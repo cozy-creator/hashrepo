@@ -26,6 +26,12 @@ exactly as the planner does.
 |---|---|---|---|
 | rename keys | **100%** (272/272 chunks) | 36 KB header vs 269 MB data | nothing — already free |
 | repack: 1 file → 3 shards (real `safetensors` lib) | **100%** | ~30 KB of headers | nothing — already free |
+
+Packaging note (Paul's ruling, DESIGN-RULINGS): our canonical packaging is **one safetensors
+file per model at any size** — no HF-style sharding (TFM1's 1M-record bound gives ~64 PiB of
+headroom per file). Shard↔single-file invariance therefore matters one-way: it is what lets
+a *foreign* sharded ingest dedup fully against our canonical single file, not a packaging
+choice we make twice.
 | GGUF twin, layout-faithful converter | **100%** (272/272 tensors byte-identical) | GGUF KV/directory | nothing — padding isolation makes it work |
 | fuse qkv (outer-axis concat), no hints | 87.7% of chunks — **all 12.3% of fusible bytes forfeited** | — | seams needed |
 | fuse qkv, with seam cuts | **100%** | header only | contract-directed splitting (§4) |
@@ -46,6 +52,18 @@ concat/split along the **outermost** stored axis. This is the narrow set, and it
 new storage) is much broader: any bijective index remap qualifies — transpose, the llama.cpp
 rope-permute (`reshape(n_head, 2, d/2, …) → swapaxes(1,2) → reshape`), inner-axis fusions
 (GPT-2 `c_attn`), head interleaves. The reader pays a gather; the store pays nothing.
+
+**The gather is not free on the hot path.** The empirical constraint that birthed the layout
+contract (Qwen Image/Edit quantization): disk-order ≠ memory-order cost *hundreds of seconds*
+of byte re-ordering on a ~50 GB load; disk-order = memory-order made disk→VRAM ~10 seconds.
+Read-time **rename** costs nothing at load; read-time **permute/fuse-reorder** re-introduces
+exactly that reorder cost. So derived snapshots serve the non-hot direction and one-time
+conversions; the canonical stored copy is laid out **load-order-optimal for the contract
+actually served**, and a pair that is hot in *both* directions pays real bytes for its
+re-arranged tensors — a deliberate speed-over-storage trade, not a dedup failure. Two
+corollaries: manifest record order should equal the served contract's memory order
+(sequential streaming, network→VRAM pipelining); and no seam mechanism may compromise load
+order — chunk *boundaries* can move, byte *order* cannot.
 
 Both are decidable mechanically from a layout-contract pair (same tensor multiset + dtypes +
 element counts ⇒ viewable; run-preserving ⇒ also chunk-shareable). Consequence for the
