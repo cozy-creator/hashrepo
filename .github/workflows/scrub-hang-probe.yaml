@@ -58,14 +58,19 @@ jobs:
               a_scrub_racing_a_deletion_never_costs_a_live_root --exact --nocapture \
               > "run-${i}.log" 2>&1
             status=$?
-            if [ "${status}" -eq 124 ]; then
-              hung=$((hung + 1))
-              echo "=== RUN ${i} HUNG ==="
-              tail -n 60 "run-${i}.log"
-            elif [ "${status}" -ne 0 ]; then
-              failed=$((failed + 1))
-              echo "=== RUN ${i} FAILED (${status}) ==="
-              tail -n 60 "run-${i}.log"
+            if [ "${status}" -eq 124 ] || [ "${status}" -ne 0 ]; then
+              if [ "${status}" -eq 124 ]; then
+                hung=$((hung + 1)); echo "=== RUN ${i} HUNG ==="
+              else
+                failed=$((failed + 1)); echo "=== RUN ${i} FAILED (${status}) ==="
+              fi
+              echo "--- last main-thread breadcrumbs"
+              grep -a "main:" "run-${i}.log" | tail -n 5
+              echo "--- scrub passes: $(grep -ac '^\[probe\] s' "run-${i}.log")"
+              echo "--- panics"
+              grep -a -A 4 "panicked" "run-${i}.log" | head -n 40
+              echo "--- tail"
+              tail -n 4 "run-${i}.log"
             else
               passed=$((passed + 1))
               echo "=== RUN ${i} PASSED ==="
