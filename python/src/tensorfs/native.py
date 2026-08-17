@@ -56,6 +56,7 @@ from ._tensorfs import (
     plan_and_hash_file,
     plan_bytes,
     plan_file,
+    rekey,
     snapshot_id_of,
     stub_bytes,
 )
@@ -95,6 +96,7 @@ __all__ = [
     "parse_stub",
     "plan_bytes",
     "plan_file",
+    "rekey",
     "snapshot_id_of",
     "stub_bytes",
 ]

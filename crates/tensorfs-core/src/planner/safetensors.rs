@@ -103,15 +103,65 @@ impl<'de> Deserialize<'de> for Metadata {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct TensorSpan {
-    start: u64,
-    end: u64,
+/// One tensor as the header declares it, with its extent inside the data
+/// section. Composition needs the name and the geometry the plan discards.
+#[derive(Clone, Debug)]
+pub(crate) struct TensorEntry {
+    pub(crate) name: String,
+    pub(crate) dtype: String,
+    pub(crate) shape: Vec<u64>,
+    pub(crate) start: u64,
+    pub(crate) end: u64,
+}
+
+/// A fully validated safetensors file: where its data section begins and
+/// every tensor in it, in data order and contiguous from zero.
+pub(crate) struct Layout {
+    pub(crate) header_end: u64,
+    pub(crate) tensors: Vec<TensorEntry>,
 }
 
 /// Returns a tensor-aligned plan only after proving the complete safetensors
 /// structure from its bounded JSON header. Tensor body bytes are never read.
 pub(crate) fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan>, PlanError> {
+    let Some(layout) = read_layout(source)? else {
+        return Ok(None);
+    };
+
+    let mut regions = Vec::new();
+    match append_split_region(&mut regions, 0, layout.header_end, RegionKind::Header) {
+        Ok(()) => {}
+        Err(PlanError::ObjectLimit) => return Ok(None),
+        Err(error) => return Err(error),
+    }
+    for tensor in layout.tensors {
+        let length = tensor.end - tensor.start;
+        if length == 0 {
+            continue;
+        }
+        match append_split_region(
+            &mut regions,
+            layout.header_end + tensor.start,
+            length,
+            RegionKind::Tensor,
+        ) {
+            Ok(()) => {}
+            Err(PlanError::ObjectLimit) => return Ok(None),
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(Some(Plan {
+        planner: PlannerId::SafetensorsV1,
+        file_size: source.len(),
+        regions,
+    }))
+}
+
+/// The whole structural proof, shared by the planner and by composition:
+/// a bounded header parse, per-tensor dtype/shape/extent agreement, and a
+/// data section the tensors cover exactly once from zero.
+pub(crate) fn read_layout<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Layout>, PlanError> {
     let file_size = source.len();
     if file_size < PREFIX_SIZE + 2 {
         return Ok(None);
@@ -151,57 +201,39 @@ pub(crate) fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan
     };
 
     let data_size = file_size - header_end;
-    let mut spans = Vec::new();
-    spans
+    let mut tensors = Vec::new();
+    tensors
         .try_reserve_exact(header.0.len())
         .map_err(|_| PlanError::ResourceExhausted)?;
-    for (_name, tensor) in header.0 {
+    for (name, tensor) in header.0 {
         let [start, end] = tensor.data_offsets;
         if end < start || tensor_byte_size(&tensor).is_none_or(|size| size != end - start) {
             return Ok(None);
         }
-        spans.push(TensorSpan { start, end });
+        tensors.push(TensorEntry {
+            name,
+            dtype: tensor.dtype,
+            shape: tensor.shape,
+            start,
+            end,
+        });
     }
-    spans.sort_unstable_by_key(|span| (span.start, span.end));
+    tensors.sort_unstable_by_key(|tensor| (tensor.start, tensor.end));
 
     let mut cursor = 0_u64;
-    for span in &spans {
-        if span.start != cursor || span.end > data_size {
+    for tensor in &tensors {
+        if tensor.start != cursor || tensor.end > data_size {
             return Ok(None);
         }
-        cursor = span.end;
+        cursor = tensor.end;
     }
     if cursor != data_size {
         return Ok(None);
     }
 
-    let mut regions = Vec::new();
-    match append_split_region(&mut regions, 0, header_end, RegionKind::Header) {
-        Ok(()) => {}
-        Err(PlanError::ObjectLimit) => return Ok(None),
-        Err(error) => return Err(error),
-    }
-    for span in spans {
-        let length = span.end - span.start;
-        if length == 0 {
-            continue;
-        }
-        match append_split_region(
-            &mut regions,
-            header_end + span.start,
-            length,
-            RegionKind::Tensor,
-        ) {
-            Ok(()) => {}
-            Err(PlanError::ObjectLimit) => return Ok(None),
-            Err(error) => return Err(error),
-        }
-    }
-
-    Ok(Some(Plan {
-        planner: PlannerId::SafetensorsV1,
-        file_size,
-        regions,
+    Ok(Some(Layout {
+        header_end,
+        tensors,
     }))
 }
 

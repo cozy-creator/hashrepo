@@ -17,6 +17,7 @@
 //! crate in this workspace: the PyO3 attribute macros expand to `unsafe impl`s
 //! in this crate. No hand-written `unsafe` appears below.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -28,6 +29,7 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
+use tensorfs_core::compose;
 use tensorfs_core::layout::{self, Layout, STUB_MAGIC};
 use tensorfs_core::object::{self, ObjectDigest};
 use tensorfs_core::planner::{self, ByteSource, PlannerId, RegionKind};
@@ -90,6 +92,14 @@ fn layout_error(error: layout::LayoutError) -> PyErr {
     LayoutError::new_err(describe(&error))
 }
 
+fn compose_error(error: compose::ComposeError) -> PyErr {
+    match error {
+        compose::ComposeError::Store(error) => store_error(error),
+        compose::ComposeError::Plan(error) => plan_error(error),
+        other => TensorfsError::new_err(describe(&other)),
+    }
+}
+
 fn plan_error(error: planner::PlanError) -> PyErr {
     PlanError::new_err(describe(&error))
 }
@@ -150,6 +160,21 @@ const fn region_kind_name(kind: RegionKind) -> &'static str {
         RegionKind::Header => "header",
         RegionKind::Tensor => "tensor",
         RegionKind::Blob => "blob",
+    }
+}
+
+fn parse_planner(name: &str) -> PyResult<PlannerId> {
+    match name {
+        "safetensors-v1" => Ok(PlannerId::SafetensorsV1),
+        "gguf-v1" => Ok(PlannerId::GgufV1),
+        "blob-v1" => Ok(PlannerId::BlobV1),
+        other => Err(TensorfsError::new_err(format!("unknown planner '{other}'"))),
+    }
+}
+
+const fn record_length(record: &CoreFileRecord) -> u64 {
+    match record {
+        CoreFileRecord::Data { length, .. } | CoreFileRecord::Hole { length } => *length,
     }
 }
 
@@ -1142,6 +1167,41 @@ fn ingest_concurrency() -> usize {
     tensorfs_core::store::ingest_concurrency()
 }
 
+/// Re-keys one committed tensor container, returning the composed record list.
+///
+/// `names` maps every tensor in the source to the name it keeps. Only the
+/// rewritten header is admitted; every tensor record is inherited verbatim, so
+/// nothing is re-chunked, re-hashed or re-uploaded.
+#[pyfunction]
+fn rekey(
+    py: Python<'_>,
+    store: &PyObjectStore,
+    planner: &str,
+    records: Vec<PyFileRecord>,
+    names: BTreeMap<String, String>,
+) -> PyResult<Vec<PyFileRecord>> {
+    let format = parse_planner(planner)?
+        .tensor_format()
+        .ok_or_else(|| TensorfsError::new_err("only a tensor container can be recomposed"))?;
+    let records = records
+        .iter()
+        .map(PyFileRecord::to_core)
+        .collect::<PyResult<Vec<_>>>()?;
+    let body = tfm1::FileBody::Tensor {
+        format,
+        logical_size: records.iter().map(record_length).sum(),
+        records,
+    };
+    let composed = py
+        .detach(|| compose::rekey(&store.inner, &body, &names))
+        .map_err(compose_error)?;
+    Ok(composed
+        .records()
+        .iter()
+        .map(PyFileRecord::from_core)
+        .collect())
+}
+
 /// The compiled half of the `tensorfs` distribution.
 #[pymodule]
 #[pyo3(name = "_tensorfs")]
@@ -1181,6 +1241,7 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(plan_file, module)?)?;
     module.add_function(wrap_pyfunction!(plan_and_hash_file, module)?)?;
     module.add_function(wrap_pyfunction!(ingest_concurrency, module)?)?;
+    module.add_function(wrap_pyfunction!(rekey, module)?)?;
 
     module.add("MAX_OBJECT_SIZE", planner::MAX_OBJECT_SIZE)?;
     module.add("MAX_PACK_PAYLOAD", tfp1::MAX_PACK_PAYLOAD)?;

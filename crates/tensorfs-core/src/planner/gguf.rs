@@ -13,7 +13,7 @@ const MAX_METADATA_INSPECTION_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ARRAY_ELEMENTS: u64 = 16_000_000;
 const MAX_ARRAY_DEPTH: u32 = 16;
 const MAX_METADATA_KEY_LEN: u64 = u16::MAX as u64;
-const MAX_TENSOR_NAME_LEN: u64 = 63;
+pub(crate) const MAX_TENSOR_NAME_LEN: u64 = 63;
 
 const GGUF_TYPE_UINT8: u32 = 0;
 const GGUF_TYPE_INT8: u32 = 1;
@@ -46,10 +46,27 @@ impl From<io::Error> for ParseFailure {
 
 type ParseResult<T> = Result<T, ParseFailure>;
 
-#[derive(Clone, Copy, Debug)]
-struct TensorInfo {
-    offset: u64,
-    length: u64,
+/// One tensor as the directory declares it. `offset` is relative to the
+/// aligned start of the data section and `length` is the unpadded extent;
+/// composition needs the name and geometry the plan discards.
+#[derive(Clone, Debug)]
+pub(crate) struct TensorInfo {
+    pub(crate) name: String,
+    pub(crate) dimensions: [u64; 4],
+    pub(crate) dimension_count: u32,
+    pub(crate) ggml_type: u32,
+    pub(crate) offset: u64,
+    pub(crate) length: u64,
+}
+
+/// A fully validated GGUF file: the three header domains the planner keeps
+/// apart — metadata, directory, pre-data padding — and every tensor.
+pub(crate) struct Layout {
+    pub(crate) alignment: u64,
+    pub(crate) directory_start: u64,
+    pub(crate) directory_end: u64,
+    pub(crate) data_start: u64,
+    pub(crate) tensors: Vec<TensorInfo>,
 }
 
 struct Reader<'a, S: ?Sized> {
@@ -226,15 +243,24 @@ impl MetadataBudget {
 }
 
 pub(crate) fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan>, PlanError> {
-    match parse(source) {
-        Ok(plan) => Ok(Some(plan)),
+    lift(parse(source).and_then(|layout| plan_layout(source.len(), &layout)))
+}
+
+/// The whole structural proof, shared by the planner and by composition.
+pub(crate) fn read_layout<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Layout>, PlanError> {
+    lift(parse(source))
+}
+
+fn lift<T>(result: ParseResult<T>) -> Result<Option<T>, PlanError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
         Err(ParseFailure::Invalid) => Ok(None),
         Err(ParseFailure::Read(error)) => Err(PlanError::Read(error)),
         Err(ParseFailure::ResourceExhausted) => Err(PlanError::ResourceExhausted),
     }
 }
 
-fn parse<S: ByteSource + ?Sized>(source: &S) -> ParseResult<Plan> {
+fn parse<S: ByteSource + ?Sized>(source: &S) -> ParseResult<Layout> {
     let mut reader = Reader::new(source);
     if reader.read::<4>()? != MAGIC {
         return Err(ParseFailure::Invalid);
@@ -298,9 +324,10 @@ fn parse<S: ByteSource + ?Sized>(source: &S) -> ParseResult<Plan> {
         let name = reader.read_bounded_bytes(MAX_TENSOR_NAME_LEN)?;
         validate_name(&name)?;
         charge_symbol_bytes(&mut symbol_bytes, name.len())?;
-        if !tensor_names.insert(name) {
+        if !tensor_names.insert(name.clone()) {
             return Err(ParseFailure::Invalid);
         }
+        let name = String::from_utf8(name).map_err(|_| ParseFailure::Invalid)?;
 
         let dimension_count = reader.read_u32()?;
         if dimension_count > 4 {
@@ -322,16 +349,23 @@ fn parse<S: ByteSource + ?Sized>(source: &S) -> ParseResult<Plan> {
             return Err(ParseFailure::Invalid);
         }
         expected_offset = expected_offset
-            .checked_add(align_up(length, alignment)?)
+            .checked_add(align_up(length, alignment).ok_or(ParseFailure::Invalid)?)
             .ok_or(ParseFailure::Invalid)?;
-        tensors.push(TensorInfo { offset, length });
+        tensors.push(TensorInfo {
+            name,
+            dimensions,
+            dimension_count,
+            ggml_type,
+            offset,
+            length,
+        });
     }
 
     let directory_end = reader.position;
     let data_start = if tensors.is_empty() {
         directory_end
     } else {
-        align_up(directory_end, alignment)?
+        align_up(directory_end, alignment).ok_or(ParseFailure::Invalid)?
     };
     let expected_file_size = data_start
         .checked_add(expected_offset)
@@ -340,23 +374,38 @@ fn parse<S: ByteSource + ?Sized>(source: &S) -> ParseResult<Plan> {
         return Err(ParseFailure::Invalid);
     }
 
+    Ok(Layout {
+        alignment,
+        directory_start,
+        directory_end,
+        data_start,
+        tensors,
+    })
+}
+
+/// The region shape a validated layout produces: metadata, directory and
+/// pre-data padding as separate header domains, then every tensor's unpadded
+/// extent with its own trailing padding kept out of it. Isolating padding is
+/// what lets a GGUF share tensor objects with a safetensors twin.
+fn plan_layout(file_size: u64, layout: &Layout) -> ParseResult<Plan> {
     let mut regions = Vec::new();
-    append_domain(&mut regions, 0, directory_start, RegionKind::Header)?;
+    append_domain(&mut regions, 0, layout.directory_start, RegionKind::Header)?;
     append_domain(
         &mut regions,
-        directory_start,
-        directory_end - directory_start,
+        layout.directory_start,
+        layout.directory_end - layout.directory_start,
         RegionKind::Header,
     )?;
     append_domain(
         &mut regions,
-        directory_end,
-        data_start - directory_end,
+        layout.directory_end,
+        layout.data_start - layout.directory_end,
         RegionKind::Header,
     )?;
 
-    for tensor in tensors {
-        let tensor_start = data_start
+    for tensor in &layout.tensors {
+        let tensor_start = layout
+            .data_start
             .checked_add(tensor.offset)
             .ok_or(ParseFailure::Invalid)?;
         append_domain(
@@ -365,7 +414,8 @@ fn parse<S: ByteSource + ?Sized>(source: &S) -> ParseResult<Plan> {
             tensor.length,
             RegionKind::Tensor,
         )?;
-        let padded_length = align_up(tensor.length, alignment)?;
+        let padded_length =
+            align_up(tensor.length, layout.alignment).ok_or(ParseFailure::Invalid)?;
         append_domain(
             &mut regions,
             tensor_start + tensor.length,
@@ -376,7 +426,7 @@ fn parse<S: ByteSource + ?Sized>(source: &S) -> ParseResult<Plan> {
 
     Ok(Plan {
         planner: PlannerId::GgufV1,
-        file_size: reader.length,
+        file_size,
         regions,
     })
 }
@@ -534,12 +584,11 @@ fn tensor_length(dimensions: [u64; 4], block_elements: u64, block_bytes: u64) ->
         .ok_or(ParseFailure::Invalid)
 }
 
-fn align_up(value: u64, alignment: u64) -> ParseResult<u64> {
+pub(crate) fn align_up(value: u64, alignment: u64) -> Option<u64> {
     debug_assert!(alignment.is_power_of_two());
     value
         .checked_add(alignment - 1)
         .map(|sum| sum & !(alignment - 1))
-        .ok_or(ParseFailure::Invalid)
 }
 
 fn append_domain(

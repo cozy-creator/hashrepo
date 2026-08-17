@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 
+/// Composing a new tensor container out of a committed one's own objects —
+/// a re-key or a record subset. Needs the store, so it shares its gate.
+#[cfg(all(feature = "store", any(unix, windows)))]
+pub mod compose;
 /// Snapshot symlink trees, pointer stubs and refs beside the object store.
 /// Shares the store's real-filesystem platform gate and needs nothing else —
 /// a projection is a pure function of a manifest and the store root.
