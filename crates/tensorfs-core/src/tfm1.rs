@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use unicode_normalization::is_nfc;
 
+use crate::contract::{MAX_CONTRACT_NAME_BYTES, Stamp};
 use crate::object::ObjectDigest;
 use crate::planner::{MAX_OBJECT_SIZE, PlannerId, TensorFormat};
 
@@ -131,6 +132,11 @@ impl FileRecord {
 pub enum FileBody {
     Tensor {
         format: TensorFormat,
+        /// Which layout contract directed this file's chunking. Part of the
+        /// canonical bytes, so identity is self-describing: the same file
+        /// chunked under two contracts is two snapshots, and reading one tells
+        /// you which layout it is without consulting any registry.
+        contract: Stamp,
         logical_size: u64,
         records: Vec<FileRecord>,
     },
@@ -215,6 +221,7 @@ pub enum TreeEntry {
     File {
         executable: bool,
         planner: PlannerId,
+        contract: Stamp,
         records: Vec<FileRecord>,
     },
     Symlink {
@@ -294,6 +301,10 @@ pub enum Tfm1Error {
     ExecutableFlag,
     #[error("planner tag is unknown")]
     UnknownPlanner,
+    #[error("contract name is empty, too long, or outside the handle charset")]
+    ContractName,
+    #[error("contract version disagrees with the presence of a contract name")]
+    ContractVersion,
     #[error("file record tag is unknown")]
     UnknownRecordTag,
     #[error("file record has zero length")]
@@ -346,6 +357,8 @@ impl Tfm1Error {
             Self::UnknownEntryKind => "unknown-entry-kind",
             Self::ExecutableFlag => "executable-flag",
             Self::UnknownPlanner => "unknown-planner",
+            Self::ContractName => "contract-name",
+            Self::ContractVersion => "contract-version",
             Self::UnknownRecordTag => "unknown-record-tag",
             Self::ZeroLengthRecord => "zero-length-record",
             Self::AdjacentHoles => "adjacent-holes",
@@ -516,11 +529,16 @@ fn emit_body(bytes: &mut Vec<u8>, body: &FileBody) {
     bytes.push(planner_tag(body));
     match body {
         FileBody::Tensor {
+            contract,
             logical_size,
             records,
             ..
         } => {
             bytes.extend_from_slice(&logical_size.to_le_bytes());
+            let name = contract.name().unwrap_or_default();
+            bytes.push(name.len() as u8);
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.extend_from_slice(&contract.version().to_le_bytes());
             bytes.extend_from_slice(&(records.len() as u64).to_le_bytes());
             for record in records {
                 match record {
@@ -626,6 +644,7 @@ enum Pending {
     File {
         executable: bool,
         planner: PlannerId,
+        contract: Stamp,
         records: Vec<FileRecord>,
     },
     Symlink {
@@ -671,11 +690,27 @@ impl SnapshotBuilder {
         planner: PlannerId,
         records: Vec<FileRecord>,
     ) -> &mut Self {
+        self.file_under(path, executable, planner, Stamp::None, records)
+    }
+
+    /// The same declaration, stamped with the layout contract that directed
+    /// this file's chunking. A tensor file planned under a contract MUST be
+    /// declared this way: the stamp is part of the snapshot's identity, and a
+    /// missing one would claim the plain grid produced these boundaries.
+    pub fn file_under(
+        &mut self,
+        path: impl Into<String>,
+        executable: bool,
+        planner: PlannerId,
+        contract: Stamp,
+        records: Vec<FileRecord>,
+    ) -> &mut Self {
         self.pending.push((
             path.into(),
             Pending::File {
                 executable,
                 planner,
+                contract,
                 records,
             },
         ));
@@ -776,6 +811,7 @@ impl SnapshotBuilder {
                 Pending::File {
                     executable,
                     planner,
+                    contract,
                     records,
                 } => {
                     let mut logical_size = 0_u64;
@@ -792,6 +828,7 @@ impl SnapshotBuilder {
                     TreeEntry::File {
                         executable,
                         planner,
+                        contract,
                         records,
                     }
                 }
@@ -832,10 +869,11 @@ impl SnapshotBuilder {
                 TreeEntry::File {
                     executable,
                     planner,
+                    contract,
                     records,
                 } => Entry::File {
                     executable,
-                    body: canonical_body(planner, records)?,
+                    body: canonical_body(planner, contract, records)?,
                 },
                 TreeEntry::Symlink { target } => Entry::Symlink { target },
                 TreeEntry::Hardlink { ordinal } => Entry::Hardlink { ordinal },
@@ -846,13 +884,18 @@ impl SnapshotBuilder {
     }
 }
 
-fn canonical_body(planner: PlannerId, records: Vec<FileRecord>) -> Result<FileBody, Tfm1Error> {
+fn canonical_body(
+    planner: PlannerId,
+    contract: Stamp,
+    records: Vec<FileRecord>,
+) -> Result<FileBody, Tfm1Error> {
     match planner.tensor_format() {
         Some(format) => {
             let logical_size = records.iter().map(FileRecord::length).sum();
             validate_records(&records, logical_size)?;
             Ok(FileBody::Tensor {
                 format,
+                contract,
                 logical_size,
                 records,
             })
@@ -1020,6 +1063,7 @@ fn decode_tensor_body(
     format: TensorFormat,
 ) -> Result<FileBody, Tfm1Error> {
     let logical_size = reader.take_u64()?;
+    let contract = decode_stamp(reader)?;
     let record_count = reader.take_u64()?;
     if record_count > MAX_FILE_RECORDS as u64 {
         return Err(Tfm1Error::RecordLimit);
@@ -1049,7 +1093,30 @@ fn decode_tensor_body(
     validate_records(&records, logical_size)?;
     Ok(FileBody::Tensor {
         format,
+        contract,
         logical_size,
         records,
     })
+}
+
+/// The contract stamp: a bounded name and its version, or the canonical
+/// absent stamp (empty name, version zero). Every other combination refuses —
+/// a nameless version and a version-less name are both unreadable claims.
+fn decode_stamp(reader: &mut Reader<'_>) -> Result<Stamp, Tfm1Error> {
+    let length = usize::from(reader.take_u8()?);
+    if length > MAX_CONTRACT_NAME_BYTES {
+        return Err(Tfm1Error::ContractName);
+    }
+    let name = std::str::from_utf8(reader.take(length)?).map_err(|_| Tfm1Error::ContractName)?;
+    let version = reader.take_u32()?;
+    if name.is_empty() {
+        if version != 0 {
+            return Err(Tfm1Error::ContractVersion);
+        }
+        return Ok(Stamp::None);
+    }
+    if version == 0 {
+        return Err(Tfm1Error::ContractVersion);
+    }
+    Stamp::named(name, version).map_err(|_| Tfm1Error::ContractName)
 }

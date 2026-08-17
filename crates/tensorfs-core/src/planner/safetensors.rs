@@ -5,8 +5,10 @@ use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 use super::{
-    ByteSource, MAX_OBJECT_COUNT, Plan, PlanError, PlannerId, RegionKind, append_split_region,
+    ByteSource, InventoryTensor, MAX_OBJECT_COUNT, Plan, PlanError, PlannerId, RegionKind,
+    TensorFormat, TensorInventory, append_split_region, append_tensor_regions,
 };
+use crate::contract::{Contract, Stamp};
 
 const PREFIX_SIZE: u64 = 8;
 const MAX_HEADER_SIZE: u64 = 100_000_000;
@@ -123,7 +125,10 @@ pub(crate) struct Layout {
 
 /// Returns a tensor-aligned plan only after proving the complete safetensors
 /// structure from its bounded JSON header. Tensor body bytes are never read.
-pub(crate) fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan>, PlanError> {
+pub(crate) fn try_plan<S: ByteSource + ?Sized>(
+    source: &S,
+    contract: Option<&Contract>,
+) -> Result<Option<Plan>, PlanError> {
     let Some(layout) = read_layout(source)? else {
         return Ok(None);
     };
@@ -139,10 +144,14 @@ pub(crate) fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan
         if length == 0 {
             continue;
         }
-        match append_split_region(
+        let seams = contract.map_or_else(Vec::new, |contract| {
+            contract.seam_offsets(&tensor.name, &tensor.shape, length)
+        });
+        match append_tensor_regions(
             &mut regions,
             layout.header_end + tensor.start,
             length,
+            &seams,
             RegionKind::Tensor,
         ) {
             Ok(()) => {}
@@ -153,6 +162,7 @@ pub(crate) fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan
 
     Ok(Some(Plan {
         planner: PlannerId::SafetensorsV1,
+        contract: contract.map_or(Stamp::None, Contract::stamp),
         file_size: source.len(),
         regions,
     }))
@@ -235,6 +245,25 @@ pub(crate) fn read_layout<S: ByteSource + ?Sized>(source: &S) -> Result<Option<L
         header_end,
         tensors,
     }))
+}
+
+/// The header inventory of a validated layout: names, canonical dtypes,
+/// logical shapes and extents.
+pub(crate) fn inventory(layout: &Layout) -> TensorInventory {
+    TensorInventory {
+        format: TensorFormat::SafetensorsV1,
+        tensors: layout
+            .tensors
+            .iter()
+            .map(|tensor| InventoryTensor {
+                name: tensor.name.clone(),
+                dtype: tensor.dtype.clone(),
+                shape: tensor.shape.clone(),
+                offset: layout.header_end + tensor.start,
+                length: tensor.end - tensor.start,
+            })
+            .collect(),
+    }
 }
 
 fn tensor_byte_size(tensor: &TensorDescriptor) -> Option<u64> {

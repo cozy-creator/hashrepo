@@ -25,11 +25,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use pyo3::create_exception;
-use pyo3::exceptions::PyException;
+use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 use tensorfs_core::compose;
+use tensorfs_core::contract;
 use tensorfs_core::layout::{self, Layout, STUB_MAGIC};
 use tensorfs_core::object::{self, ObjectDigest};
 use tensorfs_core::planner::{self, ByteSource, PlannerId, RegionKind};
@@ -98,6 +99,10 @@ fn compose_error(error: compose::ComposeError) -> PyErr {
         compose::ComposeError::Plan(error) => plan_error(error),
         other => TensorfsError::new_err(describe(&other)),
     }
+}
+
+fn contract_error(error: contract::ContractError) -> PyErr {
+    PyValueError::new_err(describe(&error))
 }
 
 fn plan_error(error: planner::PlanError) -> PyErr {
@@ -282,6 +287,7 @@ impl PyPlannedObject {
 #[pyclass(frozen, module = "tensorfs._tensorfs", name = "Plan")]
 pub struct PyPlan {
     planner: String,
+    contract: String,
     file_size: u64,
     regions: Vec<Py<PyRegion>>,
 }
@@ -292,6 +298,13 @@ impl PyPlan {
     #[getter]
     fn planner(&self) -> &str {
         &self.planner
+    }
+
+    /// The layout contract that directed these boundaries, `name@version`,
+    /// or `"none"` for the plain per-tensor grid.
+    #[getter]
+    fn contract(&self) -> &str {
+        &self.contract
     }
 
     #[getter]
@@ -306,8 +319,9 @@ impl PyPlan {
 
     fn __repr__(&self) -> String {
         format!(
-            "Plan(planner='{}', file_size={}, regions={})",
+            "Plan(planner='{}', contract='{}', file_size={}, regions={})",
             self.planner,
+            self.contract,
             self.file_size,
             self.regions.len()
         )
@@ -331,6 +345,7 @@ fn plan_into_python(py: Python<'_>, plan: &planner::Plan) -> PyResult<PyPlan> {
         .collect::<PyResult<Vec<_>>>()?;
     Ok(PyPlan {
         planner: planner_name(plan.planner()).to_owned(),
+        contract: plan.contract().to_string(),
         file_size: plan.file_size(),
         regions,
     })
@@ -339,6 +354,7 @@ fn plan_into_python(py: Python<'_>, plan: &planner::Plan) -> PyResult<PyPlan> {
 /// A plan whose every object has been hashed from one stable source snapshot.
 #[pyclass(frozen, module = "tensorfs._tensorfs", name = "HashedPlan")]
 pub struct PyHashedPlan {
+    contract: String,
     planner: String,
     file_size: u64,
     objects: Vec<Py<PyPlannedObject>>,
@@ -349,6 +365,13 @@ impl PyHashedPlan {
     #[getter]
     fn planner(&self) -> &str {
         &self.planner
+    }
+
+    /// The layout contract that directed these boundaries, `name@version`,
+    /// or `"none"`.
+    #[getter]
+    fn contract(&self) -> &str {
+        &self.contract
     }
 
     #[getter]
@@ -389,6 +412,7 @@ fn hashed_plan_into_python(py: Python<'_>, plan: &object::HashedPlan) -> PyResul
         .collect::<PyResult<Vec<_>>>()?;
     Ok(PyHashedPlan {
         planner: planner_name(plan.planner()).to_owned(),
+        contract: plan.contract().to_string(),
         file_size: plan.file_size(),
         objects,
     })
@@ -742,15 +766,18 @@ impl PyObjectStore {
     ///
     /// Returns `(plan, objects)`, which correspond positionally: `objects[i]`
     /// is the admitted form of `plan.regions[i]`.
+    #[pyo3(signature = (path, registry = None))]
     fn admit_file(
         &self,
         py: Python<'_>,
         path: PathBuf,
+        registry: Option<&PyRegistry>,
     ) -> PyResult<(PyPlan, Vec<PyAdmittedObject>)> {
         let store = Arc::clone(&self.inner);
+        let registry = registry.map(|held| held.inner.clone());
         let (plan, admitted) = py.detach(move || -> PyResult<_> {
             let source = FileByteSource::open(&path).map_err(io_error)?;
-            let plan = planner::plan(&source).map_err(plan_error)?;
+            let plan = plan_under(&source, registry.as_ref())?;
             let admitted = store
                 .admit_regions(&source, plan.regions())
                 .map_err(store_error)?;
@@ -1142,23 +1169,136 @@ fn plan_and_hash_bytes(py: Python<'_>, data: Vec<u8>) -> PyResult<PyHashedPlan> 
 }
 
 /// Runs the canonical planner over a file, reading only bounded headers.
+///
+/// With a registry, the file is first IDENTIFIED from its header inventory
+/// and then planned under the contract that won — fused tensors cut at their
+/// declared seams before the 64 MiB grid. Without one, the plain per-tensor
+/// grid, which is `contract:none`.
 #[pyfunction]
-fn plan_file(py: Python<'_>, path: PathBuf) -> PyResult<PyPlan> {
+#[pyo3(signature = (path, registry = None))]
+fn plan_file(py: Python<'_>, path: PathBuf, registry: Option<&PyRegistry>) -> PyResult<PyPlan> {
+    let registry = registry.map(|held| held.inner.clone());
     let plan = py.detach(move || -> PyResult<_> {
         let source = FileByteSource::open(&path).map_err(io_error)?;
-        planner::plan(&source).map_err(plan_error)
+        plan_under(&source, registry.as_ref())
     })?;
     plan_into_python(py, &plan)
 }
 
 /// Plans and hashes a file. Every byte is read and hashed exactly once.
 #[pyfunction]
-fn plan_and_hash_file(py: Python<'_>, path: PathBuf) -> PyResult<PyHashedPlan> {
+#[pyo3(signature = (path, registry = None))]
+fn plan_and_hash_file(
+    py: Python<'_>,
+    path: PathBuf,
+    registry: Option<&PyRegistry>,
+) -> PyResult<PyHashedPlan> {
+    let registry = registry.map(|held| held.inner.clone());
     let plan = py.detach(move || -> PyResult<_> {
         let source = FileByteSource::open(&path).map_err(io_error)?;
-        object::plan_and_hash(&source).map_err(plan_error)
+        let plan = plan_under(&source, registry.as_ref())?;
+        object::hash_planned(&source, &plan).map_err(plan_error)
     })?;
     hashed_plan_into_python(py, &plan)
+}
+
+/// Identifies then plans: one header read, one deterministic winner.
+fn plan_under<S: planner::ByteSource + ?Sized>(
+    source: &S,
+    registry: Option<&contract::Registry>,
+) -> PyResult<planner::Plan> {
+    let Some(registry) = registry else {
+        return planner::plan(source).map_err(plan_error);
+    };
+    let stamp = match planner::inventory(source).map_err(plan_error)? {
+        Some(inventory) => registry.detect(&inventory).stamp().clone(),
+        None => contract::Stamp::None,
+    };
+    planner::plan_with(source, registry.get(&stamp)).map_err(plan_error)
+}
+
+/// A set of layout contracts a file may be identified against.
+///
+/// Contracts are DATA: JSON documents (`spec/v1/contracts/`), not code. The
+/// shipped library is `Registry.builtin()`; a caller with a family we do not
+/// ship passes its own documents.
+#[pyclass(frozen, module = "tensorfs._tensorfs", name = "ContractRegistry")]
+pub struct PyRegistry {
+    inner: contract::Registry,
+}
+
+#[pymethods]
+impl PyRegistry {
+    /// Builds a registry from contract documents.
+    #[new]
+    #[pyo3(signature = (documents = Vec::new()))]
+    fn new(documents: Vec<String>) -> PyResult<Self> {
+        let mut inner = contract::Registry::new();
+        for document in &documents {
+            inner
+                .insert(contract::Contract::parse(document).map_err(contract_error)?)
+                .map_err(contract_error)?;
+        }
+        Ok(Self { inner })
+    }
+
+    /// The contract library shipped with tensorfs.
+    #[staticmethod]
+    fn builtin() -> PyResult<Self> {
+        Ok(Self {
+            inner: contract::Registry::builtin().map_err(contract_error)?,
+        })
+    }
+
+    /// Every contract held, as `name@version`.
+    fn stamps(&self) -> Vec<String> {
+        self.inner
+            .contracts()
+            .iter()
+            .map(|contract| contract.stamp().to_string())
+            .collect()
+    }
+
+    /// Identifies a file from its HEADER alone — names, shapes and dtypes.
+    /// No tensor byte is read. Returns `name@version`, or `"none"`.
+    fn detect_file(&self, py: Python<'_>, path: PathBuf) -> PyResult<String> {
+        let registry = self.inner.clone();
+        py.detach(move || -> PyResult<String> {
+            let source = FileByteSource::open(&path).map_err(io_error)?;
+            let Some(inventory) = planner::inventory(&source).map_err(plan_error)? else {
+                return Ok(contract::Stamp::None.to_string());
+            };
+            Ok(registry.detect(&inventory).stamp().to_string())
+        })
+    }
+
+    /// The tensors of a file that belong to one of a contract's named sets —
+    /// the removable sets a subset snapshot trims.
+    fn set_members(&self, py: Python<'_>, path: PathBuf, set: String) -> PyResult<Vec<String>> {
+        let registry = self.inner.clone();
+        py.detach(move || -> PyResult<Vec<String>> {
+            let source = FileByteSource::open(&path).map_err(io_error)?;
+            let Some(inventory) = planner::inventory(&source).map_err(plan_error)? else {
+                return Ok(Vec::new());
+            };
+            let stamp = registry.detect(&inventory).stamp().clone();
+            let Some(contract) = registry.get(&stamp) else {
+                return Ok(Vec::new());
+            };
+            Ok(contract
+                .set_members(&set, &inventory)
+                .into_iter()
+                .map(str::to_owned)
+                .collect())
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ContractRegistry(contracts={})",
+            self.inner.contracts().len()
+        )
+    }
 }
 
 /// How many objects the store hashes and installs concurrently.
@@ -1173,14 +1313,24 @@ fn ingest_concurrency() -> usize {
 /// rewritten header is admitted; every tensor record is inherited verbatim, so
 /// nothing is re-chunked, re-hashed or re-uploaded.
 #[pyfunction]
+#[pyo3(signature = (store, planner, records, names, contract = None))]
 fn rekey(
     py: Python<'_>,
     store: &PyObjectStore,
     planner: &str,
     records: Vec<PyFileRecord>,
     names: BTreeMap<String, String>,
+    contract: Option<&str>,
 ) -> PyResult<Vec<PyFileRecord>> {
-    compose_records(py, store, planner, records, &names, compose::rekey)
+    compose_records(
+        py,
+        store,
+        planner,
+        records,
+        &names,
+        contract,
+        compose::rekey,
+    )
 }
 
 /// Composes a trimmed container: exactly the tensors `names` maps survive.
@@ -1189,14 +1339,79 @@ fn rekey(
 /// result never asks for their objects. Pass identity pairs to trim without
 /// renaming.
 #[pyfunction]
+#[pyo3(signature = (store, planner, records, names, contract = None))]
 fn subset(
     py: Python<'_>,
     store: &PyObjectStore,
     planner: &str,
     records: Vec<PyFileRecord>,
     names: BTreeMap<String, String>,
+    contract: Option<&str>,
 ) -> PyResult<Vec<PyFileRecord>> {
-    compose_records(py, store, planner, records, &names, compose::subset)
+    compose_records(
+        py,
+        store,
+        planner,
+        records,
+        &names,
+        contract,
+        compose::subset,
+    )
+}
+
+/// Re-chunks a committed tensor container under a layout contract, returning
+/// the new record list and the stamp that explains its boundaries.
+///
+/// This is the `contract:none` -> contract upgrade: every object the contract
+/// does not move is inherited by digest, so only the seam-affected tensors are
+/// read and admitted.
+#[pyfunction]
+#[pyo3(signature = (store, planner, records, registry = None))]
+fn adopt(
+    py: Python<'_>,
+    store: &PyObjectStore,
+    planner: &str,
+    records: Vec<PyFileRecord>,
+    registry: Option<&PyRegistry>,
+) -> PyResult<(Vec<PyFileRecord>, String)> {
+    let format = parse_planner(planner)?
+        .tensor_format()
+        .ok_or_else(|| TensorfsError::new_err("only a tensor container can be recomposed"))?;
+    let records = records
+        .iter()
+        .map(PyFileRecord::to_core)
+        .collect::<PyResult<Vec<_>>>()?;
+    let body = tfm1::FileBody::Tensor {
+        format,
+        contract: contract::Stamp::None,
+        logical_size: records.iter().map(record_length).sum(),
+        records,
+    };
+    let registry = registry.map(|held| held.inner.clone());
+    let composed = py.detach(|| -> PyResult<tfm1::FileBody> {
+        let source = RecordsSource::new(store.inner.as_ref(), &body.records());
+        let stamp = match registry.as_ref() {
+            None => contract::Stamp::None,
+            Some(registry) => match planner::inventory(&source).map_err(plan_error)? {
+                Some(inventory) => registry.detect(&inventory).stamp().clone(),
+                None => contract::Stamp::None,
+            },
+        };
+        let contract = registry.as_ref().and_then(|registry| registry.get(&stamp));
+        compose::adopt(store.inner.as_ref(), &body, contract).map_err(compose_error)
+    })?;
+    let stamp = match &composed {
+        tfm1::FileBody::Tensor { contract, .. } => contract.to_string(),
+        tfm1::FileBody::Blob { .. } => contract::Stamp::None.to_string(),
+    };
+    Ok((
+        composed
+            .records()
+            .iter()
+            .map(PyFileRecord::from_core)
+            .collect(),
+        stamp,
+    ))
 }
 
 /// A composition over one committed tensor body: `compose::rekey` or
@@ -1213,6 +1428,7 @@ fn compose_records(
     planner: &str,
     records: Vec<PyFileRecord>,
     names: &BTreeMap<String, String>,
+    contract: Option<&str>,
     composition: Composition,
 ) -> PyResult<Vec<PyFileRecord>> {
     let format = parse_planner(planner)?
@@ -1222,8 +1438,13 @@ fn compose_records(
         .iter()
         .map(PyFileRecord::to_core)
         .collect::<PyResult<Vec<_>>>()?;
+    let contract = match contract {
+        None => contract::Stamp::None,
+        Some(text) => contract::Stamp::parse(text).map_err(contract_error)?,
+    };
     let body = tfm1::FileBody::Tensor {
         format,
+        contract,
         logical_size: records.iter().map(record_length).sum(),
         records,
     };
@@ -1264,6 +1485,7 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyPackObject>()?;
     module.add_class::<PyObjectStore>()?;
     module.add_class::<PyRecordsReader>()?;
+    module.add_class::<PyRegistry>()?;
 
     module.add_function(wrap_pyfunction!(decode_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(stub_bytes, module)?)?;
@@ -1278,6 +1500,7 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ingest_concurrency, module)?)?;
     module.add_function(wrap_pyfunction!(rekey, module)?)?;
     module.add_function(wrap_pyfunction!(subset, module)?)?;
+    module.add_function(wrap_pyfunction!(adopt, module)?)?;
 
     module.add("MAX_OBJECT_SIZE", planner::MAX_OBJECT_SIZE)?;
     module.add("MAX_PACK_PAYLOAD", tfp1::MAX_PACK_PAYLOAD)?;

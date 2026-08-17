@@ -136,6 +136,35 @@ Three candidate sources for fusion-seam cuts inside a fused tensor:
 grows one mechanism instead of an ever-growing architecture bestiary. Store-derived hints
 stay rejected.
 
+### Interleaved fusions: seams, not adapters — with a floor (2026-08-17, implemented)
+
+Real published data forced this one. MiniMax-H3's native DiT fuses
+`blocks.N.attn.qkv_proj.weight [21504, 5376]` **head-major**: `q`, `k` and `v` are adjacent
+inside each of 56 heads (`stack(dim=1)`), not three stacked blocks. The naive `cat` is not a
+near-miss — it is ~90% error that never crashes (`h3_native_layout.py`,
+`fuse_qkv_head_interleaved`; measured bit-identical vs ~6.09e+01 max abs delta).
+
+§3 listed "head interleaves" under view-expressibility, and for *tensor-granular* runs that is
+right. But an interleave is still an **ordered concatenation of contiguous runs** — 3×56 of
+them instead of 3 — so cut points recover it exactly, and byte order is untouched. The split
+twin declares the same runs (56 slices per projection), objects are content-addressed, and the
+two packagings therefore share every attention byte while reading their runs in different
+orders. That is **11.56 GB, 17.4%** of that 66.28 GB DiT, which the adapter route would have
+paid for in stored bytes.
+
+So the seam vocabulary expresses interleaves (`fusion.groups`), and the only question left is
+where §3's row-granular rejection bites. It bites at a **size**: no declared run may be
+smaller than 1 MiB (`MIN_SEAM_PART_BYTES`). A file cut entirely at that floor still fits
+TFM1's 1M-record bound at 1 TiB, while a KB-scale row shuffle blows through it. Below the
+floor a fusion produces NO cut points and the case belongs to the adapter class. The floor is
+a pure function of the tensor's extent and the declaration, so both packagings cross it at the
+same size — a fusion never degrades on one side only. H3's runs are 1,376,256 B, comfortably
+above it.
+
+Still NOT seam territory, by construction: inner-axis fusions (GPT-2 `c_attn`), transposes and
+rope-permutes. Those do not decompose into ordered runs of the other packaging at any
+granularity, and stay view-expressible only.
+
 ## 5. What was steelmanned and stays ruled out
 
 **CDC / smaller grids within tensors.** The honest case for CDC is shifted-but-identical

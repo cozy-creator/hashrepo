@@ -2,6 +2,8 @@ use std::io;
 
 use thiserror::Error;
 
+use crate::contract::{Contract, Stamp};
+
 pub(crate) mod gguf;
 pub(crate) mod safetensors;
 
@@ -90,6 +92,9 @@ impl Region {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Plan {
     pub(crate) planner: PlannerId,
+    /// The contract that directed these boundaries, carried from planning to
+    /// the manifest so the stamp cannot drift from the cuts it explains.
+    pub(crate) contract: Stamp,
     pub(crate) file_size: u64,
     pub(crate) regions: Vec<Region>,
 }
@@ -98,6 +103,11 @@ impl Plan {
     #[must_use]
     pub const fn planner(&self) -> PlannerId {
         self.planner
+    }
+
+    #[must_use]
+    pub const fn contract(&self) -> &Stamp {
+        &self.contract
     }
 
     #[must_use]
@@ -200,31 +210,152 @@ impl ByteSource for [u8] {
 }
 
 pub fn plan<S: ByteSource + ?Sized>(source: &S) -> Result<Plan, PlanError> {
+    plan_with(source, None)
+}
+
+/// Plans one file under a declared layout contract.
+///
+/// The contract adds cut points inside fused tensors — nothing else. Byte
+/// ORDER is untouched (the load-order ruling: chunk boundaries may move, bytes
+/// may not), coverage is still exact, and a contract that does not describe
+/// this file simply changes nothing. Passing `None` is the plain per-tensor
+/// grid, which is what `contract:none` means.
+pub fn plan_with<S: ByteSource + ?Sized>(
+    source: &S,
+    contract: Option<&Contract>,
+) -> Result<Plan, PlanError> {
     source.check_unchanged().map_err(PlanError::SourceChanged)?;
-    let result = plan_once(source);
+    let result = plan_once(source, contract);
     source.check_unchanged().map_err(PlanError::SourceChanged)?;
     result
 }
 
-fn plan_once<S: ByteSource + ?Sized>(source: &S) -> Result<Plan, PlanError> {
+fn plan_once<S: ByteSource + ?Sized>(
+    source: &S,
+    contract: Option<&Contract>,
+) -> Result<Plan, PlanError> {
     if source.len() < 10 {
         let plan = blob_plan(source.len());
         plan.validate()?;
         return Ok(plan);
     }
     if source.len() >= 24
-        && let Some(plan) = gguf::try_plan(source)?
+        && let Some(plan) = gguf::try_plan(source, contract)?
     {
         plan.validate()?;
         return Ok(plan);
     }
-    if let Some(plan) = safetensors::try_plan(source)? {
+    if let Some(plan) = safetensors::try_plan(source, contract)? {
         plan.validate()?;
         return Ok(plan);
     }
     let plan = blob_plan(source.len());
     plan.validate()?;
     Ok(plan)
+}
+
+/// One tensor as a container's header declares it, in logical (row-major)
+/// order regardless of the container's own axis convention.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InventoryTensor {
+    pub(crate) name: String,
+    pub(crate) dtype: String,
+    pub(crate) shape: Vec<u64>,
+    pub(crate) offset: u64,
+    pub(crate) length: u64,
+}
+
+impl InventoryTensor {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The canonical dtype name: safetensors' own spelling, and the ggml type
+    /// name for GGUF, so one contract vocabulary covers both containers.
+    #[must_use]
+    pub fn dtype(&self) -> &str {
+        &self.dtype
+    }
+
+    /// Logical shape, outermost axis first. GGUF's `ne` order is reversed
+    /// here, so "axis 0" means the same thing in every container.
+    #[must_use]
+    pub fn shape(&self) -> &[u64] {
+        &self.shape
+    }
+
+    /// Offset of this tensor's first byte within the file.
+    #[must_use]
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    /// The tensor's own extent, excluding any container padding.
+    #[must_use]
+    pub const fn length(&self) -> u64 {
+        self.length
+    }
+}
+
+/// A tensor container's header inventory: everything contract identification
+/// is allowed to look at, and nothing else. No tensor byte is read to build
+/// one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TensorInventory {
+    pub(crate) format: TensorFormat,
+    pub(crate) tensors: Vec<InventoryTensor>,
+}
+
+impl TensorInventory {
+    #[must_use]
+    pub const fn format(&self) -> TensorFormat {
+        self.format
+    }
+
+    #[must_use]
+    pub fn tensors(&self) -> &[InventoryTensor] {
+        &self.tensors
+    }
+}
+
+/// Reads one container's header inventory, or `None` when the file is not a
+/// tensor container.
+pub fn inventory<S: ByteSource + ?Sized>(source: &S) -> Result<Option<TensorInventory>, PlanError> {
+    source.check_unchanged().map_err(PlanError::SourceChanged)?;
+    if source.len() >= 24
+        && let Some(layout) = gguf::read_layout(source)?
+    {
+        return Ok(Some(gguf::inventory(&layout)));
+    }
+    if let Some(layout) = safetensors::read_layout(source)? {
+        return Ok(Some(safetensors::inventory(&layout)));
+    }
+    Ok(None)
+}
+
+/// Appends one tensor's regions, cut at contract-declared seams first and then
+/// on the 64 MiB grid within each part.
+///
+/// The grid inside a part starts at the part's own start, exactly as it would
+/// if that part were a standalone tensor in the split packaging — which is the
+/// whole mechanism: the fused file's objects become the split file's objects.
+pub(crate) fn append_tensor_regions(
+    regions: &mut Vec<Region>,
+    offset: u64,
+    length: u64,
+    seams: &[u64],
+    kind: RegionKind,
+) -> Result<(), PlanError> {
+    let mut cursor = 0_u64;
+    for seam in seams {
+        if *seam <= cursor || *seam >= length {
+            return Err(PlanError::InvalidCoverage);
+        }
+        append_split_region(regions, offset + cursor, seam - cursor, kind)?;
+        cursor = *seam;
+    }
+    append_split_region(regions, offset + cursor, length - cursor, kind)
 }
 
 /// The whole-blob plan for every non-tensor file: one unchunked region of any
@@ -241,6 +372,7 @@ pub(crate) fn blob_plan(file_size: u64) -> Plan {
     };
     Plan {
         planner: PlannerId::BlobV1,
+        contract: Stamp::None,
         file_size,
         regions,
     }
@@ -310,6 +442,7 @@ mod tests {
     #[test]
     fn a_multi_region_blob_plan_refuses() {
         let plan = Plan {
+            contract: Stamp::None,
             planner: PlannerId::BlobV1,
             file_size: 4,
             regions: vec![
@@ -331,6 +464,7 @@ mod tests {
     #[test]
     fn tensor_regions_keep_the_grid_cap_and_blob_regions_do_not() {
         let oversized = |planner| Plan {
+            contract: Stamp::None,
             planner,
             file_size: MAX_OBJECT_SIZE + 1,
             regions: vec![Region {
@@ -397,6 +531,7 @@ mod tests {
 
         for regions in invalid {
             let plan = Plan {
+                contract: Stamp::None,
                 planner: PlannerId::SafetensorsV1,
                 file_size: 4,
                 regions,
@@ -418,6 +553,7 @@ mod tests {
             })
             .collect();
         let plan = Plan {
+            contract: Stamp::None,
             planner: PlannerId::SafetensorsV1,
             file_size: MAX_OBJECT_COUNT as u64 + 1,
             regions,
@@ -458,6 +594,7 @@ mod tests {
         empty.validate().unwrap();
 
         let noncanonical = Plan {
+            contract: Stamp::None,
             planner: PlannerId::BlobV1,
             file_size: 0,
             regions: vec![Region {

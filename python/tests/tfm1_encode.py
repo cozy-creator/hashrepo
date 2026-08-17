@@ -39,6 +39,9 @@ class Tensor:
     path: str
     planner: str
     records: tuple[tuple[str, int], ...]
+    #: The layout contract that directed the chunking, ``name@version``.
+    #: ``None`` is ``contract:none`` -- the plain per-tensor grid.
+    contract: str | None = None
 
 
 Entry = Directory | Blob | Tensor
@@ -69,6 +72,14 @@ def encode(entries: list[Entry]) -> bytes:
             continue
         out.append(_PLANNERS[entry.planner])
         out += struct.pack("<Q", sum(length for _, length in entry.records))
+        name, version = ("", 0)
+        if entry.contract is not None:
+            name, _, text = entry.contract.rpartition("@")
+            version = int(text)
+        encoded_name = name.encode("ascii")
+        out.append(len(encoded_name))
+        out += encoded_name
+        out += struct.pack("<I", version)
         out += struct.pack("<Q", len(entry.records))
         for digest, length in entry.records:
             out.append(_RECORD_DATA)

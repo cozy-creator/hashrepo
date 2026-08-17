@@ -14,13 +14,15 @@
 //! collectable by the ordinary mark walk and pullable by ordinary missing-object
 //! computation.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use thiserror::Error;
 
+use crate::contract::Contract;
+use crate::object::ObjectDigest;
 use crate::planner::{
-    ByteSource as _, MAX_OBJECT_SIZE, PlanError, TensorFormat, gguf, safetensors,
+    ByteSource as _, MAX_OBJECT_SIZE, PlanError, Region, TensorFormat, gguf, plan_with, safetensors,
 };
 use crate::store::{ObjectStore, StoreError};
 use crate::tfm1::{FileBody, FileRecord};
@@ -94,7 +96,10 @@ fn compose(
     unnamed: Unnamed,
 ) -> Result<FileBody, ComposeError> {
     let FileBody::Tensor {
-        format, records, ..
+        format,
+        contract,
+        records,
+        ..
     } = body
     else {
         return Err(ComposeError::NotATensorContainer);
@@ -106,8 +111,15 @@ fn compose(
         }
         TensorFormat::GgufV1 => compose_gguf(store, records, &source, names, unnamed)?,
     };
+    // The stamp travels with the BOUNDARIES it produced: a composition
+    // inherits every tensor's objects verbatim, so the contract that cut them
+    // is still the honest provenance of the cut points. It is not a promise
+    // that the composed inventory still satisfies every required declaration
+    // — a trim may drop one. A composition that changes the LAYOUT sets the
+    // target contract's stamp instead of inheriting this one.
     Ok(FileBody::Tensor {
         format: *format,
+        contract: contract.clone(),
         logical_size: composed.iter().map(record_length).sum(),
         records: composed,
     })
@@ -195,6 +207,76 @@ fn admit(store: &ObjectStore, bytes: &[u8]) -> Result<Vec<FileRecord>, ComposeEr
         });
     }
     Ok(records)
+}
+
+/// Re-chunks one committed tensor container under a layout contract.
+///
+/// This is the contract:none -> contract upgrade path, and its shape is the
+/// whole point: the contract only ADDS cut points inside fused tensors, so
+/// every object whose boundaries it does not move is inherited by digest and
+/// never re-read, re-hashed or re-uploaded. What gets admitted is exactly the
+/// seam-affected tensors' new pieces. Passing `None` walks back to the plain
+/// grid the same way.
+///
+/// Byte order is untouched: this re-cuts a file, it never rewrites one.
+pub fn adopt(
+    store: &ObjectStore,
+    body: &FileBody,
+    contract: Option<&Contract>,
+) -> Result<FileBody, ComposeError> {
+    let FileBody::Tensor {
+        format, records, ..
+    } = body
+    else {
+        return Err(ComposeError::NotATensorContainer);
+    };
+    let source = RecordsSource::new(store, records);
+    let planned = plan_with(&source, contract)?;
+    if planned.planner().tensor_format() != Some(*format) {
+        return Err(ComposeError::Unreadable(match format {
+            TensorFormat::SafetensorsV1 => "safetensors",
+            TensorFormat::GgufV1 => "gguf",
+        }));
+    }
+
+    let mut committed: HashMap<(u64, u64), ObjectDigest> = HashMap::new();
+    let mut position = 0_u64;
+    for record in records {
+        if let FileRecord::Data { digest, length } = record {
+            committed.insert((position, *length), *digest);
+        }
+        position += record_length(record);
+    }
+
+    let pending: Vec<Region> = planned
+        .regions()
+        .iter()
+        .filter(|region| !committed.contains_key(&(region.offset(), region.length())))
+        .copied()
+        .collect();
+    let admitted = store.admit_regions(&source, &pending)?;
+    let mut fresh = admitted.iter();
+
+    let mut composed = Vec::with_capacity(planned.regions().len());
+    for region in planned.regions() {
+        let digest = match committed.get(&(region.offset(), region.length())) {
+            Some(digest) => *digest,
+            None => fresh
+                .next()
+                .expect("every unmatched region was admitted in order")
+                .digest(),
+        };
+        composed.push(FileRecord::Data {
+            digest,
+            length: region.length(),
+        });
+    }
+    Ok(FileBody::Tensor {
+        format: *format,
+        contract: planned.contract().clone(),
+        logical_size: composed.iter().map(record_length).sum(),
+        records: composed,
+    })
 }
 
 // ---------------------------------------------------------------------------

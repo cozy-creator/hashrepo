@@ -11,6 +11,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tensorfs_core::contract::Stamp;
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::{MAX_OBJECT_SIZE, PlannerId};
 use tensorfs_core::tfm1::{EMPTY_BLOB_DIGEST, FileRecord, SnapshotBuilder, SnapshotId, decode};
@@ -191,6 +192,29 @@ fn golden_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
         builder.finish().expect("valid").to_bytes()
     };
 
+    // The stamp is part of the canonical bytes: this tree is byte-identical
+    // to `tree` except for the contract each tensor file names, and its
+    // snapshot id differs — which is what makes identity self-describing.
+    let contract_stamped = {
+        let mut builder = SnapshotBuilder::new(None);
+        builder.directory("weights");
+        builder.file_under(
+            "weights/model.safetensors",
+            false,
+            PlannerId::SafetensorsV1,
+            Stamp::named("minimax.h3-dit-native", 1).expect("a valid handle"),
+            vec![data(0x21, 96), data(0x22, 1024)],
+        );
+        builder.file_under(
+            "weights/twin.gguf",
+            false,
+            PlannerId::GgufV1,
+            Stamp::named("dit.blocks-fused-qkv", 2).expect("a valid handle"),
+            vec![data(0x23, 64)],
+        );
+        builder.finish().expect("valid").to_bytes()
+    };
+
     let gguf_provenance = {
         let mut builder = SnapshotBuilder::new(None);
         builder.file(
@@ -259,6 +283,11 @@ fn golden_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
             with_parent,
         ),
         (
+            "contract-stamped",
+            "tensor bodies naming the layout contracts that directed their chunking",
+            contract_stamped,
+        ),
+        (
             "gguf-provenance",
             "a gguf-v1 planned file pinning the remaining tensor planner tag",
             gguf_provenance,
@@ -301,12 +330,27 @@ impl Raw {
         self.path(path).bytes(&[1])
     }
 
-    /// A safetensors-provenance file body: the record-carrying shape.
+    /// A safetensors-provenance file body: the record-carrying shape, with
+    /// the plain-grid contract stamp (empty name, version zero).
     fn tensor_file(self, path: &str, logical_size: u64, records: &[(u8, u64)]) -> Self {
+        self.stamped_tensor_file(path, logical_size, "", 0, records)
+    }
+
+    fn stamped_tensor_file(
+        self,
+        path: &str,
+        logical_size: u64,
+        contract: &str,
+        version: u32,
+        records: &[(u8, u64)],
+    ) -> Self {
         let mut raw = self
             .path(path)
             .bytes(&[2, 0, 1])
             .u64(logical_size)
+            .bytes(&[contract.len() as u8])
+            .bytes(contract.as_bytes())
+            .bytes(&version.to_le_bytes())
             .u64(records.len() as u64);
         for (tag, length) in records {
             raw.0.push(*tag);
@@ -436,6 +480,52 @@ fn refusal_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
             .u64(0)
             .0,
     ));
+    // A contract stamp is a claim about which layout produced these
+    // boundaries, so half a claim refuses: a version without a name and a
+    // name without a version are both unreadable.
+    for (name, contract, version) in [
+        ("contract-version-without-name", "", 1_u32),
+        ("contract-name-without-version", "minimax.h3-dit-native", 0),
+    ] {
+        cases.push((
+            name,
+            "contract-version",
+            Raw::manifest()
+                .entry_count(1)
+                .stamped_tensor_file("f.safetensors", 4, contract, version, &[(1, 4)])
+                .0,
+        ));
+    }
+    // Outside the handle charset: uppercase, and a name with no producer dot.
+    for (name, contract) in [
+        ("contract-name-uppercase", "Minimax.H3"),
+        ("contract-name-no-producer", "h3-dit-native"),
+    ] {
+        cases.push((
+            name,
+            "contract-name",
+            Raw::manifest()
+                .entry_count(1)
+                .stamped_tensor_file("f.safetensors", 4, contract, 1, &[(1, 4)])
+                .0,
+        ));
+    }
+    // A name longer than the 64-byte bound.
+    cases.push((
+        "contract-name-too-long",
+        "contract-name",
+        Raw::manifest()
+            .entry_count(1)
+            .stamped_tensor_file(
+                "f.safetensors",
+                4,
+                &format!("a.{}", "b".repeat(80)),
+                1,
+                &[(1, 4)],
+            )
+            .0,
+    ));
+
     // Planner byte 3 was `raw-fixed-64m-v1`, the retired 64 MiB grid for
     // non-tensor files. It is retired, not aliased: the tag refuses exactly
     // like a tag that never existed, even framing a well-formed record list.
@@ -517,6 +607,7 @@ fn refusal_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
             .path("f")
             .bytes(&[2, 0, 1])
             .u64(0)
+            .bytes(&[0, 0, 0, 0, 0])
             .u64(1_000_001)
             .0,
     ));
