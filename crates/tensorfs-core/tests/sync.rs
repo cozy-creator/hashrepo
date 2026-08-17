@@ -126,9 +126,19 @@ struct HubState {
     next: u64,
     uploads_by_digest: HashMap<[u8; 32], u32>,
     fail_uploads: u32,
+    /// Packs to accept before the carrier dies for good. `None` accepts every
+    /// one. Models a push killed MID-TRANSFER, which is the only way to leave
+    /// staged-but-unpromoted packs behind for a later session to adopt.
+    accept_uploads: Option<u32>,
     expire_uploads: u32,
     expire_grant_calls: u32,
     incomplete_completes: u32,
+    /// `complete` calls that die on the CARRIER before the hub answers. This
+    /// is the tensorfs#92 shape: the promotion is fine, the answer is lost.
+    io_completes: u32,
+    /// When set, every `complete` answers retryable incompleteness and admits
+    /// NOTHING — a promotion that is standing still rather than working.
+    complete_never_advances: bool,
     terminal_complete: Option<String>,
     corrupt_download_of: Option<[u8; 32]>,
     /// Objects promoted per `complete` call; 0 means unlimited. Models the
@@ -319,13 +329,25 @@ impl SyncTransport for FakeHub {
                     ),
                 });
             }
-            let staging_key = format!("snapshots/staging/{session_key}/{}.tfp1", claim.sha256);
-            grants.push(PackGrant {
-                pack_sha256: claim.sha256.clone(),
-                staging_key: staging_key.clone(),
-                url: format!("fake-put://{staging_key}"),
-                headers: vec![("x-amz-checksum-sha256".to_owned(), claim.sha256.clone())],
-            });
+            // th#2077: staging is CONTENT-ADDRESSED, so the key is the
+            // pack's own checksum and a later session finds what an earlier
+            // one landed. An adopted envelope is recorded and reported staged,
+            // never re-granted — which is what makes a resumed push move only
+            // the bytes that are genuinely still owed.
+            // th#2077: staging is CONTENT-ADDRESSED, so the key is the
+            // pack's own checksum and a later session finds what an earlier
+            // one landed. An adopted envelope is recorded and reported staged,
+            // never re-granted — which is what makes a resumed push move only
+            // the bytes that are genuinely still owed.
+            let staging_key = format!("snapshots/staging/packs/{}.tfp1", claim.sha256);
+            if !state.staged.contains_key(&staging_key) {
+                grants.push(PackGrant {
+                    pack_sha256: claim.sha256.clone(),
+                    staging_key: staging_key.clone(),
+                    url: format!("fake-put://{staging_key}"),
+                    headers: vec![("x-amz-checksum-sha256".to_owned(), claim.sha256.clone())],
+                });
+            }
             rows.push((
                 claim.sha256.clone(),
                 PackRow {
@@ -361,6 +383,13 @@ impl SyncTransport for FakeHub {
         if state.fail_uploads > 0 {
             state.fail_uploads -= 1;
             return Err(TransportError::Io("injected carrier fault".to_owned()));
+        }
+        match state.accept_uploads {
+            Some(0) => {
+                return Err(TransportError::Io("injected carrier death".to_owned()));
+            }
+            Some(remaining) => state.accept_uploads = Some(remaining - 1),
+            None => {}
         }
         if state.expire_uploads > 0 {
             state.expire_uploads -= 1;
@@ -413,10 +442,25 @@ impl SyncTransport for FakeHub {
         if let Some(code) = state.terminal_complete.clone() {
             return Ok(CompleteStatus::Failed { code });
         }
+        if state.io_completes > 0 {
+            state.io_completes -= 1;
+            return Err(TransportError::Io("timed out reading response".to_owned()));
+        }
+        if state.complete_never_advances {
+            return Ok(CompleteStatus::Incomplete {
+                code: "promote_incomplete".to_owned(),
+                promoted: 0,
+                total: 1,
+            });
+        }
         if state.incomplete_completes > 0 {
             state.incomplete_completes -= 1;
             return Ok(CompleteStatus::Incomplete {
                 code: "promote_incomplete".to_owned(),
+                // The injected fault admits nothing on purpose: this is the
+                // "standing still" shape the client's stall budget exists for.
+                promoted: 0,
+                total: 0,
             });
         }
         let budget = state.promote_budget;
@@ -448,6 +492,11 @@ impl SyncTransport for FakeHub {
                 if budget != 0 && promoted_this_call >= budget {
                     return Ok(CompleteStatus::Incomplete {
                         code: "promote_incomplete".to_owned(),
+                        promoted: closure
+                            .iter()
+                            .filter(|(digest, _)| state.objects.contains_key(digest))
+                            .count() as u64,
+                        total: closure.len() as u64,
                     });
                 }
                 state
@@ -460,6 +509,11 @@ impl SyncTransport for FakeHub {
             if !state.objects.contains_key(digest) {
                 return Ok(CompleteStatus::Incomplete {
                     code: "upload_incomplete".to_owned(),
+                    promoted: closure
+                        .iter()
+                        .filter(|(digest, _)| state.objects.contains_key(digest))
+                        .count() as u64,
+                    total: closure.len() as u64,
                 });
             }
         }
@@ -687,42 +741,56 @@ fn an_edited_clone_pushes_only_its_changed_objects() {
 }
 
 #[test]
-fn resumption_is_promotion_level_across_sessions_and_exact_within_one() {
-    // Across restarts: a re-declare opens a fresh session whose staging
-    // starts empty, so only PROMOTED objects are skipped — the landed wire's
-    // per-session staging keys make this promotion-level by design.
+fn resumption_is_staging_level_across_sessions_and_exact_within_one() {
+    // ACROSS RESTARTS (tensorfs#93). Staging is content-addressed, so a pack
+    // an earlier session landed is found by a later one under the same key
+    // and is never re-sent. Before th#2077 the key carried the session id,
+    // which made this unexpressible: the 2026-08-16 acceptance re-uploaded
+    // 185 MB into a fresh prefix and called it a resume.
     let root = scratch("resume");
     let files: Vec<Vec<u8>> = (0_u8..6).map(|seed| vec![seed + 1; 4096]).collect();
     let (meta, id) = sealed_workspace(&root, "publisher", &[("model.bin", files)]);
     let hub = FakeHub::new();
 
-    // First run stages everything and dies mid-promotion: the budget promotes
-    // two objects per call and the run allows exactly one call.
-    hub.state.borrow_mut().promote_budget = 2;
-    let stingy = PushOptions {
-        max_complete_attempts: 1,
+    // One pack per object, and the first run dies with three of the six
+    // staged and NOTHING promoted — the shape of a push killed mid-transfer.
+    hub.state.borrow_mut().pack_payload_cap = 4096;
+    hub.state.borrow_mut().accept_uploads = Some(3);
+    let dying = PushOptions {
+        max_upload_attempts: 1,
         ..PushOptions::default()
     };
-    let error = push_snapshot(&meta, &hub, &id, None, stingy, ProgressSink::silent())
-        .expect_err("first push dies mid-promotion");
-    assert!(matches!(error, SyncError::CompletionExhausted { .. }));
+    let error = push_snapshot(&meta, &hub, &id, None, dying, ProgressSink::silent())
+        .expect_err("the first push dies mid-transfer");
+    assert!(matches!(error, SyncError::Transport(TransportError::Io(_))));
+    let staged_first = hub.state.borrow().staged.len();
     assert_eq!(
-        hub.state.borrow().objects.len(),
-        2,
-        "the killed run promoted exactly its budget"
+        staged_first, 3,
+        "three packs landed before the carrier died"
+    );
+    assert!(
+        hub.state.borrow().objects.is_empty(),
+        "the run never reached complete, so nothing is promoted"
     );
 
-    // The resumed push re-declares: promoted objects report resident, the
-    // rest (staged in the DEAD session) honestly retransmit.
-    hub.state.borrow_mut().promote_budget = 0;
+    // The resumed push opens a NEW session. The three staged packs are
+    // adopted by checksum; only the unstaged remainder crosses the wire.
+    hub.state.borrow_mut().accept_uploads = None;
     let report = push(&meta, &hub, &id, None).expect("resume succeeds");
-    assert_eq!(report.skipped_remote_resident, 2, "promoted objects skip");
-    assert_eq!(report.uploaded_objects, 4, "unpromoted objects retransmit");
+    assert_eq!(
+        report.skipped_remote_resident, 0,
+        "nothing was promoted, so nothing reports resident"
+    );
+    assert_eq!(
+        report.packs, 3,
+        "only the three packs the dead run never landed are uploaded: {report:?}"
+    );
     assert_eq!(hub.state.borrow().head, Some(id));
-    for (digest, count) in &hub.state.borrow().uploads_by_digest {
-        let promoted_first = hub.state.borrow().objects.contains_key(digest);
-        assert!(promoted_first, "everything ends promoted");
-        assert!(*count <= 2, "no object uploads more than twice across runs");
+    for count in hub.state.borrow().uploads_by_digest.values() {
+        assert_eq!(
+            *count, 1,
+            "an adopted pack is never re-sent, so every object uploads exactly once"
+        );
     }
 
     // Within one run, expiry replans and never retransmits a staged pack.
@@ -1642,4 +1710,91 @@ fn data_digests(meta: &WorkspaceStore, id: &SnapshotId) -> Vec<ObjectDigest> {
         }
     }
     digests
+}
+
+/// tensorfs#92, the defect this whole loop exists for: the 2026-08-16
+/// acceptance uploaded all 280 objects of a 272 MB snapshot, lost the answer
+/// to `complete` on a flat 60-second read deadline, and threw the entire push
+/// away because a transport error out of `complete` was terminal.
+///
+/// A lost answer is not a failed promotion, and the remote's completion is
+/// idempotent, so the only correct response is to ask again.
+#[test]
+fn a_lost_answer_to_complete_is_retried_rather_than_discarding_the_push() {
+    let root = scratch("complete-io");
+    let files: Vec<Vec<u8>> = (0_u8..4).map(|seed| vec![seed + 40; 4096]).collect();
+    let (meta, id) = sealed_workspace(&root, "publisher", &[("model.bin", files)]);
+    let hub = FakeHub::new();
+
+    // Three carrier failures on `complete`, exactly like a read that gave up
+    // while the hub was still admitting objects.
+    hub.state.borrow_mut().io_completes = 3;
+    let report = push(&meta, &hub, &id, None).expect("a lost answer must not lose the push");
+
+    assert_eq!(
+        hub.state.borrow().head,
+        Some(id),
+        "the snapshot promoted despite the lost answers"
+    );
+    assert!(
+        report.complete_attempts >= 4,
+        "every carrier failure costs one more call, never the push: {report:?}"
+    );
+}
+
+/// The other half of #92: what replaces the deadline. Completion is bounded by
+/// calls that ADMIT NOTHING, not by calls that take a while — so a promotion
+/// that keeps making progress may take as many round trips as it needs, well
+/// past any fixed attempt budget.
+#[test]
+fn completion_polls_while_the_remote_advances_and_stops_only_when_it_stalls() {
+    let root = scratch("complete-progress");
+    // Thirty objects promoted one per call needs thirty-one calls — comfortably
+    // more than `max_completion_stalls`, which is the point: a flat attempt cap
+    // would condemn this healthy promotion.
+    let files: Vec<Vec<u8>> = (0_u8..30).map(|seed| vec![seed + 1; 4096]).collect();
+    let (meta, id) = sealed_workspace(&root, "publisher", &[("model.bin", files)]);
+    let hub = FakeHub::new();
+    hub.state.borrow_mut().promote_budget = 1;
+
+    let options = PushOptions::default();
+    let report = push(&meta, &hub, &id, None).expect("a slow promotion still promotes");
+    assert_eq!(hub.state.borrow().head, Some(id));
+    assert!(
+        report.complete_attempts > options.max_completion_stalls,
+        "progress must buy unbounded calls: {} attempts against a {} stall budget",
+        report.complete_attempts,
+        options.max_completion_stalls
+    );
+
+    // And a promotion that never advances is refused, in bounded time, naming
+    // the count it stopped at rather than a clock it exceeded.
+    let root2 = scratch("complete-stalled");
+    let (meta2, id2) = sealed_workspace(
+        &root2,
+        "publisher",
+        &[("other.bin", vec![vec![9_u8; 4096]])],
+    );
+    let hub2 = FakeHub::new();
+    hub2.state.borrow_mut().complete_never_advances = true;
+    let error = push_snapshot(
+        &meta2,
+        &hub2,
+        &id2,
+        None,
+        PushOptions {
+            max_completion_stalls: 3,
+            ..PushOptions::default()
+        },
+        ProgressSink::silent(),
+    )
+    .expect_err("a completion that never advances is refused");
+    let SyncError::CompletionStalled {
+        stalls, promoted, ..
+    } = error
+    else {
+        panic!("expected a stall refusal, got {error:?}");
+    };
+    assert_eq!(stalls, 3, "the budget counts calls that changed nothing");
+    assert_eq!(promoted, 0, "and reports how far the remote actually got");
 }

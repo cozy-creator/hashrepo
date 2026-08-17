@@ -313,3 +313,117 @@ fn a_real_hub_round_trips_snapshots_with_dedup_and_verified_pulls() {
 
     println!("LIVE RUST-STACK E2E PASSED");
 }
+
+/// tensorfs#91, against a real hub: a snapshot that mixes a BLOB-lane object
+/// with pack-lane ones, whose missing set is still large when the client
+/// re-probes the session.
+///
+/// The arm above cannot catch this and never could. It pushes three objects
+/// with no blob lane, so the single pack pass drains the missing set and the
+/// refresh that follows sees an EMPTY set — whose order is canonical for the
+/// trivial reason that there is nothing in it. The refusal needs a refresh
+/// that still owes something, which is exactly what the blob lane creates:
+/// `push_snapshot` runs the blob lane first and re-probes immediately, while
+/// every pack-lane object is still outstanding.
+///
+/// That is the shape the 2026-08-16 acceptance died on — 280 rows answered in
+/// digest order by `pack-grants` and in canonical order by `declare`, refused
+/// at closure position 228. The hub fix is th#2077.
+#[test]
+fn a_blob_and_pack_mix_survives_the_refresh_that_follows_the_blob_lane() {
+    let Some((url, org, repo, token)) = hub() else {
+        eprintln!("skipping: set TENSORFS_HUB_ORG, TENSORFS_HUB_REPO, TENSORFS_HUB_TOKEN");
+        return;
+    };
+    let nonce = format!("mix{}", std::process::id());
+    println!("hub={url} repo={org}/{repo} nonce={nonce}");
+
+    // Many pack-lane objects, so the set the refresh must answer is long
+    // enough that a reorder is overwhelmingly likely to be visible — and, at
+    // 24 tensors, long enough to need more than one pack at the 64 MiB bound
+    // only if they were large, which is deliberately NOT how this fixture
+    // spends bandwidth. The order contract does not care about size.
+    let tensors: Vec<(String, usize, u8)> = (0..24)
+        .map(|index| (format!("blk{index}.w"), 4096, index as u8))
+        .collect();
+    let borrowed: Vec<(&str, usize, u8)> = tensors
+        .iter()
+        .map(|(name, length, fill)| (name.as_str(), *length, *fill))
+        .collect();
+    let model = safetensors(&nonce, &borrowed);
+
+    // One object past the 64 MiB pack payload bound, so it can only ride the
+    // multipart blob lane. Content is nonced so a shared hub cannot already
+    // hold it and skip the lane entirely.
+    let blob_len = (64 * MIB) + (1 << 20);
+    let seed = *SnapshotId::of(nonce.as_bytes()).as_bytes();
+    let blob: Vec<u8> = (0..blob_len)
+        .map(|index| ((index % 251) as u8) ^ seed[index % seed.len()])
+        .collect();
+
+    let root = scratch("mixed-lanes");
+    let meta = WorkspaceStore::open(&root).expect("store opens");
+    meta.create_workspace("main").expect("workspace created");
+    let blob_object = meta.store().put_bytes(&blob).expect("blob admits");
+    meta.commit_generation(
+        "main",
+        &[
+            Mutation::CreateFile {
+                path: "model.safetensors".to_owned(),
+                executable: false,
+                planner: tensorfs_core::planner::PlannerId::SafetensorsV1,
+                records: admit(meta.store(), &model),
+            },
+            Mutation::CreateFile {
+                path: "tokenizer.pack".to_owned(),
+                executable: false,
+                planner: tensorfs_core::planner::PlannerId::BlobV1,
+                records: vec![FileRecord::Data {
+                    digest: blob_object.digest(),
+                    length: blob_object.length(),
+                }],
+            },
+        ],
+    )
+    .expect("generation commits");
+    let snapshot = meta.seal_snapshot("main", None).expect("snapshot seals");
+
+    let client = transport(&url, &org, &repo, &token);
+    let base = client.head().expect("head reads");
+
+    // The assertion IS that this returns. Before the hub fix it failed with
+    // `MissingNotCanonical`, deterministically, on the first refresh.
+    let report = push_snapshot(
+        &meta,
+        &client,
+        &snapshot,
+        base.as_ref(),
+        Default::default(),
+        ProgressSink::silent(),
+    )
+    .expect("a blob+pack mix must not be refused for the order of the refresh");
+    println!("mixed push: {report:?}");
+
+    assert!(report.blobs >= 1, "the fixture must use the blob lane");
+    assert!(
+        report.packs >= 1,
+        "and the pack lane in the same snapshot: {report:?}"
+    );
+    let head = client.head().expect("head reads").expect("head is set");
+    assert_eq!(head, snapshot, "the mixed snapshot promoted");
+
+    // A re-push of the same snapshot must move nothing: both lanes report
+    // their objects resident, which is also the cheapest possible proof that
+    // the refreshed order stayed canonical on a SECOND declare.
+    let again = push_snapshot(
+        &meta,
+        &client,
+        &snapshot,
+        Some(&head),
+        Default::default(),
+        ProgressSink::silent(),
+    )
+    .expect("idempotent re-push succeeds");
+    assert_eq!(again.uploaded_bytes, 0, "a resident snapshot moves nothing");
+    println!("MIXED-LANE LIVE ARM PASSED");
+}
