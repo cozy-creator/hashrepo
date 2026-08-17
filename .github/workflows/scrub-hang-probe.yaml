@@ -43,7 +43,7 @@ jobs:
         env:
           RUNS: ${{ github.event.inputs.runs }}
         run: |
-          set -uo pipefail
+          set +e
           bin="$(cat bin.txt)"
           runs="${RUNS:-10}"
           hung=0
