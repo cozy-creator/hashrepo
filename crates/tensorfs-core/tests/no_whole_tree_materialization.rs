@@ -28,10 +28,10 @@ use std::path::{Path, PathBuf};
 /// Definition keywords in the three languages this repository ships.
 const DEFINITIONS: [&str; 3] = ["fn ", "def ", "func "];
 
-/// Definition-name fragments that mean "materialize", either spelling. Any
-/// definition matching one is an offender unless it is [`HATCH_NAME`] at
-/// [`HATCH_PATH`].
-const MATERIALIZES: [&str; 2] = ["materiali", "materialise"];
+/// The fragment every spelling of "materialize" shares — including
+/// "materialise", and every suffixed form. A definition containing it is an
+/// offender unless it is [`HATCH_NAME`] at [`HATCH_PATH`].
+const MATERIALIZES: &str = "materiali";
 
 /// Names that would mean "write a whole snapshot's bytes into a directory"
 /// under the retired spelling, plus the retired spelling itself. `extract`
@@ -130,7 +130,7 @@ fn verdict(relative: &str, line: &str) -> Option<String> {
              `extract()` -> `materialize()` (Paul's #1303 ruling, 2026-08-17)"
         ));
     }
-    if MATERIALIZES.iter().any(|fragment| name.contains(fragment)) {
+    if name.contains(MATERIALIZES) {
         if name == HATCH_NAME && relative == HATCH_PATH {
             return None;
         }
@@ -153,13 +153,25 @@ fn the_fence_refuses_a_tree_materializer_and_the_retired_spelling() {
         ("python/src/tensorfs/local.py", "    def materialize(", true),
         (HATCH_PATH, "    def materialize_repository(", true),
         (HATCH_PATH, "    def materialize_tree(", true),
-        ("crates/tensorfs-core/src/lib.rs", "pub fn materialise_all(", true),
+        (
+            "crates/tensorfs-core/src/lib.rs",
+            "pub fn materialise_all(",
+            true,
+        ),
         ("store.go", "func MaterializeSnapshot(", true),
         // The retired spelling, bare and suffixed.
         (HATCH_PATH, "    def extract(", true),
-        ("crates/tensorfs-core/src/lib.rs", "pub fn extract_tree(", true),
+        (
+            "crates/tensorfs-core/src/lib.rs",
+            "pub fn extract_tree(",
+            true,
+        ),
         // An ordinary definition that merely mentions the words is not one.
-        (HATCH_PATH, "    def read_range(self, path: str) -> bytes:", false),
+        (
+            HATCH_PATH,
+            "    def read_range(self, path: str) -> bytes:",
+            false,
+        ),
     ];
     for (path, line, expected) in planted {
         assert_eq!(
@@ -215,7 +227,11 @@ fn no_shipped_api_defines_a_whole_tree_materializer() {
                 hatch_definitions += 1;
             }
             if let Some(reason) = verdict(&relative, line) {
-                offenders.push(format!("{relative}:{}: {reason}: {}", number + 1, line.trim()));
+                offenders.push(format!(
+                    "{relative}:{}: {reason}: {}",
+                    number + 1,
+                    line.trim()
+                ));
             }
         }
     }
