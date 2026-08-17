@@ -7,6 +7,9 @@ files and repositories. It provides:
 - an authoritative local CAS that works without a network or hub;
 - direct per-tensor reads and writes over safetensors and GGUF, with no file
   built at any point (`docs/direct-tensor-reads.md`);
+- re-keyed snapshots composed from a committed one's own objects: renaming
+  every key costs one header object and shares every tensor chunk
+  (`crates/tensorfs-core/src/compose.rs`, `docs/dedup-invariance.md`);
 - compare-and-swap logical refs;
 - Go missing-object planning and staged verification/promotion; and
 - one set of v1 golden vectors consumed by both Python and Go.

@@ -20,8 +20,9 @@ import mmap
 import os
 import tempfile
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from . import gguf
@@ -357,6 +358,31 @@ class TensorReader(Mapping[str, TensorView]):
         if total != view.nbytes:
             return None
         return tuple(span)
+
+    def rekeyed(self, names: Mapping[str, str]) -> Mapping[str, TensorView]:
+        """Serve these tensors under other names, admitting nothing.
+
+        The zero-storage half of a re-key: a consumer on the native read path
+        who only wants the other naming scheme -- ComfyUI's spelling of a
+        diffusers checkpoint, say -- needs no second snapshot at all. Composing
+        one (``tensorfs.native.rekey``) is for handing the other spelling to a
+        foreign tool that opens files.
+
+        ``names`` maps a stored name to the name it is served under; a tensor
+        it does not name keeps its own. Two tensors may not land on one name.
+        """
+
+        index = self._tensors()
+        unknown = sorted(set(names) - set(index))
+        if unknown:
+            raise TensorError(f"this manifest holds no tensor named {unknown[0]!r}")
+        translated: dict[str, TensorView] = {}
+        for name, view in index.items():
+            served = names.get(name, name)
+            if served in translated:
+                raise TensorError(f"two tensors would both be served as {served!r}")
+            translated[served] = replace(view, name=served)
+        return MappingProxyType(translated)
 
     # -- internals -------------------------------------------------------
 

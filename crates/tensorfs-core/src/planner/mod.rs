@@ -2,8 +2,8 @@ use std::io;
 
 use thiserror::Error;
 
-mod gguf;
-mod safetensors;
+pub(crate) mod gguf;
+pub(crate) mod safetensors;
 
 /// The tensor chunk grid constant: the bound on one tensor-planned object.
 /// It is NOT a store admission cap — a blob is one object of any size.

@@ -10,7 +10,7 @@ Digests are bare lowercase 64-character hex -- the same spelling as
 wherever a digest is taken and is never returned.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from os import PathLike
 from pathlib import Path
 from typing import Final
@@ -162,6 +162,12 @@ class RecordsReader:
     def plan(self) -> Plan: ...
 
 def decode_snapshot(data: bytes) -> Snapshot: ...
+def rekey(
+    store: ObjectStore,
+    planner: str,
+    records: Sequence[FileRecord],
+    names: Mapping[str, str],
+) -> list[FileRecord]: ...
 def stub_bytes(body_sha256: str, size: int) -> bytes: ...
 def parse_stub(data: bytes) -> tuple[str, int] | None: ...
 def snapshot_id_of(data: bytes) -> str: ...
