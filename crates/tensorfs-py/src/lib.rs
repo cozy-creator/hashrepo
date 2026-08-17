@@ -1359,6 +1359,53 @@ fn subset(
     )
 }
 
+/// Derives one committed container in a different layout contract.
+///
+/// Returns the derived record list, the target stamp, and how many data
+/// objects were admitted: zero for the run-preserving majority (rename,
+/// reshape, outer-axis fuse/split), and one tensor's worth for each tensor
+/// the two contracts declare re-arranged.
+#[pyfunction]
+fn derive(
+    py: Python<'_>,
+    store: &PyObjectStore,
+    planner: &str,
+    records: Vec<PyFileRecord>,
+    source_contract: &str,
+    target_contract: &str,
+) -> PyResult<(Vec<PyFileRecord>, String)> {
+    let format = parse_planner(planner)?
+        .tensor_format()
+        .ok_or_else(|| TensorfsError::new_err("only a tensor container can be recomposed"))?;
+    let records = records
+        .iter()
+        .map(PyFileRecord::to_core)
+        .collect::<PyResult<Vec<_>>>()?;
+    let source = contract::Contract::parse(source_contract).map_err(contract_error)?;
+    let target = contract::Contract::parse(target_contract).map_err(contract_error)?;
+    let body = tfm1::FileBody::Tensor {
+        format,
+        contract: source.stamp(),
+        logical_size: records.iter().map(record_length).sum(),
+        records,
+    };
+    let composed = py
+        .detach(|| compose::derive(store.inner.as_ref(), &body, &source, &target))
+        .map_err(compose_error)?;
+    let stamp = match &composed {
+        tfm1::FileBody::Tensor { contract, .. } => contract.to_string(),
+        tfm1::FileBody::Blob { .. } => contract::Stamp::None.to_string(),
+    };
+    Ok((
+        composed
+            .records()
+            .iter()
+            .map(PyFileRecord::from_core)
+            .collect(),
+        stamp,
+    ))
+}
+
 /// Re-chunks a committed tensor container under a layout contract, returning
 /// the new record list and the stamp that explains its boundaries.
 ///
@@ -1501,6 +1548,7 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(rekey, module)?)?;
     module.add_function(wrap_pyfunction!(subset, module)?)?;
     module.add_function(wrap_pyfunction!(adopt, module)?)?;
+    module.add_function(wrap_pyfunction!(derive, module)?)?;
 
     module.add("MAX_OBJECT_SIZE", planner::MAX_OBJECT_SIZE)?;
     module.add("MAX_PACK_PAYLOAD", tfp1::MAX_PACK_PAYLOAD)?;
