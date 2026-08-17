@@ -15,9 +15,9 @@ dependencies = []
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: MIT License",
-    # No Windows: `local.py` locks with `fcntl` and `tensors.py` maps with
-    # POSIX mmap flags, so the facade cannot be imported there. macOS has
-    # flock and is tested.
+    # No Windows: `local.py` locks with `fcntl`, so the facade cannot be
+    # imported there. macOS has flock and is tested. The mapping half is
+    # portable -- reads go through the extension's `MappedObject`.
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",

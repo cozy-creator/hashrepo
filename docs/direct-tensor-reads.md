@@ -191,7 +191,19 @@ gone, and no hash pass over inherited bytes remains.
 
 ## Zero-copy: what is free and what copies
 
-CAS objects are plain files, so they mmap.
+CAS objects are plain files, so they mmap — and the mapping is the extension's,
+not the facade's. `tensorfs.native.MappedObject` maps one object and exports it
+through the C buffer protocol (`Py_bf_getbuffer`, read-only), so every
+`memoryview` below addresses mapped pages rather than a buffer copied out of
+Rust. That is why the abi3 floor is 3.11: `Py_buffer` entered CPython's stable
+ABI there. `Py_buffer` also takes a strong reference to the exporter, so a view
+the caller still holds keeps its mapping alive after the reader is closed —
+the `Arc<Mmap>` ownership rule below, supplied by refcounting.
+
+The claim is tested by editing a mapped file underneath a live view and
+demanding the view see the edit (`test_a_view_tracks_the_file_it_maps`,
+`test_a_tensor_read_never_copies_the_object`). No implementation that copies
+anywhere in the chain can pass that.
 
 | case | zero-copy? |
 |---|---|
@@ -278,6 +290,11 @@ This section is the API that lane needs; the shapes above do not change.
 resolves a file's `Vec<FileRecord>` into object reads and zero-fills `Hole`
 records — but it is `pub(crate)`, and its `read_exact_at` **copies** into a
 caller slice. Zero-copy needs an mmap-returning variant.
+
+Partly landed: `MappedObject` is the per-object half of that variant and is
+what the Python reader maps through today. What is still `pub(crate)` and still
+copying is the *records* half — resolving a whole file's record list into
+mapped pieces in Rust rather than in `tensors.py`.
 
 ```rust
 pub struct TensorEntry {

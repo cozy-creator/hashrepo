@@ -68,14 +68,15 @@ jobs:
           # blocker is the library: `python/src/tensorfs/local.py` imports
           # `fcntl` at module scope for advisory locking, `__init__.py`
           # imports it eagerly, so `import tensorfs` raises
-          # ModuleNotFoundError on Windows and always has. `tensors.py` also
-          # mmaps with POSIX `prot=` flags at read time. Shipping a wheel
+          # ModuleNotFoundError on Windows and always has. Shipping a wheel
           # whose top-level import fails is worse than shipping none.
           #
           # Restoring Windows needs a real POSIX-lock replacement in local.py
           # (`msvcrt.locking` is byte-range and has no shared mode, so it is
-          # not a drop-in) plus an `mmap.ACCESS_READ` mapping path, not a
-          # matrix edit. Windows users can build from the sdist meanwhile.
+          # not a drop-in), not a matrix edit. The mapping half is already
+          # portable: reads go through the extension's `MappedObject` rather
+          # than Python's POSIX-flagged `mmap`, and memmap2 covers Windows.
+          # Windows users can build from the sdist meanwhile.
           # macOS is unaffected: it has flock, and both macOS smokes pass.
     steps:
       - uses: actions/checkout@v4
@@ -155,11 +156,28 @@ jobs:
   # fallback HuggingFace gets from splitting `huggingface_hub` from `hf_xet`:
   # a platform outside the matrix can no longer install a pure-Python wheel.
   # The sdist IS that fallback, so it is gated, not assumed.
+  #
+  # It runs on Linux AND on macOS, and the macOS arm is not redundant with the
+  # macOS wheel smoke. The sdist is the fallback for every platform outside
+  # the wheel matrix, and every one of those platforms is non-Linux; testing
+  # the fallback only on the platform that never needs it proves the least
+  # interesting case. macOS is the non-Linux host CI can express -- it is
+  # where a POSIX-but-not-Linux source build (`fcntl`, `flock`, the darwin
+  # target's C toolchain) actually gets compiled. Windows remains uncovered
+  # and is refused by name at import; see the matrix comment above.
   sdist-installs-from-source:
-    name: sdist builds and installs from source
+    name: sdist builds and installs from source (${{ matrix.name }})
     needs: sdist
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            runner: ubuntu-24.04
+          - name: macos
+            runner: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91.0
@@ -189,7 +207,7 @@ jobs:
               TensorWriter,
               open_tensors,
           )
-          from tensorfs.native import ObjectStore, RecordsReader, FileRecord
+          from tensorfs.native import FileRecord, MappedObject, ObjectStore, RecordsReader
 
           with TemporaryDirectory() as root:
               store = ObjectStore(Path(root))
@@ -211,7 +229,13 @@ jobs:
               writer = TensorWriter(cas, "model.safetensors")
               writer.add("block.0.weight", "F32", (2, 4), body)
               with open_tensors(cas, RepositoryManifest((writer.finish(),))) as tensors:
-                  assert tensors["block.0.weight"].tobytes() == body
+                  view = tensors["block.0.weight"]
+                  assert view.tobytes() == body
+                  # A source build exports the same zero-copy buffer a wheel
+                  # does -- the abi3 floor is a property of the crate, not of
+                  # who compiled it.
+                  piece = next(view.pieces())
+                  assert isinstance(piece.obj, MappedObject) and piece.readonly
 
           print("the sdist builds from source and works")
           PY
@@ -312,10 +336,30 @@ jobs:
                   assert view.dtype == "F32" and view.shape == (2, 4), view
                   assert view.tobytes() == weight
                   assert tensors["block.0.bias"].tobytes() == bias
-                  # Zero copy: the piece is a window into a mapped CAS object.
+                  # Zero copy, and it is the EXTENSION's zero copy: the piece
+                  # is a window into a `MappedObject`, which exports the
+                  # mapping through `Py_buffer`. This is the whole abi3
+                  # question -- whether the C buffer protocol is expressible
+                  # under the Limited API at the 3.11 floor -- answered by a
+                  # built wheel on the floor interpreter rather than by
+                  # reading `Misc/stable_abi.toml`.
                   piece = next(view.pieces())
                   assert piece.readonly
+                  assert isinstance(piece.obj, native.MappedObject), type(piece.obj)
                   assert any(piece.obj is m for m in tensors._maps.values())
+
+          # The export, taken directly and proved to be the mapping rather
+          # than a copy: edit the file underneath a live view and the view
+          # must see it. A copy cannot.
+          with TemporaryDirectory() as root:
+              probe = Path(root) / "object"
+              probe.write_bytes(b"\0" * 32)
+              held = memoryview(native.MappedObject(probe))
+              assert held.obj is not None and held.readonly and held.format == "B"
+              with probe.open("r+b") as handle:
+                  handle.write(b"\xff" * 8)
+              assert bytes(held[:8]) == b"\xff" * 8, "the extension copied instead of mapping"
+              assert bytes(native.MappedObject(probe)) == bytes(held)
 
           # Every platform ships the same thing, and the FUSE daemon is not
           # part of it -- pods cannot mount FUSE; the daemon is shelved on
@@ -345,7 +389,8 @@ jobs:
             # information, so this passes only because `_tensorfs.pyi` ships.
             (cd "${RUNNER_TEMP}" \
               && "${venv}/bin/python" -m mypy --strict -c 'from tensorfs import LocalCAS' \
-              && "${venv}/bin/python" -m mypy --strict -c 'from tensorfs.native import ObjectStore, RecordsReader, FileRecord')
+              && "${venv}/bin/python" -m mypy --strict -c 'from tensorfs.native import ObjectStore, RecordsReader, FileRecord' \
+              && "${venv}/bin/python" -m mypy --strict -c 'from tensorfs.native import MappedObject; v: memoryview = memoryview(MappedObject("o"))')
           done
 
 
@@ -419,6 +464,8 @@ jobs:
                   view = tensors["block.0.weight"]
                   assert view.dtype == "F32" and view.shape == (2, 4), view
                   assert view.tobytes() == body
+                  piece = next(view.pieces())
+                  assert isinstance(piece.obj, native.MappedObject) and piece.readonly
 
           print("musl wheel works")
           PY

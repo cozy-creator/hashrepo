@@ -16,7 +16,6 @@ import bisect
 import hashlib
 import json
 import math
-import mmap
 import os
 import tempfile
 from collections.abc import Iterator, Mapping
@@ -31,9 +30,12 @@ from .refs import CASRef
 
 if TYPE_CHECKING:
     from .local import LocalCAS
+    from .native import MappedObject
 
 __all__ = [
     "DTYPE_BITS",
+    "GGUF_FORMAT",
+    "SAFETENSORS_FORMAT",
     "BlockLayout",
     "FileTooLarge",
     "TensorError",
@@ -46,8 +48,10 @@ __all__ = [
 
 _SAFETENSORS_SUFFIX = ".safetensors"
 _GGUF_SUFFIX = ".gguf"
-_SAFETENSORS_FORMAT = "safetensors-v1"
-_GGUF_FORMAT = "gguf-v1"
+# The planner ids, which are also what `TensorView.format` reports and what
+# `TensorWriter` composes. Public because the write half dispatches on them.
+SAFETENSORS_FORMAT = "safetensors-v1"
+GGUF_FORMAT = "gguf-v1"
 _PREFIX_SIZE = 8
 # safetensors 0.8.0's own reader refuses header lengths above this. Matching it
 # keeps a malformed prefix from provoking a huge allocation here.
@@ -206,7 +210,7 @@ class TensorReader(Mapping[str, TensorView]):
         self._entries = {entry.path: entry for entry in manifest.files}
         # (file path) -> (object start offsets, (ref, length) pairs)
         self._grid: dict[str, tuple[list[int], tuple[tuple[CASRef, int], ...]]] = {}
-        self._maps: dict[str, mmap.mmap] = {}
+        self._maps: dict[str, MappedObject] = {}
         self._verified: set[str] = set()
         self._index: dict[str, TensorView] | None = None
         self._closed = False
@@ -228,18 +232,14 @@ class TensorReader(Mapping[str, TensorView]):
         """Drop this reader's mappings.
 
         A mapping the caller still holds a ``memoryview`` into is *not*
-        force-unmapped — that would invalidate live buffers. It is released
-        instead, so the mapping survives exactly as long as the last view of
-        it. This is the same ownership rule the Rust reader gets from holding
-        each object in an ``Arc<Mmap>``; here refcounting supplies it.
+        force-unmapped — that would invalidate live buffers. Dropping the
+        reader's reference is all that happens, and the extension's
+        ``Py_buffer`` export keeps each mapping alive for exactly as long as
+        the last view of it. Ownership is the buffer protocol's, so there is
+        no ``BufferError`` to swallow here.
         """
 
         self._closed = True
-        for handle in self._maps.values():
-            try:
-                handle.close()
-            except BufferError:
-                pass
         self._maps.clear()
 
     def __enter__(self) -> TensorReader:
@@ -359,6 +359,27 @@ class TensorReader(Mapping[str, TensorView]):
             return None
         return tuple(span)
 
+    def gguf_header(self, path: str) -> gguf.GGUFHeader:
+        """The GGUF directory of one file, tensor bodies untouched.
+
+        This is what a conversion hands to :class:`~tensorfs.writer.TensorWriter`
+        so the output carries the source's metadata block verbatim. A
+        conversion rewrites tensors; re-encoding model metadata it never looked
+        at would change the file for no reason.
+        """
+
+        entry = self._entry(path)
+        if not path.endswith(_GGUF_SUFFIX):
+            raise TensorError(f"{path!r} is not a GGUF file")
+
+        def read(offset: int, length: int) -> bytes:
+            return self.read_range(path, offset, length)
+
+        try:
+            return gguf.read_header(read, entry.size_bytes)
+        except gguf.GGUFError as error:
+            raise TensorError(f"{path}: {error}") from None
+
     def rekeyed(self, names: Mapping[str, str]) -> Mapping[str, TensorView]:
         """Serve these tensors under other names, admitting nothing.
 
@@ -409,7 +430,13 @@ class TensorReader(Mapping[str, TensorView]):
         return built
 
     def _map(self, ref: CASRef, size: int) -> memoryview:
-        """An mmap of one CAS object, verified at most once per reader."""
+        """An mmap of one CAS object, verified at most once per reader.
+
+        The mapping is the extension's :class:`~tensorfs.native.MappedObject`,
+        not Python's ``mmap``: it exports the mapped pages through the C buffer
+        protocol, so the ``memoryview`` below is a window onto the object file
+        and the compiled half owns the zero-copy guarantee.
+        """
 
         key = ref.digest
         handle = self._maps.get(key)
@@ -418,10 +445,14 @@ class TensorReader(Mapping[str, TensorView]):
             # unlinking the object between path resolution and open. Once the
             # mapping exists the bytes are pinned by the inode, so the lock is
             # not held for the lifetime of the view.
+            # Imported here rather than at module scope so that importing
+            # `tensorfs` for the pure-Python projection alone never loads the
+            # extension (test_projection.py asserts exactly that). There is no
+            # fallback: reading a tensor requires the compiled half.
+            from .native import MappedObject
+
             with self._cas._store_lock():
-                path = self._cas.object_path(ref)
-                with path.open("rb") as source:
-                    handle = mmap.mmap(source.fileno(), 0, prot=mmap.PROT_READ)
+                handle = MappedObject(self._cas.object_path(ref))
             self._maps[key] = handle
         view = memoryview(handle)
         if len(view) != size:
@@ -504,7 +535,7 @@ class TensorReader(Mapping[str, TensorView]):
             yield TensorView(
                 name=tensor.name,
                 file=path,
-                format=_GGUF_FORMAT,
+                format=GGUF_FORMAT,
                 dtype=tensor.dtype,
                 shape=tensor.shape,
                 nbytes=tensor.nbytes,
@@ -569,7 +600,7 @@ class TensorReader(Mapping[str, TensorView]):
             yield TensorView(
                 name=name,
                 file=path,
-                format=_SAFETENSORS_FORMAT,
+                format=SAFETENSORS_FORMAT,
                 dtype=dtype,
                 shape=tuple(shape),
                 nbytes=nbytes,
