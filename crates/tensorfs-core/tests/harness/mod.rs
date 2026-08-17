@@ -313,15 +313,17 @@ pub fn blob_lane_absent() -> TransportError {
     }
 }
 
-/// The on-disk shape `ObjectStore::collect_abandoned_temps` will consider.
+/// The on-disk shapes a reclaimer will consider: an admission temp for
+/// `ObjectStore::collect_abandoned_temps`, and a projection lease for
+/// `Layout::reap_scratch`.
 ///
 /// Spelled out here rather than imported, because the point is to check the
 /// bytes on disk against the shape independently of whatever the library
-/// currently believes it writes. A stranded temp outside this shape is a
+/// currently believes it writes. A stranded temp outside these shapes is a
 /// PERMANENT leak: no reclaimer will ever look at it.
 #[must_use]
 pub fn is_library_temp(name: &str) -> bool {
-    name.starts_with("obj-") && name.ends_with(".tmp")
+    (name.starts_with("obj-") || name.starts_with("building-")) && name.ends_with(".tmp")
 }
 
 #[must_use]

@@ -16,12 +16,14 @@
 //! root, so it needs no metadata engine: the workspace layer owns roots,
 //! deletion order and GC; this module owns the bytes on disk.
 
-use std::fs;
-use std::io;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use fs4::FileExt;
 use thiserror::Error;
 
 use crate::object::ObjectDigest;
@@ -29,6 +31,13 @@ use crate::store::{ObjectStore, StoreError, set_read_only};
 use crate::tfm1::{Entry, FileBody, Snapshot, SnapshotId};
 
 static SWAP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// The scratch names this module owns: a half-built projection under
+/// `snapshots/`, its lease under the store's `tmp/`, and a ref mid-swap.
+const BUILDING_PREFIX: &str = ".building-";
+const LEASE_PREFIX: &str = "building-";
+const LEASE_SUFFIX: &str = ".tmp";
+const SWAP_PREFIX: &str = ".swap-";
 
 /// First eight bytes of every pointer stub, so a tool can classify one
 /// without parsing JSON — and so no safetensors u64 header or GGUF magic can
@@ -45,6 +54,42 @@ pub enum LayoutError {
     InvalidRefName(String),
     #[error("ref {0:?} does not name a snapshot id")]
     UnreadableRef(String),
+}
+
+/// What one reap of abandoned projection scratch examined and removed.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ScratchReap {
+    pub examined: u64,
+    pub trees_removed: u64,
+    pub swaps_removed: u64,
+    /// What was reclaimed, recorded BEFORE each removal.
+    ///
+    /// A sweep that frees resources and reports only a count leaves nobody
+    /// able to say afterwards WHOSE they were — which is how the 2026-08-16
+    /// orphaned-FUSE-connection incident (#96) stayed invisible until the box
+    /// was unusable. The evidence outlives the artifact because it travels
+    /// out in the report, so a caller can log it at whatever level survives.
+    pub reclaimed: Vec<ReclaimedScratch>,
+}
+
+/// One scratch artifact, described while it still exists.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReclaimedScratch {
+    pub path: PathBuf,
+    /// The creating process's token, read off the name that process wrote.
+    /// Evidence only: the lease decides, never this.
+    pub creator: String,
+    pub lease: LeaseState,
+}
+
+/// Why a scratch artifact was reclaimable. Both mean the same thing — no
+/// live process owns it — and neither is a statement about age.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LeaseState {
+    /// A lease file existed and its lock was free: the holder is gone.
+    Free,
+    /// No lease file at all: the holder never got one, or it was reaped.
+    Absent,
 }
 
 /// What one pointer stub says: which file body it stands for, and how many
@@ -157,9 +202,15 @@ impl<'store> Layout<'store> {
 
     /// Projects one snapshot as `snapshots/<id>/…` and returns its path.
     ///
-    /// The tree is built under a private name and renamed into place, so a
-    /// ref can never resolve into a half-built projection. Projection is
+    /// The tree is built under a private leased name and renamed into place,
+    /// so a ref can never resolve into a half-built projection. Projection is
     /// idempotent: an existing tree wins and the loser's scratch is removed.
+    ///
+    /// The lease is taken BEFORE the scratch directory exists and released
+    /// only after the rename, which is what lets [`reap_scratch`] tell a
+    /// projection that crashed from one that is merely slow.
+    ///
+    /// [`reap_scratch`]: Self::reap_scratch
     pub fn project(&self, snapshot: &Snapshot) -> Result<PathBuf, LayoutError> {
         let final_path = self.tree_path(&snapshot.snapshot_id());
         if final_path.exists() {
@@ -167,31 +218,141 @@ impl<'store> Layout<'store> {
         }
         let snapshots = self.snapshots_dir();
         fs::create_dir_all(&snapshots)?;
-        let scratch = snapshots.join(format!(
-            ".building-{}-{}",
-            process::id(),
-            SWAP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = fs::remove_dir_all(&scratch);
-        fs::create_dir(&scratch)?;
+        let (token, lease) = self.take_scratch_lease()?;
+        let scratch = snapshots.join(format!("{BUILDING_PREFIX}{token}"));
 
-        if let Err(error) = self.fill(snapshot, &scratch) {
-            let _ = fs::remove_dir_all(&scratch);
-            return Err(error);
-        }
-        match fs::rename(&scratch, &final_path) {
-            Ok(()) => Ok(final_path),
+        let projected = self.build_into(snapshot, &scratch, &final_path);
+        // A no-op after a successful rename, and the cleanup on every other
+        // path. The name is never reused, so nothing else can be behind it.
+        let _ = fs::remove_dir_all(&scratch);
+        drop(lease);
+        let _ = fs::remove_file(self.lease_path(&token));
+        projected
+    }
+
+    fn build_into(
+        &self,
+        snapshot: &Snapshot,
+        scratch: &Path,
+        final_path: &Path,
+    ) -> Result<PathBuf, LayoutError> {
+        fs::create_dir(scratch)?;
+        self.fill(snapshot, scratch)?;
+        match fs::rename(scratch, final_path) {
+            Ok(()) => Ok(final_path.to_path_buf()),
             // Another projector of the same snapshot won the race. Its tree
             // has the same content by construction — the manifest is the id.
-            Err(_) if final_path.exists() => {
-                let _ = fs::remove_dir_all(&scratch);
-                Ok(final_path)
-            }
-            Err(error) => {
-                let _ = fs::remove_dir_all(&scratch);
-                Err(error.into())
+            Err(_) if final_path.exists() => Ok(final_path.to_path_buf()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn lease_path(&self, token: &str) -> PathBuf {
+        self.store
+            .tmp_dir()
+            .join(format!("{LEASE_PREFIX}{token}{LEASE_SUFFIX}"))
+    }
+
+    /// Takes the advisory lease that says a scratch tree's creator is alive.
+    ///
+    /// It lives in the store's `tmp/` as a file because a directory cannot
+    /// portably carry an `flock`, and it is named from the same token as the
+    /// scratch so a reaper needs no registry to correlate the two.
+    fn take_scratch_lease(&self) -> Result<(String, File), LayoutError> {
+        loop {
+            let token = scratch_token();
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(self.lease_path(&token))
+            {
+                Ok(file) => {
+                    file.try_lock_exclusive()?;
+                    return Ok((token, file));
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
             }
         }
+    }
+
+    /// Removes the scratch of projections and ref swaps whose creator is gone.
+    ///
+    /// Liveness decides, never a name, a PID or a clock. A `.building-…` tree
+    /// goes only when its lease is free or already absent, a `.swap-…` file
+    /// only when it can be leased and is still the inode the scan listed. A
+    /// projection that has been building for an hour is retained; a crashed
+    /// one is reclaimable the instant its holder dies.
+    pub fn reap_scratch(&self) -> Result<ScratchReap, LayoutError> {
+        let mut report = ScratchReap::default();
+        for entry in read_dir_or_empty(&self.snapshots_dir())? {
+            let name = entry.file_name();
+            let Some(token) = name
+                .to_str()
+                .and_then(|name| name.strip_prefix(BUILDING_PREFIX))
+            else {
+                continue;
+            };
+            report.examined += 1;
+            let Some(lease) = lease_state(&self.lease_path(token)) else {
+                continue;
+            };
+            // Recorded before the removal: after it, the name is gone and
+            // nothing on disk can say who left it behind.
+            let evidence = ReclaimedScratch {
+                path: entry.path(),
+                creator: token.to_owned(),
+                lease,
+            };
+            if fs::remove_dir_all(entry.path()).is_ok() {
+                report.trees_removed += 1;
+                report.reclaimed.push(evidence);
+            }
+        }
+        for entry in read_dir_or_empty(&self.refs_dir())? {
+            let name = entry.file_name();
+            let Some(token) = name
+                .to_str()
+                .and_then(|name| name.strip_prefix(SWAP_PREFIX))
+            else {
+                continue;
+            };
+            if !entry.metadata().is_ok_and(|listed| listed.is_file()) {
+                continue;
+            }
+            report.examined += 1;
+            // Decided by the same lease a projection uses. The staged file
+            // carries no lock of its own, so its liveness is not a question
+            // its own inode can answer; the token's lease answers it.
+            let Some(lease) = lease_state(&self.lease_path(token)) else {
+                continue;
+            };
+            let evidence = ReclaimedScratch {
+                path: entry.path(),
+                creator: token.to_owned(),
+                lease,
+            };
+            if fs::remove_file(entry.path()).is_ok() {
+                report.swaps_removed += 1;
+                report.reclaimed.push(evidence);
+            }
+        }
+        // Leases last: a lease whose scratch was renamed into place, or which
+        // the sweeps above just finished with. Removing them earlier would
+        // answer "why was this reclaimable?" with `Absent` for artifacts whose
+        // holder demonstrably died, degrading the evidence to the vaguer of
+        // two true answers.
+        for entry in read_dir_or_empty(&self.store.tmp_dir())? {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if name.starts_with(LEASE_PREFIX)
+                && name.ends_with(LEASE_SUFFIX)
+                && lease_state(&entry.path()).is_some()
+            {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+        Ok(report)
     }
 
     /// Writes every entry into an already-created tree root.
@@ -297,21 +458,30 @@ impl<'store> Layout<'store> {
     /// id or the new one on every platform, and nothing else.
     pub fn set_ref(&self, name: &str, id: &SnapshotId) -> Result<(), LayoutError> {
         let refs = self.refs_dir();
+        let destination = refs.join(validated_ref_name(name)?);
         fs::create_dir_all(&refs)?;
-        let staged = refs.join(format!(
-            ".swap-{}-{}",
-            process::id(),
-            SWAP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
+        // Leased for its whole life like every other scratch artifact — but
+        // the lease is a SEPARATE file in `tmp/`, never a lock on the staged
+        // ref itself. A lock taken here travels with the inode through the
+        // rename, and Windows' is mandatory: it would make the LIVE ref
+        // unreadable to every concurrent reader until this handle closed.
+        // Nothing that becomes live may carry a lock.
+        let (token, lease) = self.take_scratch_lease()?;
+        let staged = refs.join(format!("{SWAP_PREFIX}{token}"));
+        let swapped = (|| -> io::Result<()> {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&staged)?;
+            file.write_all(&ref_bytes(id))?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&staged, &destination)
+        })();
         let _ = fs::remove_file(&staged);
-        fs::write(&staged, ref_bytes(id))?;
-        match fs::rename(&staged, refs.join(validated_ref_name(name)?)) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                let _ = fs::remove_file(&staged);
-                Err(error.into())
-            }
-        }
+        drop(lease);
+        let _ = fs::remove_file(self.lease_path(&token));
+        Ok(swapped?)
     }
 
     /// Reads `refs/<name>`: the id it names, or `None` when there is no such
@@ -373,9 +543,11 @@ impl<'store> Layout<'store> {
     /// Every projected tree present, as the snapshot id it claims to hold.
     ///
     /// A name that is not a snapshot id is not a tree: `project` builds under
-    /// `.building-<pid>-<n>` and renames into place, so such a name belongs to
-    /// an in-flight projection in some process and is that process's to
-    /// remove. Enumeration therefore reports trees only.
+    /// a leased `.building-…` name and renames into place, so such a name
+    /// belongs to a projection whose liveness only its lease can answer.
+    /// Enumeration reports trees; [`reap_scratch`] handles the rest.
+    ///
+    /// [`reap_scratch`]: Self::reap_scratch
     pub fn tree_ids(&self) -> Result<Vec<SnapshotId>, LayoutError> {
         let mut ids = Vec::new();
         let entries = match fs::read_dir(self.snapshots_dir()) {
@@ -392,6 +564,44 @@ impl<'store> Layout<'store> {
         }
         ids.sort_by_key(|id| *id.as_bytes());
         Ok(ids)
+    }
+}
+
+/// A collision-free name for one scratch artifact. The clock is in it for
+/// uniqueness across a restart with the same PID, never as an age: nothing
+/// reads it back.
+fn scratch_token() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!(
+        "{}-{}-{nanos}",
+        process::id(),
+        SWAP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// Why this lease says its creator is gone, or `None` while one holds it.
+///
+/// One sample answers it, which is the whole advantage of a lease over the
+/// drain-check shape #96 needs for FUSE connections: there, liveness has to
+/// be inferred from a work counter that fails to move across two samples,
+/// because a wedged connection has no owner left to ask. Here the owner IS
+/// the lock, so a second sample could only repeat the first.
+fn lease_state(path: &Path) -> Option<LeaseState> {
+    match OpenOptions::new().read(true).open(path) {
+        Ok(file) => file.try_lock_exclusive().ok().map(|()| LeaseState::Free),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Some(LeaseState::Absent),
+        Err(_) => None,
+    }
+}
+
+fn read_dir_or_empty(path: &Path) -> Result<Vec<fs::DirEntry>, LayoutError> {
+    match fs::read_dir(path) {
+        Ok(entries) => Ok(entries.flatten().collect()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
     }
 }
 

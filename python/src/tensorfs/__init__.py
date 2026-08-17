@@ -1,6 +1,6 @@
 """Content-addressed local storage and direct tensor reads and writes."""
 
-from .local import DigestMismatch, LocalCAS, RefConflict
+from .local import DigestMismatch, LocalCAS, Reclaimed, RefConflict, TempCollection
 from .manifest import MAX_CHUNK_SIZE, Chunk, FileEntry, RepositoryManifest
 from .project import (
     STUB_MAGIC,
@@ -45,10 +45,12 @@ __all__ = [
     "LocalCAS",
     "MAX_CHUNK_SIZE",
     "ProjectionError",
+    "Reclaimed",
     "RefConflict",
     "RepositoryManifest",
     "Stub",
     "TensorError",
+    "TempCollection",
     "TensorReader",
     "TensorView",
     "TensorWriter",

@@ -285,22 +285,26 @@ def project_snapshot(
     if symlinks is None:
         symlinks = _supports_symlinks(parent)
 
-    scratch = parent / f".building-{final.name}-{os.getpid()}-{next(_SCRATCH_SEQUENCE)}"
-    shutil.rmtree(scratch, ignore_errors=True)
-    scratch.mkdir()
-    try:
-        _fill(cas, manifest, scratch, symlinks=symlinks)
-        os.rename(scratch, final)
-    except OSError as error:
-        shutil.rmtree(scratch, ignore_errors=True)
-        # Another projector of the same manifest won the race. Its tree has
-        # the same content by construction.
-        if error.errno in (errno.EEXIST, errno.ENOTEMPTY) and final.exists():
-            return final
-        raise
-    except Exception:
-        shutil.rmtree(scratch, ignore_errors=True)
-        raise
+    # The lease is taken BEFORE the scratch exists and held past the rename,
+    # so `LocalCAS.reap_projection_scratch` can tell a projection that
+    # crashed from one that is merely slow. The token is unique, so nothing
+    # is ever removed by name-guess before it is created.
+    with cas.scratch_lease() as token:
+        scratch = parent / f".building-{token}"
+        scratch.mkdir()
+        try:
+            _fill(cas, manifest, scratch, symlinks=symlinks)
+            os.rename(scratch, final)
+        except OSError as error:
+            shutil.rmtree(scratch, ignore_errors=True)
+            # Another projector of the same manifest won the race. Its tree
+            # has the same content by construction.
+            if error.errno in (errno.EEXIST, errno.ENOTEMPTY) and final.exists():
+                return final
+            raise
+        except Exception:
+            shutil.rmtree(scratch, ignore_errors=True)
+            raise
     return final
 
 

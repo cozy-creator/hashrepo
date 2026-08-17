@@ -336,9 +336,25 @@ inside ONE metadata write transaction — the same transaction `seal_snapshot`
 and `delete_snapshot` commit their row through — so no row can appear or
 vanish under it and a live root's tree can never be judged garbage. It removes
 no objects at all, which is what makes "a scrub racing a deletion costs a live
-root nothing" a structural fact rather than a timing argument. Two names it
-deliberately leaves alone: a `.building-…` directory belongs to an in-flight
-projection in some process, and a `.swap-…` file to an in-flight `set_ref`.
+root nothing" a structural fact rather than a timing argument.
+
+**Scratch reaping (#88).** `.building-…` and `.swap-…` were originally left
+alone, on the grounds that either may belong to an in-flight projection or
+`set_ref` in another process. True of a live one, and wrong for a crashed
+one — which nothing then removed, so a projector killed inside `fill` stranded
+its scratch forever (on a filesystem without symlinks, a whole copied tree).
+
+They are now reaped by liveness, the way `tmp/` already was: each carries an
+advisory lease taken **before** the scratch is visible and released only after
+the rename, so `scrub` retains what a live holder still owns and takes what no
+live process does. A projection's lease is a file in `tmp/` named from the same
+token as its scratch, because a directory cannot portably carry an `flock`; a
+staged ref is a file and is its own lease. Reaping records the creator, the
+path and *why* it was reclaimable before removing anything, so the freed
+resource can still be accounted for afterwards.
+
+No clock is involved, deliberately: a grace long enough to protect a 30 GB
+projection is long enough to strand one until the disk fills.
 
 ## 7. Dedup accounting
 
