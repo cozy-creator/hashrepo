@@ -18,6 +18,7 @@ import json
 import math
 import os
 import tempfile
+import weakref
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -210,7 +211,18 @@ class TensorReader(Mapping[str, TensorView]):
         self._entries = {entry.path: entry for entry in manifest.files}
         # (file path) -> (object start offsets, (ref, length) pairs)
         self._grid: dict[str, tuple[list[int], tuple[tuple[CASRef, int], ...]]] = {}
-        self._maps: dict[str, MappedObject] = {}
+        # WEAK on purpose. A mapping lives exactly as long as someone is
+        # reading through it: the `Py_buffer` a view holds keeps the mapping
+        # alive, and when the last view goes so does the mapping. A strong
+        # cache here would mean a conversion that touches every tensor of an
+        # 8 GiB shard ends with the whole shard resident -- measured at 7.9 GiB
+        # peak RSS before this was weak, 155 MiB after
+        # (`python/benchmarks/writer_peak_rss.py`). Re-mapping an object a
+        # later read wants again is one `mmap(2)`; its digest stays in
+        # `_verified`, so it is not re-hashed.
+        self._maps: weakref.WeakValueDictionary[str, MappedObject] = (
+            weakref.WeakValueDictionary()
+        )
         self._verified: set[str] = set()
         self._index: dict[str, TensorView] | None = None
         self._closed = False
@@ -229,14 +241,13 @@ class TensorReader(Mapping[str, TensorView]):
     # -- lifecycle -------------------------------------------------------
 
     def close(self) -> None:
-        """Drop this reader's mappings.
+        """Refuse further reads. Mappings are not this object's to revoke.
 
         A mapping the caller still holds a ``memoryview`` into is *not*
-        force-unmapped — that would invalidate live buffers. Dropping the
-        reader's reference is all that happens, and the extension's
-        ``Py_buffer`` export keeps each mapping alive for exactly as long as
-        the last view of it. Ownership is the buffer protocol's, so there is
-        no ``BufferError`` to swallow here.
+        force-unmapped — that would invalidate live buffers. The reader only
+        ever held weak references anyway: the ``Py_buffer`` each view carries is
+        what keeps its mapping alive, for exactly as long as the view. There is
+        no ``BufferError`` to swallow here and nothing to release.
         """
 
         self._closed = True

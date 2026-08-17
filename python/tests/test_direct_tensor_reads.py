@@ -220,23 +220,63 @@ def test_a_zero_length_tensor_reads_as_no_bytes(fixture: dict[str, object]) -> N
 
 
 def test_opening_reads_only_the_header(fixture: dict[str, object]) -> None:
-    """Laziness is the product claim; assert it structurally, not by timing."""
+    """Laziness is the product claim; assert it structurally, not by timing.
+
+    ``_verified`` is the durable record of which objects the reader has ever
+    mapped, which is the right thing to count: ``_maps`` is weak and holds only
+    what is being read through right now. Residency is asserted separately, by
+    :func:`test_a_reader_retains_no_mapping_it_is_not_reading_through`.
+    """
 
     cas = LocalCAS(Path(str(fixture["cas_root"])))
     entry = _entry(fixture, "model.safetensors")
     with open_tensors(cas, fixture["ref"]) as tensors:  # type: ignore[arg-type]
         assert tensors.keys()
-        # Only the object(s) holding the header have been mapped, even though
+        # Only the object(s) holding the header have been read, even though
         # every tensor is now listed with its dtype and shape.
-        mapped_after_open = len(tensors._maps)
-        assert mapped_after_open == 1, mapped_after_open
+        touched_after_open = len(tensors._verified)
+        assert touched_after_open == 1, touched_after_open
 
         tensors["small.alpha"].tobytes()
-        after_small = len(tensors._maps)
+        after_small = len(tensors._verified)
         assert after_small == 2, after_small
 
         # The 104 MiB tensor still has not been touched.
         assert after_small < len(entry.chunks)
+
+
+def test_a_reader_retains_no_mapping_it_is_not_reading_through(
+    fixture: dict[str, object],
+) -> None:
+    """Resident bytes track the LIVE views, not the reader's history.
+
+    Measured before this held: a conversion that read every tensor of an 8 GiB
+    shard peaked at 8.0 GiB of RSS, because the reader kept every mapping it had
+    ever made. It now peaks at one tensor's worth
+    (`python/benchmarks/writer_peak_rss.py`), and this is that property at
+    fixture scale, where it can be asserted rather than measured.
+    """
+
+    cas = LocalCAS(Path(str(fixture["cas_root"])))
+    entry = _entry(fixture, "model.safetensors")
+    with open_tensors(cas, fixture["ref"]) as tensors:  # type: ignore[arg-type]
+        names = list(tensors)
+        for name in names:
+            # Reading a tensor to completion leaves nothing mapped behind it.
+            tensors[name].tobytes()
+            assert not tensors._maps, (name, len(tensors._maps))
+
+        # While a view IS held, exactly the objects it spans are mapped -- no
+        # more, and not the ones read before it.
+        held = list(tensors["dense.weight"].pieces())
+        assert len(tensors._maps) == len(held) > 1
+        del held
+        assert not tensors._maps
+
+        # Every object was read at least once, so the loop above was not
+        # vacuously bounded by never having mapped anything.
+        assert len(tensors._verified) > 1
+        assert len(tensors._verified) <= len(entry.chunks)
 
 
 def test_dtype_and_shape_come_back_from_the_header(fixture: dict[str, object]) -> None:
@@ -471,4 +511,5 @@ def test_a_piece_is_a_borrowed_view_of_the_mapped_object_not_a_copy(
     with open_tensors(cas, fixture["ref"]) as tensors:  # type: ignore[arg-type]
         pieces = list(tensors["dense.weight"].pieces())
         assert len({id(piece.obj) for piece in pieces}) == len(pieces) > 1
-        assert all(piece.obj in tensors._maps.values() for piece in pieces)
+        mapped_now = {id(handle) for handle in tensors._maps.values()}
+        assert all(id(piece.obj) in mapped_now for piece in pieces)

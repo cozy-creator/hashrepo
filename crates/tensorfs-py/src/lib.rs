@@ -739,7 +739,11 @@ impl PyPackObject {
 /// `PyBuffer_FillInfo` entered CPython's stable ABI in 3.11 (bpo-45459), and
 /// PyO3 gates its own buffer-protocol tests on exactly `any(not(Py_LIMITED_API),
 /// Py_3_11)`.
-#[pyclass(frozen, module = "tensorfs._tensorfs", name = "MappedObject")]
+/// `weakref` is required, not cosmetic: the reader keeps its mappings in a
+/// `WeakValueDictionary` so a mapping lives exactly as long as someone is
+/// reading through it. Without that, a conversion that touches every tensor of
+/// an 8 GiB shard ends with the whole shard resident (measured: 7.9 GiB).
+#[pyclass(frozen, weakref, module = "tensorfs._tensorfs", name = "MappedObject")]
 pub struct PyMappedObject {
     /// `None` for a zero-length object: a zero-length mapping is refused by
     /// `mmap(2)` itself, and an empty export is the honest answer.
