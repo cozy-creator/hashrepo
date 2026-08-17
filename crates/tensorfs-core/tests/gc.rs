@@ -385,16 +385,6 @@ fn a_scrub_keeps_a_ref_it_could_not_open() {
     assert_eq!(store.layout().read_ref("live").unwrap(), Some(live));
 }
 
-/// TEMPORARY (#109 probe): a live breadcrumb, flushed, so a hung run's log
-/// names the operation each party was inside when the process wedged.
-/// Deleted with the probe workflow before merge.
-fn probe(what: &str) {
-    use std::io::Write as _;
-    let mut stderr = std::io::stderr();
-    let _ = writeln!(stderr, "[probe] {what}");
-    let _ = stderr.flush();
-}
-
 /// A scrub racing snapshot deletions never removes a live root's tree, its
 /// ref, or any of its objects.
 ///
@@ -407,10 +397,13 @@ fn probe(what: &str) {
 /// tree the next scrub takes. That is what guarantees the scrubber has
 /// something dangling to find while a live root sits beside it.
 ///
-/// No clock anywhere. The scrubber stops on a flag the main thread sets after
-/// a fixed number of rounds, and the gate on whether the race happened is a
-/// COUNT of dangling trees the scrubber actually removed — not an elapsed
-/// time, and not a sleep.
+/// No clock anywhere. The scrubber stops on a flag the rounds raise by
+/// LEAVING — panic included, which is the whole point (#109): a predicate only
+/// a healthy driver can advance turns that driver's failure into a hang, and
+/// `thread::scope` joins before it propagates a panic, so the message never
+/// even reaches the log. The gate on whether the race happened is a COUNT of
+/// dangling trees the scrubber actually removed — not an elapsed time, and not
+/// a sleep.
 #[test]
 fn a_scrub_racing_a_deletion_never_costs_a_live_root() {
     let scratch = Scratch::new("gc-scrub-race");
@@ -431,10 +424,6 @@ fn a_scrub_racing_a_deletion_never_costs_a_live_root() {
         .expect("ref writes");
 
     let rounds = harness::iterations(12, 100);
-    probe(&format!(
-        "multiprocess={} rounds={rounds}",
-        store.supports_multiprocess()
-    ));
     // Raised when the rounds below LEAVE, panic included: a scrubber whose
     // stop flag only a healthy main thread sets turns any failure into a
     // hang, which is what #109 was.
@@ -445,9 +434,7 @@ fn a_scrub_racing_a_deletion_never_costs_a_live_root() {
             let mut trees = 0_u64;
             let mut deferred = 0_u64;
             while !stop.raised() {
-                probe(&format!("s{passes}+"));
                 let report = scrubber.scrub().expect("scrub runs");
-                probe(&format!("s{passes}-"));
                 passes += 1;
                 trees += report.trees_removed.len() as u64;
                 deferred += (report.trees_deferred.len() + report.refs_deferred.len()) as u64;
@@ -465,28 +452,20 @@ fn a_scrub_racing_a_deletion_never_costs_a_live_root() {
 
         stop.racing(|| {
             for round in 0..rounds {
-                probe(&format!("main: round {round} seal"));
                 let doomed = sealed_only(
                     &store,
                     "doomed",
                     &[("round.bin", format!("round {round}").as_bytes())],
                 );
-                probe(&format!("main: round {round} load"));
                 let manifest = store.load_snapshot(&doomed).expect("loads");
-                probe(&format!("main: round {round} project"));
                 store.project_snapshot(&doomed).expect("projects");
-                probe(&format!("main: round {round} set_ref"));
                 store.layout().set_ref("doomed", &doomed).expect("ref");
-                probe(&format!("main: round {round} delete_snapshot"));
                 store.delete_snapshot(&doomed).expect("deletes");
                 // The late projection: a tree for a root that no longer exists.
                 // It may also lose a rename race with the scrubber's own removal,
                 // which is a cache outcome and not a claim this test makes.
-                probe(&format!("main: round {round} late project"));
                 let _ = store.layout().project(&manifest);
-                probe(&format!("main: round {round} late set_ref"));
                 let _ = store.layout().set_ref("doomed", &doomed);
-                probe(&format!("main: round {round} asserts"));
 
                 assert!(
                     survivor_tree.is_dir(),
@@ -501,18 +480,14 @@ fn a_scrub_racing_a_deletion_never_costs_a_live_root() {
                     resident(&store, &survivor_digest),
                     "round {round}: a scrub cost a live root its bytes"
                 );
-                probe(&format!("main: round {round} collect"));
                 store.collect().expect("collection completes");
-                probe(&format!("main: round {round} reload"));
                 assert_eq!(
                     store.load_snapshot(&survivor).expect("loads").snapshot_id(),
                     survivor,
                     "round {round}: the live root stopped loading"
                 );
-                probe(&format!("main: round {round} done"));
             }
         });
-        probe("main: joining the scrub thread");
         harness::join_worker(handle)
     });
 

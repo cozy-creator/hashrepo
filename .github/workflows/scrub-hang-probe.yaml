@@ -74,7 +74,7 @@ jobs:
             else
               passed=$((passed + 1))
               echo "=== RUN ${i} PASSED ==="
-              tail -n 3 "run-${i}.log"
+              grep -a "scrub race over" "run-${i}.log"
             fi
           done
           echo "shard ${{ matrix.shard }}: ${passed} passed, ${failed} failed, ${hung} hung, of ${runs}"
@@ -125,7 +125,7 @@ jobs:
               grep -a "test result" "run-${i}.log"
             else
               passed=$((passed + 1)); echo "=== RUN ${i} PASSED ==="
-              grep -a "test result" "run-${i}.log"
+              grep -a "scrub race over" "run-${i}.log"
             fi
           done
           echo "binary shard ${{ matrix.shard }}: ${passed} passed, ${failed} failed, ${hung} hung, of 5"
