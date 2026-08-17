@@ -61,8 +61,9 @@ stub per tensor-planner file (§4). It is a **projection, never authoritative**
 nothing (§6).
 
 **`refs/<name>`** is a plain text file holding one snapshot id and a line
-feed, replaced atomically by `rename(2)` — git's `.git/refs/heads/*` and the
-HF cache's `refs/main`.
+feed, replaced by `rename(2)` — git's `.git/refs/heads/*` and the HF cache's
+`refs/main`. Atomic to a concurrent reader on POSIX; transiently missable on
+Windows, which cannot do better (below).
 
 **This retires the symlink ref this document originally specified** (decided
 while implementing #69, forced by measurement, flagged for Paul). The symlink
@@ -80,7 +81,34 @@ swaps, on CI, **both wins failed**:
   not true while anything is swapping.
 
 `open`-then-`read` of a rename-swapped name yields the old id or the new one
-on every platform and nothing else, which is why git and HF both chose it.
+and nothing else, which is why git and HF both chose it — **on POSIX. Windows
+is weaker, and this is the honest statement of it** (#103, measured).
+
+- **A superseding rename on Windows is not atomic to a concurrent opener.**
+  `MoveFileEx(MOVEFILE_REPLACE_EXISTING)` — what `fs::rename` calls — leaves an
+  `open` of the name transiently returning ERROR_FILE_NOT_FOUND or
+  ERROR_ACCESS_DENIED: ~2 opens per million, 73 of 600 runs of the 2,000-swap
+  test on `windows-latest`. Both shapes appear about equally. It never returns
+  wrong or partial bytes — the failure is the `open`, not the content.
+- **Asking for the rename POSIX defines does not help.**
+  `SetFileInformationByHandle(FileRenameInfoEx,
+  FILE_RENAME_FLAG_POSIX_SEMANTICS)` succeeded on all 360,000 swaps it was
+  measured over and failed 18 of 180 runs anyway, so the window is not the
+  superseded file's delete-pending state alone. That experiment is not in the
+  tree: it cost the crate's `forbid(unsafe_code)` and bought nothing.
+- **So the Windows contract is: a miss is transient and heals.** `read_ref`
+  retries a failed `open` while the store proves the failure wrong — the
+  directory lists the name the `open` could not find, or a staged `.swap-…`
+  file says a ref is between `write` and `rename`. A quiescent store returns
+  the first answer, so a genuinely absent ref and a ref this process genuinely
+  may not read do not spin. No clock, no attempt count. Measured, that absorbs
+  about a quarter of the misses (55 of 600 runs still saw one to three
+  survive), so **a Windows caller must still be able to read again**; what it
+  may rely on is that reading again resolves.
+- **A Windows tool reading `refs/main` itself inherits the weaker contract**:
+  `type refs\main` can miss while a swap is in flight, and must read again.
+  POSIX tools need no such thing.
+
 The supported consumer pattern is therefore the one a hex file forces anyway:
 **resolve the ref once, then use `snapshots/<id>`** — a resolved tree is
 immutable and a swap deletes nothing, so the path stays valid for as long as

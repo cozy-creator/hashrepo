@@ -384,8 +384,9 @@ fn the_no_symlink_fallback_projects_copies_that_read_identically() {
 /// What the ref swap guarantees, measured under two consumer shapes running
 /// against 2,000 `rename(2)`s.
 ///
-/// * **resolvers** call `read_ref` in a tight loop. The ref is never absent
-///   and never unreadable, and they see BOTH ids, so the swap really was
+/// * **resolvers** call `read_ref` in a tight loop. On POSIX the ref is never
+///   absent and never unreadable; on Windows a miss is allowed but must HEAL
+///   — see below — and either way they see BOTH ids, so the swap really was
 ///   concurrent.
 /// * **holders** resolve the ref once and then read inside the tree they
 ///   resolved. A swap never invalidates a resolved tree: trees are immutable
@@ -405,7 +406,17 @@ fn the_no_symlink_fallback_projects_copies_that_read_identically() {
 /// `refs/<name>/<file>` transiently returns ENOENT on Linux, because a
 /// multi-component walk THROUGH a renamed name is not one observation. Both
 /// of the symlink's advantages fail under exactly the concurrency a ref is
-/// for. `open`-then-`read` does not.
+/// for. `open`-then-`read` does not — on POSIX.
+///
+/// **Windows gets a weaker contract, because its rename cannot give this one**
+/// (#103). A superseding rename is not atomic to a concurrent opener: measured
+/// on CI over 600 runs of this test, ~2 opens per million transiently returned
+/// ERROR_FILE_NOT_FOUND or ERROR_ACCESS_DENIED, and asking for the rename
+/// POSIX defines — `FileRenameInfoEx` with `FILE_RENAME_FLAG_POSIX_SEMANTICS`
+/// — measured no better. So what Windows promises, and what this asserts, is
+/// that a miss is transient: reading again while the swaps run resolves it.
+/// `read_ref` does that retry itself, against the store's state and never a
+/// clock, so the misses counted here are the ones that survived it.
 #[test]
 fn a_ref_swap_is_atomic_under_concurrent_readers() {
     const SWAPS: usize = 2_000;
@@ -432,7 +443,7 @@ fn a_ref_swap_is_atomic_under_concurrent_readers() {
     let held = first_tree.join("config.json");
 
     let done = AtomicBool::new(false);
-    let (resolved, resolve_failures, distinct, holds, hold_failures) =
+    let (resolved, healed, resolve_failures, distinct, holds, hold_failures) =
         std::thread::scope(|scope| {
             let resolvers: Vec<_> = (0..READERS_PER_CLASS)
                 .map(|_| {
@@ -440,19 +451,31 @@ fn a_ref_swap_is_atomic_under_concurrent_readers() {
                     let layout = &layout;
                     scope.spawn(move || {
                         let mut good = 0_u64;
+                        let mut healed = 0_u64;
                         let mut failures: Vec<String> = Vec::new();
                         let mut seen = std::collections::HashSet::new();
                         while !done.load(Ordering::Acquire) {
-                            match layout.read_ref("main") {
+                            let what = match layout.read_ref("main") {
                                 Ok(Some(id)) => {
                                     seen.insert(id);
                                     good += 1;
+                                    continue;
                                 }
-                                Ok(None) => record(&mut failures, "the ref was absent".to_owned()),
-                                Err(error) => record(&mut failures, format!("{error:?}")),
+                                Ok(None) => "the ref was absent".to_owned(),
+                                Err(error) => format!("{error:?}"),
+                            };
+                            // POSIX renames atomically for an opener, so a
+                            // miss there is a defect. Windows cannot, and
+                            // that is the contract it gets (#103) — but only
+                            // a miss that HEALS: reading again while the
+                            // swaps run has to resolve the ref.
+                            if cfg!(windows) && resolves_again(layout, done) {
+                                healed += 1;
+                            } else {
+                                record(&mut failures, what);
                             }
                         }
-                        (good, failures, seen)
+                        (good, healed, failures, seen)
                     })
                 })
                 .collect();
@@ -485,11 +508,13 @@ fn a_ref_swap_is_atomic_under_concurrent_readers() {
             done.store(true, Ordering::Release);
 
             let mut resolved = 0_u64;
+            let mut healed = 0_u64;
             let mut resolve_failures: Vec<String> = Vec::new();
             let mut seen = std::collections::HashSet::new();
             for resolver in resolvers {
-                let (good, failures, their_seen) = resolver.join().unwrap();
+                let (good, their_healed, failures, their_seen) = resolver.join().unwrap();
                 resolved += good;
+                healed += their_healed;
                 resolve_failures.extend(failures);
                 seen.extend(their_seen);
             }
@@ -500,13 +525,21 @@ fn a_ref_swap_is_atomic_under_concurrent_readers() {
                 holds += good;
                 hold_failures.extend(failures);
             }
-            (resolved, resolve_failures, seen.len(), holds, hold_failures)
+            (
+                resolved,
+                healed,
+                resolve_failures,
+                seen.len(),
+                holds,
+                hold_failures,
+            )
         });
 
     assert!(
         resolve_failures.is_empty(),
         "the ref was absent or unreadable across {SWAPS} swaps ({resolved} good \
-         reads): {resolve_failures:?}"
+         reads, {healed} Windows misses that resolved on a retry): \
+         {resolve_failures:?}"
     );
     assert!(
         hold_failures.is_empty(),
@@ -523,6 +556,23 @@ fn a_ref_swap_is_atomic_under_concurrent_readers() {
         "the resolvers saw {distinct} distinct ids; the swap was not actually concurrent"
     );
     assert_eq!(layout.read_ref("main").unwrap(), Some(first));
+}
+
+/// Reads until the ref resolves or the swapping stops — whether the miss that
+/// sent us here was a swap in flight rather than a ref that is gone.
+///
+/// The wait is on the swap loop's own state and never on a clock: once `done`
+/// is set the last `set_ref` has returned, so a read that still misses is
+/// missing for real.
+fn resolves_again(layout: &Layout<'_>, done: &AtomicBool) -> bool {
+    loop {
+        if let Ok(Some(_)) = layout.read_ref("main") {
+            return true;
+        }
+        if done.load(Ordering::Acquire) {
+            return false;
+        }
+    }
 }
 
 /// Keeps a bounded, deduplicated sample of what went wrong, so a failure
