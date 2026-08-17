@@ -16,8 +16,8 @@ use base64::Engine as _;
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::sync::http::{HttpTransport, TokenSource};
 use tensorfs_core::sync::{
-    CompleteStatus, DownloadGrant, PackClaim, PackGrant, Progress, ProgressSink, SyncTransport,
-    TransportError,
+    BlobPart, CompleteStatus, DownloadGrant, PackClaim, PackGrant, Progress, ProgressSink,
+    SyncTransport, TransportError,
 };
 use tensorfs_core::tfm1::SnapshotId;
 
@@ -278,7 +278,12 @@ fn complete_maps_the_three_terminal_shapes() {
     assert_eq!(
         client.complete("sess-1").expect("retryable parses"),
         CompleteStatus::Incomplete {
-            code: "promote_incomplete".to_owned()
+            code: "promote_incomplete".to_owned(),
+            // The remote's own admission count rides the retryable envelope:
+            // it is the progress axis the client polls completion against,
+            // and it must be read off the landed shape rather than guessed.
+            promoted: 1,
+            total: 2,
         }
     );
     assert_eq!(
@@ -773,4 +778,31 @@ fn an_expired_blob_grant_surfaces_as_expiry() {
         .blob_grants("sess-1", &[digest_of(b"big")])
         .expect_err("an expired lease must not read as grants");
     assert!(matches!(error, TransportError::Expired(_)), "got {error:?}");
+}
+
+/// A part PUT answered 404 means the multipart upload it belongs to is gone —
+/// the store's `NoSuchUpload`. That happens when the remote's staging sweep
+/// aborts an upload a resumed push had adopted, and it is an EXPIRY, not a
+/// failure: the engine replans, the remote opens a fresh upload, and the parts
+/// go again. Mapping it to a refusal would make an adopted upload riskier than
+/// a cold one and defeat cross-session resume (tensorfs#93).
+#[test]
+fn a_part_put_on_a_vanished_upload_reads_as_expiry_not_refusal() {
+    let (base, _recorded) = loopback(vec![(
+        404,
+        "<Error><Code>NoSuchUpload</Code></Error>".to_owned(),
+    )]);
+    let part = BlobPart {
+        part_number: 1,
+        size_bytes: 4,
+        url: format!("{base}/part-1"),
+        headers: Vec::new(),
+    };
+    let error = transport(&base)
+        .upload_blob_part(&part, b"abcd", ProgressSink::silent())
+        .expect_err("a vanished upload must not read as success");
+    assert!(
+        matches!(error, TransportError::Expired(_)),
+        "a gone upload is a replan, got {error:?}"
+    );
 }

@@ -12,11 +12,21 @@
 //! stream-hashes the assembled object once at `complete`. Parts are transport
 //! and never enter identity. Bytes never proxy through the control plane;
 //! downloads are per-object presigned reads streamed straight into the local
-//! store's verifying writer. The local `ObjectStore` is the pull-side resume journal; on push,
-//! staging is scoped to one hub session, so within-run replans never
-//! retransmit a staged pack, and across process restarts resumption is
-//! promotion-level (a re-declare opens a fresh session whose staging starts
-//! empty, while promoted objects report resident).
+//! store's verifying writer. The local `ObjectStore` is the pull-side resume
+//! journal; on push, remote staging is CONTENT-ADDRESSED (th#2077), so resume
+//! is staging-level in both directions: within a run a replan never
+//! retransmits a staged pack, and across process restarts a fresh session
+//! finds the previous one's staged packs by their envelope checksum and its
+//! landed blob parts by the object digest, uploading only what is genuinely
+//! still owed.
+//!
+//! NOTHING IN THIS MODULE OWNS A CLOCK. Every budget here counts attempts that
+//! achieved nothing — replans that moved no object, `complete` calls that
+//! admitted none — so healthy work of any duration is never condemned for
+//! taking long. The one deadline is on establishing a connection, where there
+//! is no peer yet to be making progress, and the one silence bound is on a
+//! transfer socket, where bytes are the progress signal being measured. See
+//! [`PushOptions`] and [`http::HttpTransport`].
 
 use std::collections::HashSet;
 use std::io::Read;
@@ -228,8 +238,16 @@ pub struct GrantsPlan {
 pub enum CompleteStatus {
     Promoted,
     /// Retryable by contract (`promote_incomplete`-class): call again.
+    ///
+    /// `promoted` and `total` are the remote's own count of the closure it has
+    /// admitted. They are the PROGRESS AXIS of completion: a promotion that
+    /// takes many calls is healthy exactly as long as this number moves, and
+    /// the client's budget is spent on calls that changed nothing rather than
+    /// on calls that merely took a while.
     Incomplete {
         code: String,
+        promoted: u64,
+        total: u64,
     },
     /// Terminal: the same bytes cannot succeed (verification, head conflict).
     Failed {
@@ -277,7 +295,10 @@ pub trait SyncTransport {
     ) -> Result<(), TransportError>;
     /// Opens or re-opens the multipart uploads for up to [`BLOB_GRANT_BATCH`]
     /// blobs. Re-asking for a digest already in flight adopts its live upload
-    /// and reports the parts it already holds.
+    /// and reports the parts it already holds — including an upload a DIFFERENT
+    /// session opened, since the remote stages a blob on its own digest
+    /// (th#2077). That is what makes a killed push resume: the parts that
+    /// landed stay landed, and only the rest is sent again.
     fn blob_grants(
         &self,
         session: &str,
@@ -363,10 +384,17 @@ pub enum SyncError {
     },
     #[error("the remote neither granted nor reported staged the claimed pack {0}")]
     PackGrantOmitted(String),
-    #[error("grant replans exhausted after {0} attempts")]
-    ReplansExhausted(u32),
-    #[error("completion still not terminal after {attempts} calls (last: {last})")]
-    CompletionExhausted { attempts: u32, last: String },
+    #[error("{rounds} consecutive replans moved nothing, with {owed} objects still owed")]
+    ReplansStalled { rounds: u32, owed: usize },
+    #[error(
+        "completion stopped advancing: {stalls} consecutive calls admitted nothing beyond \
+         {promoted} objects (last: {last})"
+    )]
+    CompletionStalled {
+        stalls: u32,
+        promoted: u64,
+        last: String,
+    },
     #[error("the remote omitted a blob grant for requested object {0}")]
     BlobGrantOmitted(ObjectDigest),
     #[error(
@@ -394,25 +422,48 @@ pub enum SyncError {
     BlobNotAccepted(ObjectDigest),
 }
 
+/// Every bound here counts ATTEMPTS THAT ACHIEVED NOTHING. None of them is a
+/// clock, and none of them is a cap on how long healthy work may take: a push
+/// that keeps staging objects, landing parts or admitting them may run as long
+/// as it needs to. What is bounded is standing still, which is the only thing
+/// a caller can honestly call stuck without knowing the deployment.
+///
+/// The one shape that is a plain repetition count is
+/// [`PushOptions::max_upload_attempts`], and it is one because a single PUT
+/// has no partial success to measure — see its own note.
 #[derive(Clone, Copy, Debug)]
 pub struct PushOptions {
-    /// Bounded replans across expired grants and staged-state refreshes.
-    pub max_replans: u32,
-    /// Bounded transient retries per pack upload, and per blob PART upload. A
-    /// part PUT over a residential uplink is reset often enough that the retry
-    /// loop is required rather than optional (measured on the standing stack,
-    /// th#2064).
+    /// Replan rounds that moved nothing. A round that shrinks the missing set,
+    /// or that lands a blob part, is progress and is free; a round that
+    /// re-probes and finds the same work outstanding is not, and enough of
+    /// those in a row is a remote that is not accepting the transfer.
+    pub max_stalled_replans: u32,
+    /// Attempts at ONE envelope — a whole pack, or one blob part.
+    ///
+    /// This is a repetition count rather than a progress budget on purpose: a
+    /// PUT is all-or-nothing, so an attempt that transferred half the bytes
+    /// and reset achieved literally nothing that the next attempt can build
+    /// on, and "retry while bytes still move" would loop forever on a carrier
+    /// that always dies at the halfway mark. Progress on a BLOB is measured
+    /// where it is real — parts that landed and are reported back by the next
+    /// grant — and that is `max_stalled_replans`' job.
+    ///
+    /// Eight rather than three: the 2026-08-16 acceptance exhausted three on
+    /// pack PUTs over a residential uplink and lost the push, having measured
+    /// ~47 MB of part-level retry as ordinary behaviour on the same link.
     pub max_upload_attempts: u32,
-    /// Bounded `complete` calls through retryable incompleteness.
-    pub max_complete_attempts: u32,
+    /// `complete` calls that admitted nothing beyond what the previous one
+    /// had. The remote reports `promoted`; while it rises, completion polls on
+    /// without spending budget, however many calls that takes.
+    pub max_completion_stalls: u32,
 }
 
 impl Default for PushOptions {
     fn default() -> Self {
         Self {
-            max_replans: 16,
-            max_upload_attempts: 3,
-            max_complete_attempts: 600,
+            max_stalled_replans: 16,
+            max_upload_attempts: 8,
+            max_completion_stalls: 24,
         }
     }
 }
@@ -621,6 +672,7 @@ pub fn push_snapshot<T: SyncTransport>(
         }
     }
 
+    let mut stalled_replans = 0_u32;
     loop {
         if missing.is_empty() {
             break;
@@ -724,28 +776,83 @@ pub fn push_snapshot<T: SyncTransport>(
 
         // A pass completed or a grant expired: re-probe the session's live
         // staged view and re-derive what is still missing.
+        //
+        // A round that shrank the missing set did work, however many rounds it
+        // takes to drain a large closure. Only rounds that leave exactly the
+        // same debt behind are counted against the budget.
         report.replans += 1;
-        if report.replans > options.max_replans {
-            return Err(SyncError::ReplansExhausted(report.replans));
-        }
+        let owed_before = missing.len();
         let refreshed = transport.pack_grants(&session, &[])?;
         missing = refreshed.missing;
         verify_lanes(&closure, &missing, &refreshed.missing_blobs, max_payload)?;
+        if missing.len() < owed_before {
+            stalled_replans = 0;
+        } else {
+            stalled_replans += 1;
+            if stalled_replans >= options.max_stalled_replans {
+                return Err(SyncError::ReplansStalled {
+                    rounds: stalled_replans,
+                    owed: missing.len(),
+                });
+            }
+        }
     }
 
+    // COMPLETION IS A POLL, NOT A BET.
+    //
+    // Every byte is already staged by the time this loop starts, so the only
+    // way to lose the push here is to give up on it. Two things make that
+    // impossible to do by accident:
+    //
+    // A carrier failure is not a verdict. A `complete` whose answer never came
+    // back is not proof the promotion failed — in the 2026-08-16 acceptance it
+    // demonstrably had NOT failed, and a read timeout discarded 272 MB of
+    // successful upload. Re-issuing is safe because the remote's completion is
+    // idempotent: a fully-staged session promotes, and an already-promoted one
+    // says so (th#2077).
+    //
+    // And the budget is spent on STANDING STILL, not on elapsed calls. The
+    // remote's own `promoted` count is the progress axis, so a promotion that
+    // needs a thousand calls is healthy as long as it keeps admitting objects,
+    // and one that needs twenty while admitting nothing is not.
+    let mut admitted = 0_u64;
+    let mut stalls = 0_u32;
     loop {
         report.complete_attempts += 1;
-        match transport.complete(&session)? {
-            CompleteStatus::Promoted => return Ok(report),
-            CompleteStatus::Incomplete { code } => {
-                if report.complete_attempts >= options.max_complete_attempts {
-                    return Err(SyncError::CompletionExhausted {
-                        attempts: report.complete_attempts,
+        match transport.complete(&session) {
+            Ok(CompleteStatus::Promoted) => return Ok(report),
+            Ok(CompleteStatus::Incomplete {
+                code,
+                promoted,
+                total: _,
+            }) => {
+                if promoted > admitted {
+                    // Objects landed since the last call; poll straight back,
+                    // because the remote is working and a pause is pure
+                    // latency.
+                    admitted = promoted;
+                    stalls = 0;
+                    continue;
+                }
+                stalls += 1;
+                if stalls >= options.max_completion_stalls {
+                    return Err(SyncError::CompletionStalled {
+                        stalls,
+                        promoted: admitted,
                         last: code,
                     });
                 }
+                back_off(stalls);
             }
-            CompleteStatus::Failed { code } => return Err(SyncError::HeadRefused { code }),
+            Ok(CompleteStatus::Failed { code }) => return Err(SyncError::HeadRefused { code }),
+            Err(TransportError::Io(detail)) => {
+                stalls += 1;
+                if stalls >= options.max_completion_stalls {
+                    return Err(TransportError::Io(detail).into());
+                }
+                back_off(stalls);
+            }
+            Err(error) => return Err(error.into()),
         }
     }
 }
@@ -812,12 +919,15 @@ fn push_blob_lane<T: SyncTransport>(
     progress: ProgressSink<'_>,
 ) -> Result<(), SyncError> {
     let mut pending: Vec<(ObjectDigest, u64)> = blobs.to_vec();
-    let mut rounds = 0_u32;
+    let mut stalled = 0_u32;
     while !pending.is_empty() {
-        rounds += 1;
-        if rounds > options.max_replans {
-            return Err(SyncError::ReplansExhausted(rounds));
-        }
+        // A part that lands is DURABLE progress: the store keeps it, and the
+        // next grant reports it back so the retry sends only the rest. So a
+        // round that landed even one part earns another round, and a blob of
+        // any size finishes on a link that keeps resetting — while a round
+        // that landed nothing and deferred everything spends the budget.
+        let landed_before = report.blob_parts;
+        let pending_before = pending.len();
         let mut deferred = Vec::new();
         for batch in pending.chunks(BLOB_GRANT_BATCH) {
             let digests: Vec<ObjectDigest> = batch.iter().map(|(digest, _)| *digest).collect();
@@ -853,6 +963,17 @@ fn push_blob_lane<T: SyncTransport>(
         }
         pending = deferred;
         report.replans += 1;
+        if report.blob_parts > landed_before || pending.len() < pending_before {
+            stalled = 0;
+        } else {
+            stalled += 1;
+            if stalled >= options.max_stalled_replans {
+                return Err(SyncError::ReplansStalled {
+                    rounds: stalled,
+                    owed: pending.len(),
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -1177,8 +1298,23 @@ pub mod http {
         SyncTransport, TransportError,
     };
 
-    const CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
-    const TRANSFER_TIMEOUT: Duration = Duration::from_secs(600);
+    /// How long a connection may take to ESTABLISH. This is the one deadline
+    /// in this module that judges nothing about the work: until the socket is
+    /// up there is no peer, no request in flight and nothing to be making
+    /// progress. A connect that has not completed is not slow, it is absent.
+    const CONNECT_LIMIT: Duration = Duration::from_secs(15);
+
+    /// How long an ESTABLISHED transfer socket may stay SILENT.
+    ///
+    /// Not a deadline on the transfer — a liveness bound on the carrier. A
+    /// transfer has a byte-level progress signal (this module reports every
+    /// block to a [`ProgressSink`] as it moves), so silence on the socket is
+    /// real evidence that nothing is happening, and a 4 GiB blob is never
+    /// condemned for being large. `ureq`'s `timeout_read`/`timeout_write` bound
+    /// each individual socket operation, which is exactly that shape; the
+    /// whole-request `timeout()` — which is a deadline — is deliberately never
+    /// set.
+    const TRANSFER_SILENCE: Duration = Duration::from_secs(90);
 
     /// The read buffer one download fills before copying on. It bounds a
     /// single `read` syscall's appetite — it is not a rate, a deadline, or a
@@ -1214,13 +1350,35 @@ pub mod http {
     }
 
     /// The tensorhub snapshot-sync client for one `org/repo`.
+    ///
+    /// TWO CARRIERS, because the two halves of this wire offer different
+    /// evidence and only one of them can be judged.
+    ///
+    /// A TRANSFER reports bytes as they move, so socket silence means
+    /// something and [`TRANSFER_SILENCE`] bounds it.
+    ///
+    /// A CONTROL exchange does not. The server is legitimately mute for the
+    /// whole of its work — `declare` probes residency for every object in the
+    /// closure, `complete` verifies and admits staged objects — and that work
+    /// scales with the snapshot, not with anything the client can watch. There
+    /// is no observation to take, so the client refuses to guess: the control
+    /// carrier has NO read deadline at all. A flat 60-second one is what threw
+    /// away a fully-uploaded 272 MB snapshot in the 2026-08-16 acceptance
+    /// (#92), by making "promotion slower than a minute" indistinguishable
+    /// from "hung" and then deciding for the hang.
+    ///
+    /// What replaces it is where it belongs: `complete` is retryable and the
+    /// hub's own `promoted` count is the progress axis, so a caller supervising
+    /// this push judges stuckness from the absence of observations — the rule
+    /// [`Progress`] states, applied to the one call that was breaking it.
     #[derive(Debug)]
     pub struct HttpTransport {
         base_url: String,
         org: String,
         repo: String,
         token: TokenSource,
-        agent: ureq::Agent,
+        control: ureq::Agent,
+        transfer: ureq::Agent,
     }
 
     impl HttpTransport {
@@ -1235,8 +1393,13 @@ pub mod http {
                 org: org.into(),
                 repo: repo.into(),
                 token: TokenSource::None,
-                agent: ureq::AgentBuilder::new()
-                    .timeout_connect(Duration::from_secs(15))
+                control: ureq::AgentBuilder::new()
+                    .timeout_connect(CONNECT_LIMIT)
+                    .build(),
+                transfer: ureq::AgentBuilder::new()
+                    .timeout_connect(CONNECT_LIMIT)
+                    .timeout_read(TRANSFER_SILENCE)
+                    .timeout_write(TRANSFER_SILENCE)
                     .build(),
             }
         }
@@ -1280,7 +1443,7 @@ pub mod http {
             url: &str,
             body: Option<&serde_json::Value>,
         ) -> Result<(u16, serde_json::Value), TransportError> {
-            let mut request = self.agent.request(method, url).timeout(CONTROL_TIMEOUT);
+            let mut request = self.control.request(method, url);
             if let Some(token) = self.bearer()? {
                 request = request.set("authorization", &format!("Bearer {token}"));
             }
@@ -1448,6 +1611,10 @@ pub mod http {
         #[serde(default)]
         stage: String,
         #[serde(default)]
+        promoted: u64,
+        #[serde(default)]
+        total: u64,
+        #[serde(default)]
         failure: Option<WireFailure>,
     }
 
@@ -1610,7 +1777,7 @@ pub mod http {
             bytes: &[u8],
             progress: ProgressSink<'_>,
         ) -> Result<String, TransportError> {
-            let mut request = self.agent.put(&part.url).timeout(TRANSFER_TIMEOUT);
+            let mut request = self.transfer.put(&part.url);
             for (name, value) in &part.headers {
                 request = request.set(name, value);
             }
@@ -1639,6 +1806,16 @@ pub mod http {
                 },
                 Err(ureq::Error::Status(403, _)) => Err(TransportError::Expired(
                     "blob part grant refused (403)".to_owned(),
+                )),
+                // The multipart upload this part belongs to is gone — the
+                // store answers `NoSuchUpload` with a 404. That happens when
+                // the remote's staging sweep aborts an upload a resumed push
+                // had adopted, and it is an EXPIRY, not a failure: the replan
+                // re-asks, the remote opens a fresh upload, and the parts go
+                // again. Treating it as terminal would make an adopted upload
+                // riskier than a cold one, which would defeat adopting at all.
+                Err(ureq::Error::Status(404, _)) => Err(TransportError::Expired(
+                    "blob part upload no longer exists (404)".to_owned(),
                 )),
                 Err(ureq::Error::Status(status, response)) => Err(TransportError::Refused {
                     code: format!("http-{status}"),
@@ -1683,7 +1860,7 @@ pub mod http {
             // Presigned: the grant's own headers are the whole authority and
             // are replayed verbatim — the pack checksum lives inside the
             // signature, so changed bytes refuse at the store.
-            let mut request = self.agent.put(&grant.url).timeout(TRANSFER_TIMEOUT);
+            let mut request = self.transfer.put(&grant.url);
             for (name, value) in &grant.headers {
                 request = request.set(name, value);
             }
@@ -1725,7 +1902,11 @@ pub mod http {
             if let Ok(wire) = serde_json::from_value::<WireComplete>(value.clone()) {
                 if let Some(failure) = wire.failure {
                     return Ok(if failure.retryable {
-                        CompleteStatus::Incomplete { code: failure.code }
+                        CompleteStatus::Incomplete {
+                            code: failure.code,
+                            promoted: wire.promoted,
+                            total: wire.total,
+                        }
                     } else {
                         CompleteStatus::Failed { code: failure.code }
                     });
@@ -1787,7 +1968,7 @@ pub mod http {
             sink: &mut dyn std::io::Write,
             progress: ProgressSink<'_>,
         ) -> Result<u64, TransportError> {
-            let response = match self.agent.get(&grant.url).timeout(TRANSFER_TIMEOUT).call() {
+            let response = match self.transfer.get(&grant.url).call() {
                 Ok(response) => response,
                 Err(ureq::Error::Status(403, _)) => {
                     return Err(TransportError::Expired(

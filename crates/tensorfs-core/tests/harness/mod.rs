@@ -887,13 +887,20 @@ impl SyncTransport for FaultHub {
                     ),
                 });
             }
-            let staging_key = format!("snapshots/staging/{session_key}/{}.tfp1", claim.sha256);
-            grants.push(PackGrant {
-                pack_sha256: claim.sha256.clone(),
-                staging_key: staging_key.clone(),
-                url: format!("fake-put://{staging_key}"),
-                headers: vec![("x-amz-checksum-sha256".to_owned(), claim.sha256.clone())],
-            });
+            // th#2077: staging is CONTENT-ADDRESSED, so the key is the
+            // pack's own checksum and a later session finds what an earlier
+            // one landed. An adopted envelope is recorded and reported staged,
+            // never re-granted — which is what makes a resumed push move only
+            // the bytes that are genuinely still owed.
+            let staging_key = format!("snapshots/staging/packs/{}.tfp1", claim.sha256);
+            if !state.staged.contains_key(&staging_key) {
+                grants.push(PackGrant {
+                    pack_sha256: claim.sha256.clone(),
+                    staging_key: staging_key.clone(),
+                    url: format!("fake-put://{staging_key}"),
+                    headers: vec![("x-amz-checksum-sha256".to_owned(), claim.sha256.clone())],
+                });
+            }
             rows.push((
                 claim.sha256.clone(),
                 PackRow {
@@ -977,8 +984,10 @@ impl SyncTransport for FaultHub {
             let part_size = bound.max(1);
             let (upload_id, part_size) = match existing.get(digest.as_bytes()) {
                 Some((id, size)) if !forget => (id.clone(), *size),
+                // Content-addressed, like the key it stages on: a later
+                // session adopts the upload an earlier one opened.
                 _ => (
-                    format!("upload-{}-{}", session_key, hex_bytes(digest.as_bytes())),
+                    format!("upload-{}", hex_bytes(digest.as_bytes())),
                     part_size,
                 ),
             };
@@ -1007,19 +1016,29 @@ impl SyncTransport for FaultHub {
                     headers: vec![("x-amz-part-number".to_owned(), number.to_string())],
                 });
             }
+            // The STORE's own part list seeds the etags, not a report this
+            // session may never have received — the fake's mirror of the hub
+            // reading ListParts. Without it a session that uploaded none of
+            // the parts could never complete the upload it adopted.
+            let adopted: BTreeMap<u32, String> = state
+                .blob_parts
+                .iter()
+                .filter(|((id, _), _)| *id == upload_id)
+                .map(|((_, number), bytes)| (*number, format!("\"{}\"", sha256_hex(bytes))))
+                .collect();
             opened.push((
                 *digest.as_bytes(),
                 BlobUpload {
                     upload_id: upload_id.clone(),
                     length,
                     part_size,
-                    reported: BTreeMap::new(),
+                    reported: adopted,
                 },
             ));
             answers.push(BlobGrant {
                 digest: *digest,
                 length,
-                staging_key: format!("snapshots/staging/{session_key}/{digest}.blob"),
+                staging_key: format!("snapshots/staging/blobs/{digest}.blob"),
                 upload_id,
                 part_size,
                 parts,
@@ -1180,6 +1199,10 @@ impl SyncTransport for FaultHub {
             state.faults.incomplete_completes -= 1;
             return Ok(CompleteStatus::Incomplete {
                 code: "promote_incomplete".to_owned(),
+                // The injected fault admits nothing on purpose: this is the
+                // "standing still" shape the client's stall budget exists for.
+                promoted: 0,
+                total: 0,
             });
         }
         let Some(session) = state.sessions.get(session_key) else {
@@ -1223,6 +1246,11 @@ impl SyncTransport for FaultHub {
                 let Some(bytes) = state.blob_parts.get(&(upload_id.clone(), number)) else {
                     return Ok(CompleteStatus::Incomplete {
                         code: "upload_incomplete".to_owned(),
+                        promoted: closure
+                            .iter()
+                            .filter(|(digest, _)| state.objects.contains_key(digest))
+                            .count() as u64,
+                        total: closure.len() as u64,
                     });
                 };
                 assembled.extend_from_slice(bytes);
@@ -1243,6 +1271,11 @@ impl SyncTransport for FaultHub {
             state.blob_parts.retain(|(id, _), _| *id != upload_id);
             return Ok(CompleteStatus::Incomplete {
                 code: "promote_incomplete".to_owned(),
+                promoted: closure
+                    .iter()
+                    .filter(|(digest, _)| state.objects.contains_key(digest))
+                    .count() as u64,
+                total: closure.len() as u64,
             });
         }
         let mut promoted_this_call = 0_usize;
@@ -1258,6 +1291,11 @@ impl SyncTransport for FaultHub {
                 if budget != 0 && promoted_this_call >= budget {
                     return Ok(CompleteStatus::Incomplete {
                         code: "promote_incomplete".to_owned(),
+                        promoted: closure
+                            .iter()
+                            .filter(|(digest, _)| state.objects.contains_key(digest))
+                            .count() as u64,
+                        total: closure.len() as u64,
                     });
                 }
                 state
@@ -1270,6 +1308,11 @@ impl SyncTransport for FaultHub {
             if !state.objects.contains_key(digest) {
                 return Ok(CompleteStatus::Incomplete {
                     code: "upload_incomplete".to_owned(),
+                    promoted: closure
+                        .iter()
+                        .filter(|(digest, _)| state.objects.contains_key(digest))
+                        .count() as u64,
+                    total: closure.len() as u64,
                 });
             }
         }
@@ -2025,13 +2068,23 @@ impl SyncTransport for DirTransport {
                 }
             }
         }
-        for row in value["closure"].as_array().into_iter().flatten() {
-            let hex = row[0].as_str().unwrap_or_default();
-            if !self.root.join("objects").join(hex).is_file() {
-                return Ok(CompleteStatus::Incomplete {
-                    code: "upload_incomplete".to_owned(),
-                });
-            }
+        let rows: Vec<&serde_json::Value> =
+            value["closure"].as_array().into_iter().flatten().collect();
+        let admitted = rows
+            .iter()
+            .filter(|row| {
+                self.root
+                    .join("objects")
+                    .join(row[0].as_str().unwrap_or_default())
+                    .is_file()
+            })
+            .count() as u64;
+        if admitted < rows.len() as u64 {
+            return Ok(CompleteStatus::Incomplete {
+                code: "upload_incomplete".to_owned(),
+                promoted: admitted,
+                total: rows.len() as u64,
+            });
         }
         let expected = value["expected_head"]
             .as_str()
