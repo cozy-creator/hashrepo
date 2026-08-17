@@ -292,6 +292,87 @@ fn a_declaration_below_the_run_floor_cuts_nothing_on_either_side() {
     assert_eq!(plan, 1, "a KB-scale interleave is not seam territory");
 }
 
+/// A GGUF v3 file holding one 2-D `I8` tensor: metadata, directory, alignment
+/// padding, then the tensor. `ne` is fastest-varying first, which is the point
+/// of the fixture — the contract vocabulary is logical row-major, so the
+/// planner has to reverse it before a seam declaration can apply.
+fn gguf(name: &str, rows: u64, columns: u64, data: &[u8]) -> Vec<u8> {
+    const ALIGNMENT: u64 = 32;
+    let mut file = Vec::new();
+    file.extend_from_slice(b"GGUF");
+    file.extend_from_slice(&3_u32.to_le_bytes());
+    file.extend_from_slice(&1_u64.to_le_bytes());
+    file.extend_from_slice(&1_u64.to_le_bytes());
+
+    file.extend_from_slice(&(b"general.alignment".len() as u64).to_le_bytes());
+    file.extend_from_slice(b"general.alignment");
+    file.extend_from_slice(&4_u32.to_le_bytes());
+    file.extend_from_slice(&(ALIGNMENT as u32).to_le_bytes());
+
+    file.extend_from_slice(&(name.len() as u64).to_le_bytes());
+    file.extend_from_slice(name.as_bytes());
+    file.extend_from_slice(&2_u32.to_le_bytes());
+    file.extend_from_slice(&columns.to_le_bytes());
+    file.extend_from_slice(&rows.to_le_bytes());
+    file.extend_from_slice(&24_u32.to_le_bytes()); // I8
+    file.extend_from_slice(&0_u64.to_le_bytes());
+
+    let padding = (file.len() as u64).next_multiple_of(ALIGNMENT) - file.len() as u64;
+    file.extend(std::iter::repeat_n(0_u8, padding as usize));
+    file.extend_from_slice(data);
+    file
+}
+
+#[test]
+fn a_gguf_twin_shares_every_seam_run_with_the_safetensors_fused_file() {
+    // Cross-format sharing under one contract. The GGUF carries the same
+    // fused tensor as `fused_file`, and the contract cuts it at the same 12
+    // head-slice boundaries — so the two containers, written by two different
+    // ecosystems, name the same objects.
+    let mut data = Vec::new();
+    for head in 0..HEADS {
+        for part in 0..3_u8 {
+            data.extend_from_slice(&slice(part, head));
+        }
+    }
+    let twin = gguf("blocks.0.attn.qkv_proj.weight", 3 * HEADS, RUN, &data);
+
+    let plan = plan_and_hash_under(twin.as_slice(), Some(&contract(FUSED))).expect("plans");
+    assert_eq!(plan.planner(), PlannerId::GgufV1);
+    assert_eq!(plan.contract().to_string(), "test.h3-fused@1");
+
+    let gguf_runs: HashSet<ObjectDigest> = plan
+        .objects()
+        .iter()
+        .filter(|object| object.kind() == RegionKind::Tensor)
+        .map(|object| object.digest())
+        .collect();
+    assert_eq!(gguf_runs.len(), 12, "56-head interleave in miniature");
+    assert!(
+        gguf_runs.is_subset(&tensor_digests(&fused_file(), Some(&contract(FUSED)))),
+        "the GGUF's seam runs are the safetensors twin's objects"
+    );
+
+    // The inventory reads GGUF's reversed `ne` back into logical order and
+    // names its type the way safetensors would, which is what lets one
+    // contract describe both containers.
+    let taken = inventory(twin.as_slice()).unwrap().unwrap();
+    assert_eq!(taken.tensors()[0].shape(), [3 * HEADS, RUN]);
+    assert_eq!(taken.tensors()[0].dtype(), "I8");
+
+    // Red proof: without the contract the GGUF tensor is one object the
+    // safetensors file does not hold.
+    let plain = plan_and_hash_under(twin.as_slice(), None).expect("plans");
+    let plain_runs: Vec<ObjectDigest> = plain
+        .objects()
+        .iter()
+        .filter(|object| object.kind() == RegionKind::Tensor)
+        .map(|object| object.digest())
+        .collect();
+    assert_eq!(plain_runs.len(), 1);
+    assert!(!gguf_runs.contains(&plain_runs[0]));
+}
+
 #[test]
 fn the_shipped_h3_pair_declares_the_same_runs_on_both_sides() {
     // Pure arithmetic against the MEASURED H3 geometry (hidden 5376, 56 heads
