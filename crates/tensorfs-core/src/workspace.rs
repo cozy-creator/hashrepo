@@ -19,6 +19,7 @@ use std::sync::Mutex;
 use crate::workspace_db::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 
+use crate::layout::{Layout, LayoutError};
 use crate::object::ObjectDigest;
 use crate::planner::{ByteSource as _, PlanError, PlannerId, plan};
 use crate::store::{ObjectStore, StoreError};
@@ -110,6 +111,8 @@ pub enum WorkspaceError {
     Db(#[from] crate::workspace_db::Error),
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error(transparent)]
+    Layout(#[from] LayoutError),
     #[error("path fact is not canonical: {0}")]
     Tfm1(#[from] Tfm1Error),
     #[error("workspace {0:?} does not exist")]
@@ -202,9 +205,11 @@ impl WorkspaceStore {
                  length INTEGER NOT NULL,
                  PRIMARY KEY (inode, ordinal)
              );
+             -- The roots index. Manifest BYTES live in the object store at
+             -- their own id (a TFM1 id is the SHA-256 of its bytes), so this
+             -- row is a root and a generation stamp, never a second copy.
              CREATE TABLE IF NOT EXISTS snapshots (
                  id BLOB PRIMARY KEY,
-                 blob BLOB NOT NULL,
                  sealed_generation INTEGER NOT NULL
              );
              CREATE TABLE IF NOT EXISTS leases (
@@ -513,11 +518,16 @@ impl WorkspaceStore {
                 ..workspace
             };
             let snapshot = build_snapshot(&tx, &workspace, parent)?;
-            let bytes = snapshot.to_bytes();
+            // The manifest is an object like any other, admitted at its own
+            // id through the verifying writer. Admitting before the row lands
+            // means a crash between them leaves an unreferenced object GC
+            // reclaims, never a root naming bytes that were never written.
+            let admitted = self.store.put_bytes(&snapshot.to_bytes())?;
             let id = snapshot.snapshot_id();
+            debug_assert_eq!(admitted.digest().as_bytes(), id.as_bytes());
             tx.execute(
-                "INSERT OR IGNORE INTO snapshots (id, blob, sealed_generation) VALUES (?1, ?2, ?3)",
-                params![id.as_bytes().as_slice(), bytes, sealed_generation as i64],
+                "INSERT OR IGNORE INTO snapshots (id, sealed_generation) VALUES (?1, ?2)",
+                params![id.as_bytes().as_slice(), sealed_generation as i64],
             )?;
             tx.commit()?;
             return Ok(id);
@@ -668,21 +678,72 @@ impl WorkspaceStore {
         })
     }
 
-    /// Loads and re-verifies one sealed snapshot's canonical bytes.
+    /// Loads one sealed snapshot: the row is the root, the bytes are the
+    /// immutable object it protects.
+    ///
+    /// Reading does not re-hash. The manifest object was verified at
+    /// admission and the digest path is its identity; a read-path rehash is
+    /// exactly the cost the admission-time ruling exists to avoid.
     pub fn load_snapshot(&self, id: &SnapshotId) -> Result<Snapshot, WorkspaceError> {
         let connection = self.connection.lock().expect("metadata mutex is healthy");
-        let blob: Option<Vec<u8>> = connection
+        self.read_rooted_snapshot(&connection, id)
+    }
+
+    /// Pins the root row and reads the blob it protects, inside whatever
+    /// transaction the caller holds. `collect` serializes against that
+    /// transaction, so the manifest object cannot be reclaimed between the
+    /// two steps.
+    fn read_rooted_snapshot(
+        &self,
+        connection: &Connection,
+        id: &SnapshotId,
+    ) -> Result<Snapshot, WorkspaceError> {
+        let rooted: Option<i64> = connection
             .query_row(
-                "SELECT blob FROM snapshots WHERE id = ?1",
+                "SELECT sealed_generation FROM snapshots WHERE id = ?1",
                 params![id.as_bytes().as_slice()],
                 |row| row.get(0),
             )
             .optional()?;
-        let blob = blob.ok_or(WorkspaceError::UnknownSnapshot(*id))?;
-        if SnapshotId::of(&blob) != *id {
+        if rooted.is_none() {
+            return Err(WorkspaceError::UnknownSnapshot(*id));
+        }
+        self.read_manifest_object(id)
+    }
+
+    /// Decodes the manifest object stored at a snapshot's own id.
+    ///
+    /// A manifest is the root of the reachability graph, so its id check
+    /// stays: bounded by the manifest, never on a data read path, and the one
+    /// thing that keeps an unreadable root from silently un-rooting every
+    /// object it names. Data objects are still never rehashed on read.
+    fn read_manifest_object(&self, id: &SnapshotId) -> Result<Snapshot, WorkspaceError> {
+        let digest = ObjectDigest::from_bytes(*id.as_bytes());
+        let mut file = self
+            .store
+            .open_object(&digest)
+            .map_err(|_| WorkspaceError::SnapshotCorrupt)?;
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut bytes).map_err(StoreError::from)?;
+        if SnapshotId::of(&bytes) != *id {
             return Err(WorkspaceError::SnapshotCorrupt);
         }
-        Ok(decode(&blob)?)
+        Ok(decode(&bytes)?)
+    }
+
+    /// The projected trees and refs beside this store.
+    #[must_use]
+    pub const fn layout(&self) -> Layout<'_> {
+        Layout::new(&self.store)
+    }
+
+    /// Projects one rooted snapshot as `snapshots/<id>/…` and returns the
+    /// tree path. Zero bytes are copied: directories are directories, blob
+    /// files are relative symlinks into `objects/`, tensor files are pointer
+    /// stubs. The tree is disposable and pins nothing.
+    pub fn project_snapshot(&self, id: &SnapshotId) -> Result<std::path::PathBuf, WorkspaceError> {
+        let snapshot = self.load_snapshot(id)?;
+        Ok(self.layout().project(&snapshot)?)
     }
 
     /// Adopts one canonical TFM1 snapshot fetched from a remote. The bytes
@@ -705,22 +766,37 @@ impl WorkspaceStore {
             }
         }
         let id = snapshot.snapshot_id();
+        self.store.put_bytes(bytes)?;
         let connection = self.connection.lock().expect("metadata mutex is healthy");
         connection.execute(
-            "INSERT OR IGNORE INTO snapshots (id, blob, sealed_generation) VALUES (?1, ?2, 0)",
-            params![id.as_bytes().as_slice(), bytes],
+            "INSERT OR IGNORE INTO snapshots (id, sealed_generation) VALUES (?1, 0)",
+            params![id.as_bytes().as_slice()],
         )?;
         Ok(id)
     }
 
+    /// Deletes one snapshot root, then its projected tree, then every ref
+    /// that pointed at it — in that order.
+    ///
+    /// A tree without a root is inert garbage the next scrub removes, while a
+    /// root without a tree is merely unprojected, so a crash between the steps
+    /// costs nothing. The manifest object and every object it named become
+    /// unreferenced and are GC's problem, not this call's.
     pub fn delete_snapshot(&self, id: &SnapshotId) -> Result<(), WorkspaceError> {
-        let connection = self.connection.lock().expect("metadata mutex is healthy");
-        let deleted = connection.execute(
-            "DELETE FROM snapshots WHERE id = ?1",
-            params![id.as_bytes().as_slice()],
-        )?;
-        if deleted == 0 {
-            return Err(WorkspaceError::UnknownSnapshot(*id));
+        {
+            let connection = self.connection.lock().expect("metadata mutex is healthy");
+            let deleted = connection.execute(
+                "DELETE FROM snapshots WHERE id = ?1",
+                params![id.as_bytes().as_slice()],
+            )?;
+            if deleted == 0 {
+                return Err(WorkspaceError::UnknownSnapshot(*id));
+            }
+        }
+        let layout = self.layout();
+        layout.remove_tree(id)?;
+        for name in layout.refs_to(id)? {
+            layout.remove_ref(&name)?;
         }
         Ok(())
     }
@@ -772,24 +848,20 @@ impl WorkspaceStore {
     ) -> Result<(LeaseId, Snapshot), WorkspaceError> {
         let mut connection = self.connection.lock().expect("metadata mutex is healthy");
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let blob: Option<Vec<u8>> = tx
-            .query_row(
-                "SELECT blob FROM snapshots WHERE id = ?1",
-                params![snapshot.as_bytes().as_slice()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let blob = blob.ok_or(WorkspaceError::UnknownSnapshot(*snapshot))?;
-        if SnapshotId::of(&blob) != *snapshot {
-            return Err(WorkspaceError::SnapshotCorrupt);
-        }
-        let decoded = decode(&blob)?;
+        let decoded = self.read_rooted_snapshot(&tx, snapshot)?;
         tx.execute(
             "INSERT INTO leases (kind, holder, workspace_id, inode)
                  VALUES (?1, ?2, NULL, NULL)",
             params![LeaseKind::PendingSync.to_row(), holder],
         )?;
         let lease = LeaseId(tx.last_insert_rowid());
+        // The manifest object is pinned with the closure it names: a delete
+        // racing the transfer must not take the bytes being streamed, and the
+        // manifest is now one of those bytes.
+        tx.execute(
+            "INSERT OR IGNORE INTO lease_objects (lease, digest) VALUES (?1, ?2)",
+            params![lease.0, snapshot.as_bytes().as_slice()],
+        )?;
         for (_path, entry) in decoded.entries() {
             if let Entry::File { body, .. } = entry {
                 for record in body.records().iter() {
@@ -866,15 +938,21 @@ impl WorkspaceStore {
             }
         }
         {
-            let mut blobs = tx.prepare("SELECT id, blob FROM snapshots")?;
-            let mut rows = blobs.query([])?;
-            while let Some(row) = rows.next()? {
-                let id = digest_from_row(row.get::<_, Vec<u8>>(0)?)?;
-                let blob: Vec<u8> = row.get(1)?;
-                if SnapshotId::of(&blob) != SnapshotId::from_bytes(*id.as_bytes()) {
-                    return Err(WorkspaceError::SnapshotCorrupt);
+            let mut ids = Vec::new();
+            {
+                let mut rooted = tx.prepare("SELECT id FROM snapshots")?;
+                let mut rows = rooted.query([])?;
+                while let Some(row) = rows.next()? {
+                    ids.push(digest_from_row(row.get::<_, Vec<u8>>(0)?)?);
                 }
-                for (_, entry) in decode(&blob)?.entries() {
+            }
+            for id in ids {
+                // A manifest is an object at its own id, so a root row roots
+                // the manifest itself as well as everything it names.
+                roots.insert(id);
+                let snapshot =
+                    self.read_manifest_object(&SnapshotId::from_bytes(*id.as_bytes()))?;
+                for (_, entry) in snapshot.entries() {
                     if let Entry::File { body, .. } = entry {
                         for record in body.records().iter() {
                             if let FileRecord::Data { digest, .. } = record {

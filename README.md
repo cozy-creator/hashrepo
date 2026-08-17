@@ -59,6 +59,22 @@ python/src/tensorfs/     Python local CAS, direct tensor reads/writes
 *.go                     Go manifest, planning, and promotion engine
 ```
 
+A store on disk:
+
+```text
+<root>/objects/sha256/xx/yy/<hex>   every CAS object, 0444: blobs AND chunks
+<root>/snapshots/<snapshot-id>/…    projected trees — dirs, relative symlinks
+                                    into objects/, TFSSTUB1 stubs for tensors
+<root>/refs/<name>                  one snapshot id + LF, swapped by rename(2)
+<root>/tmp/                         leased admission temps
+<root>/metadata.sqlite3             workspaces, roots index, leases, GC state
+```
+
+A manifest is an object at its own id — a TFM1 snapshot id IS the SHA-256 of
+its bytes — so there is no manifest namespace. Trees are projections: zero
+bytes copied, derivable from the manifest, disposable, and they pin nothing.
+`docs/mixed-cas-layout.md` is the design.
+
 ## The Python distribution
 
 `tensorfs` is **one** PyPI distribution carrying two things:

@@ -315,6 +315,13 @@ fn a_pull_killed_repeatedly_converges_byte_exactly_without_re_downloading() {
     let expected_objects = data_digests(&publisher, &id).len();
 
     let sink = Scratch::new("pull-kill-sink");
+    // Lay the store down before any child runs. The consistency oracle
+    // refuses to vouch for a root with no `objects/sha256`, and a child
+    // killed inside its own first `open` legitimately leaves one — a real
+    // race that surfaced on the Windows runner. In production a store is
+    // opened before a transfer starts, so this is the honest fixture, not a
+    // loosened assertion.
+    drop(WorkspaceStore::open(sink.path()).expect("the sink store initializes"));
     let done = sink.path().join("done.marker");
     let warm_sink = Scratch::new("pull-kill-warm");
     let cycle = calibrate("pull", warm_sink.path(), hub.path(), &id, &done);

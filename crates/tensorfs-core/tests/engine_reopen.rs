@@ -79,15 +79,26 @@ fn a_turso_written_database_reopens_under_rusqlite_with_full_integrity() {
     assert_eq!(name, "main");
     assert!(generation >= 1);
 
-    let (id, blob): (Vec<u8>, Vec<u8>) = connection
-        .query_row("SELECT id, blob FROM snapshots", [], |row| {
+    let (id, generation): (Vec<u8>, i64) = connection
+        .query_row("SELECT id, sealed_generation FROM snapshots", [], |row| {
             Ok((row.get(0)?, row.get(1)?))
         })
         .expect("snapshot row reads");
     let id: [u8; 32] = id.try_into().expect("snapshot ids are 32 bytes");
     assert_eq!(SnapshotId::from_bytes(id), sealed);
-    // The blob still hashes to its id under the other engine's read.
-    assert_eq!(SnapshotId::of(&blob), sealed);
+    assert!(generation >= 1);
+    // The row is a roots index; the manifest BYTES are an object at the id,
+    // and they still hash to it when read outside the library entirely.
+    let hex = sealed.to_string();
+    let manifest = root
+        .join("objects/sha256")
+        .join(&hex[..2])
+        .join(&hex[2..4])
+        .join(&hex);
+    assert_eq!(
+        SnapshotId::of(&std::fs::read(&manifest).expect("the manifest object reads")),
+        sealed
+    );
 
     let records: i64 = connection
         .query_row("SELECT COUNT(*) FROM object_maps", [], |row| row.get(0))

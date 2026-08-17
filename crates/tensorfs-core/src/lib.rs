@@ -1,5 +1,10 @@
 #![forbid(unsafe_code)]
 
+/// Snapshot symlink trees, pointer stubs and refs beside the object store.
+/// Shares the store's real-filesystem platform gate and needs nothing else —
+/// a projection is a pure function of a manifest and the store root.
+#[cfg(all(feature = "store", any(unix, windows)))]
+pub mod layout;
 pub mod object;
 pub mod planner;
 pub mod source;
