@@ -2,6 +2,7 @@ use std::fmt;
 
 use sha2::{Digest, Sha256};
 
+use crate::contract::{Contract, Stamp};
 use crate::planner::{self, ByteSource, Plan, PlanError, PlannerId, RegionKind};
 
 const HASH_BUFFER_SIZE: usize = 1024 * 1024;
@@ -76,6 +77,7 @@ impl PlannedObject {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HashedPlan {
     planner: PlannerId,
+    contract: Stamp,
     file_size: u64,
     objects: Vec<PlannedObject>,
 }
@@ -84,6 +86,12 @@ impl HashedPlan {
     #[must_use]
     pub const fn planner(&self) -> PlannerId {
         self.planner
+    }
+
+    /// The layout contract that directed these boundaries.
+    #[must_use]
+    pub const fn contract(&self) -> &Stamp {
+        &self.contract
     }
 
     #[must_use]
@@ -100,8 +108,28 @@ impl HashedPlan {
 /// Selects the sole canonical planner and hashes each resulting object from one
 /// stable source snapshot. Callers cannot supply a planner ID or boundaries.
 pub fn plan_and_hash<S: ByteSource + ?Sized>(source: &S) -> Result<HashedPlan, PlanError> {
-    let plan = planner::plan(source)?;
+    plan_and_hash_under(source, None)
+}
+
+/// The same, under a declared layout contract: fused tensors are cut at the
+/// contract's seams before the grid, and the resulting plan carries the stamp
+/// that explains those cuts.
+pub fn plan_and_hash_under<S: ByteSource + ?Sized>(
+    source: &S,
+    contract: Option<&Contract>,
+) -> Result<HashedPlan, PlanError> {
+    let plan = planner::plan_with(source, contract)?;
     hash_plan(source, &plan)
+}
+
+/// Hashes every object of an already-computed plan from one stable source
+/// snapshot. Public so a caller that planned under a contract can hash that
+/// exact plan rather than re-deriving one.
+pub fn hash_planned<S: ByteSource + ?Sized>(
+    source: &S,
+    plan: &Plan,
+) -> Result<HashedPlan, PlanError> {
+    hash_plan(source, plan)
 }
 
 pub(crate) fn hash_plan<S: ByteSource + ?Sized>(
@@ -147,6 +175,7 @@ pub(crate) fn hash_plan<S: ByteSource + ?Sized>(
 
     let hashed = HashedPlan {
         planner: plan.planner,
+        contract: plan.contract.clone(),
         file_size: plan.file_size,
         objects,
     };
@@ -166,6 +195,7 @@ mod tests {
     fn hashes_only_the_bytes_in_each_planned_object() {
         let source = b"sameother-same".as_slice();
         let plan = Plan {
+            contract: Stamp::None,
             planner: PlannerId::SafetensorsV1,
             file_size: source.len() as u64,
             regions: vec![
@@ -200,6 +230,7 @@ mod tests {
     fn refuses_a_plan_for_a_different_source_length() {
         let source = b"bytes".as_slice();
         let plan = Plan {
+            contract: Stamp::None,
             planner: PlannerId::BlobV1,
             file_size: 4,
             regions: vec![Region {
@@ -237,6 +268,7 @@ mod tests {
     #[test]
     fn propagates_source_read_failure_without_emitting_an_object() {
         let plan = Plan {
+            contract: Stamp::None,
             planner: PlannerId::BlobV1,
             file_size: 4,
             regions: vec![Region {

@@ -32,13 +32,13 @@
     {
       "name": "tree",
       "fixture": "fixtures/tree.hex",
-      "snapshot_id": "ccc398d28e55aa17fd574573dc4bc0ad026592ac8fefed0333c05764cbcb0b94",
+      "snapshot_id": "0d8e9898c8170405fdb7dad9fde2b390fbf1528d482daa517be121853817aa37",
       "description": "a mixed tree: explicit directories, safetensors records, a config blob, an executable blob"
     },
     {
       "name": "sparse-tensor",
       "fixture": "fixtures/sparse-tensor.hex",
-      "snapshot_id": "cbd5d5b0d83d912b05504535735708b8912ff12bb48e2aaef6bab94a18463033",
+      "snapshot_id": "7e6c88eb031add69abcc952e24b33ad3c831d61c4daeb3ef5a3e60f2cf5a13e8",
       "description": "hole, data, and a beyond-object-size trailing hole in a tensor body"
     },
     {
@@ -62,7 +62,7 @@
     {
       "name": "boundary-objects",
       "fixture": "fixtures/boundary-objects.hex",
-      "snapshot_id": "d4e6c960840848b0a28ee9f71aa7fd1e23272a041fe21e146778fa8209855401",
+      "snapshot_id": "82dbe014aeea76480e04f8250951342b8d18a58446d4a9f89506c7c3860b8bba",
       "description": "tensor data record lengths 1, 64 MiB minus one, and exactly 64 MiB, plus an empty blob"
     },
     {
@@ -72,9 +72,15 @@
       "description": "names the empty snapshot as its explicit parent history"
     },
     {
+      "name": "contract-stamped",
+      "fixture": "fixtures/contract-stamped.hex",
+      "snapshot_id": "63c99e48e27e34342706d3d1266838c8813447a8cbf3e74feffd5e6357ec9ff6",
+      "description": "tensor bodies naming the layout contracts that directed their chunking"
+    },
+    {
       "name": "gguf-provenance",
       "fixture": "fixtures/gguf-provenance.hex",
-      "snapshot_id": "7fee109aa9cec7c36a2109ce5d1c99be9d2e4cde8d37c5c2e8a76003dce978bd",
+      "snapshot_id": "cac63d48aa0fd5d8c2c75321fe0e664ed5f2aa8a7c46789631b55d85cf65dbd8",
       "description": "a gguf-v1 planned file pinning the remaining tensor planner tag"
     }
   ],
@@ -178,6 +184,31 @@
       "name": "unknown-planner",
       "fixture": "fixtures/refusal-unknown-planner.hex",
       "reason": "unknown-planner"
+    },
+    {
+      "name": "contract-version-without-name",
+      "fixture": "fixtures/refusal-contract-version-without-name.hex",
+      "reason": "contract-version"
+    },
+    {
+      "name": "contract-name-without-version",
+      "fixture": "fixtures/refusal-contract-name-without-version.hex",
+      "reason": "contract-version"
+    },
+    {
+      "name": "contract-name-uppercase",
+      "fixture": "fixtures/refusal-contract-name-uppercase.hex",
+      "reason": "contract-name"
+    },
+    {
+      "name": "contract-name-no-producer",
+      "fixture": "fixtures/refusal-contract-name-no-producer.hex",
+      "reason": "contract-name"
+    },
+    {
+      "name": "contract-name-too-long",
+      "fixture": "fixtures/refusal-contract-name-too-long.hex",
+      "reason": "contract-name"
     },
     {
       "name": "retired-raw-planner",

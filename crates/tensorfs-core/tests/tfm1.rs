@@ -1,3 +1,4 @@
+use tensorfs_core::contract::Stamp;
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::{MAX_OBJECT_SIZE, PlannerId};
 use tensorfs_core::tfm1::{
@@ -77,10 +78,11 @@ fn the_empty_snapshot_has_one_canonical_encoding() {
 #[test]
 fn the_hand_assembled_grammar_matches_the_builder_byte_for_byte() {
     let mut builder = SnapshotBuilder::new(None);
-    builder.file(
+    builder.file_under(
         "model.safetensors",
         true,
         PlannerId::SafetensorsV1,
+        Stamp::named("test.layout", 3).expect("a valid handle"),
         vec![data(0xAA, 10), FileRecord::Hole { length: 5 }],
     );
     builder.file(
@@ -98,6 +100,9 @@ fn the_hand_assembled_grammar_matches_the_builder_byte_for_byte() {
         .path("model.safetensors")
         .bytes(&[2, 1, 1]) // file, executable, safetensors-v1
         .u64(15) // logical size
+        .bytes(&[11]) // contract name length
+        .bytes(b"test.layout")
+        .bytes(&3_u32.to_le_bytes()) // contract version
         .u64(2) // record count
         .bytes(&[1]) // data tag
         .bytes(&[0xAA; 32])
@@ -472,6 +477,7 @@ fn decode_bounds_declared_counts_before_allocating() {
         .path("f")
         .bytes(&[2, 0, 1]) // file, not executable, safetensors-v1
         .u64(0)
+        .bytes(&[0, 0, 0, 0, 0]) // contract:none
         .u64(u64::MAX)
         .0;
     assert_eq!(reason(decode(&absurd_records).unwrap_err()), "record-limit");
@@ -483,6 +489,7 @@ fn decode_bounds_declared_counts_before_allocating() {
         .path("f")
         .bytes(&[2, 0, 1])
         .u64(9)
+        .bytes(&[0, 0, 0, 0, 0]) // contract:none
         .u64(1)
         .0;
     assert_eq!(
@@ -517,7 +524,7 @@ fn decode_refuses_unknown_tags_and_invalid_flags() {
     assert_eq!(
         reason(
             decode(&file(&[
-                2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+                2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
             ]))
             .unwrap_err()
         ),
@@ -526,7 +533,7 @@ fn decode_refuses_unknown_tags_and_invalid_flags() {
     assert_eq!(
         reason(
             decode(&file(&[
-                2, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+                2, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
             ]))
             .unwrap_err()
         ),
@@ -540,6 +547,7 @@ fn decode_refuses_unknown_tags_and_invalid_flags() {
         .path("f")
         .bytes(&[2, 0, 1])
         .u64(1)
+        .bytes(&[0, 0, 0, 0, 0]) // contract:none
         .u64(1)
         .bytes(&[9])
         .u64(1)

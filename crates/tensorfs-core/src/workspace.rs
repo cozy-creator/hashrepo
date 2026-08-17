@@ -16,12 +16,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::workspace_db::{Connection, OptionalExtension, TransactionBehavior, params};
+use crate::workspace_db::{Connection, OptionalExtension, Param, TransactionBehavior, params};
 use thiserror::Error;
 
+use crate::contract::{Registry, Stamp};
 use crate::layout::{Layout, LayoutError};
 use crate::object::ObjectDigest;
-use crate::planner::{ByteSource as _, PlanError, PlannerId, plan};
+use crate::planner::{ByteSource as _, PlanError, PlannerId, inventory, plan_with};
 use crate::store::{ObjectStore, StoreError};
 use crate::tfm1::{
     Entry, FileBody, FileRecord, HeadTree, Snapshot, SnapshotBuilder, SnapshotId, Tfm1Error,
@@ -261,6 +262,11 @@ fn manifest_objects(snapshot: &Snapshot, into: &mut HashSet<ObjectDigest>) {
 pub struct WorkspaceStore {
     store: ObjectStore,
     connection: Mutex<Connection>,
+    /// The contracts a seal may identify a file against. Sealing is where
+    /// this store canonicalizes bytes, so it is where contract-directed
+    /// chunking has to happen: the seal reads the header inventory, picks the
+    /// contract, cuts the seams, and records the stamp that explains them.
+    registry: Registry,
 }
 
 impl WorkspaceStore {
@@ -286,6 +292,9 @@ impl WorkspaceStore {
                  kind INTEGER NOT NULL,
                  executable INTEGER NOT NULL DEFAULT 0,
                  planner INTEGER,
+                 -- The layout contract the last seal identified, `name@version`.
+                 -- NULL is contract:none: the plain per-tensor grid.
+                 contract TEXT,
                  symlink_target TEXT
              );
              CREATE TABLE IF NOT EXISTS dirents (
@@ -334,7 +343,28 @@ impl WorkspaceStore {
         Ok(Self {
             store,
             connection: Mutex::new(connection),
+            // The shipped library, which is data in `spec/v1/contracts/`. A
+            // caller that ingests a family we do not ship supplies its own.
+            registry: Registry::builtin().expect("the shipped contracts parse"),
         })
+    }
+
+    /// Replaces the contract library this store seals against.
+    ///
+    /// Chunking stays a pure function of (bytes, contract): the registry only
+    /// decides WHICH contract a file is identified as, and the answer is
+    /// recorded in the snapshot, so a later registry cannot silently
+    /// reinterpret a sealed snapshot.
+    #[must_use]
+    pub fn with_registry(mut self, registry: Registry) -> Self {
+        self.registry = registry;
+        self
+    }
+
+    /// The contracts this store identifies files against.
+    #[must_use]
+    pub const fn registry(&self) -> &Registry {
+        &self.registry
     }
 
     /// Whether this store root can be opened by several processes at once.
@@ -555,9 +585,12 @@ impl WorkspaceStore {
             let mut jobs = Vec::new();
             for (path, entry) in tree.entries() {
                 if let TreeEntry::File {
-                    planner, records, ..
+                    planner,
+                    contract,
+                    records,
+                    ..
                 } = entry
-                    && let Some(job) = self.plan_seal_job(path, *planner, records)?
+                    && let Some(job) = self.plan_seal_job(path, *planner, contract, records)?
                 {
                     jobs.push(job);
                 }
@@ -596,8 +629,12 @@ impl WorkspaceStore {
                 let inode = resolve_path(&tx, &workspace, &job.path)?
                     .ok_or_else(|| WorkspaceError::Missing(job.path.clone()))?;
                 tx.execute(
-                    "UPDATE inodes SET planner = ?1 WHERE id = ?2",
-                    params![planner_to_row(job.planner), inode.id],
+                    "UPDATE inodes SET planner = ?1, contract = ?2 WHERE id = ?3",
+                    params![
+                        planner_to_row(job.planner),
+                        contract_to_row(&job.contract),
+                        inode.id
+                    ],
                 )?;
             }
             let sealed_generation = if jobs.is_empty() {
@@ -638,6 +675,7 @@ impl WorkspaceStore {
         &self,
         path: &str,
         stored_planner: PlannerId,
+        stored_contract: &Stamp,
         records: &[FileRecord],
     ) -> Result<Option<SealJob>, WorkspaceError> {
         if records.is_empty() {
@@ -659,18 +697,26 @@ impl WorkspaceStore {
             // zeros included, read through the record source — as one object.
             return Ok(Some(self.blob_seal_job(path, &source)?));
         }
-        let planned = plan(&source)?;
+        // Identification is header-only and happens before planning: the
+        // winning contract's seams then direct the cuts, and its stamp goes
+        // into the manifest beside them.
+        let detected = match inventory(&source)? {
+            Some(inventory) => self.registry.detect(&inventory).stamp().clone(),
+            None => Stamp::None,
+        };
+        let planned = plan_with(&source, self.registry.get(&detected))?;
         if planned.planner() == PlannerId::BlobV1 {
             // Already committed as its single whole-file object: reuse by
             // (offset, length) with ZERO re-hashing — the blob extension of
             // the #61 double-hash fence. Anything else re-streams once.
             if let [FileRecord::Data { .. }] = records {
-                if stored_planner == PlannerId::BlobV1 {
+                if stored_planner == PlannerId::BlobV1 && stored_contract.is_none() {
                     return Ok(None);
                 }
                 return Ok(Some(SealJob {
                     path: path.to_owned(),
                     planner: PlannerId::BlobV1,
+                    contract: Stamp::None,
                     records: records.to_vec(),
                     update_records: false,
                     new_digests: Vec::new(),
@@ -696,12 +742,15 @@ impl WorkspaceStore {
                     *start == region.offset() && *length == region.length()
                 });
         if boundaries_match {
-            if planned.planner() == stored_planner {
+            if planned.planner() == stored_planner && planned.contract() == stored_contract {
                 return Ok(None);
             }
+            // The boundaries already agree, so nothing is re-admitted; only
+            // the provenance the manifest will carry changes.
             return Ok(Some(SealJob {
                 path: path.to_owned(),
                 planner: planned.planner(),
+                contract: planned.contract().clone(),
                 records: records.to_vec(),
                 update_records: false,
                 new_digests: Vec::new(),
@@ -748,6 +797,7 @@ impl WorkspaceStore {
         Ok(Some(SealJob {
             path: path.to_owned(),
             planner: planned.planner(),
+            contract: planned.contract().clone(),
             records: new_records,
             update_records: true,
             new_digests,
@@ -766,6 +816,7 @@ impl WorkspaceStore {
         Ok(SealJob {
             path: path.to_owned(),
             planner: PlannerId::BlobV1,
+            contract: Stamp::None,
             records: vec![FileRecord::Data {
                 digest: admitted.digest(),
                 length: admitted.length(),
@@ -1291,6 +1342,7 @@ struct WorkspaceRow {
 struct SealJob {
     path: String,
     planner: PlannerId,
+    contract: Stamp,
     records: Vec<FileRecord>,
     update_records: bool,
     new_digests: Vec<ObjectDigest>,
@@ -1425,6 +1477,23 @@ fn resolve_new_leaf(
 }
 
 /// Row values mirror the TFM1 planner tags; 3, the retired raw grid, is gone.
+/// The stamp as the metadata row stores it: NULL is contract:none.
+fn contract_to_row(contract: &Stamp) -> Param {
+    match contract {
+        Stamp::None => Param::Null,
+        named => Param::Text(named.to_string()),
+    }
+}
+
+/// The stored stamp, or contract:none when absent. An unreadable value reads
+/// as none: it can only cost a re-plan, never correctness, and refusing to
+/// open a workspace over it would be worse.
+fn contract_from_row(stored: Option<&str>) -> Stamp {
+    stored
+        .map(|text| Stamp::parse(text).unwrap_or_default())
+        .unwrap_or_default()
+}
+
 fn planner_to_row(planner: PlannerId) -> i64 {
     match planner {
         PlannerId::SafetensorsV1 => 1,
@@ -1786,17 +1855,18 @@ fn stage_builder(
     }
     for (inode, mut paths) in paths_by_inode {
         paths.sort();
-        let (executable, planner): (i64, i64) = connection.query_row(
-            "SELECT executable, planner FROM inodes WHERE id = ?1",
+        let (executable, planner, contract): (i64, i64, Option<String>) = connection.query_row(
+            "SELECT executable, planner, contract FROM inodes WHERE id = ?1",
             params![inode],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
         let records = read_records(connection, inode)?;
         let carrier = paths[0].clone();
-        builder.file(
+        builder.file_under(
             carrier.clone(),
             executable == 1,
             planner_from_row(planner),
+            contract_from_row(contract.as_deref()),
             records,
         );
         for path in paths.into_iter().skip(1) {

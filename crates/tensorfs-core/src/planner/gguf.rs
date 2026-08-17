@@ -1,7 +1,11 @@
 use std::collections::HashSet;
 use std::io;
 
-use super::{ByteSource, Plan, PlanError, PlannerId, Region, RegionKind, append_split_region};
+use super::{
+    ByteSource, InventoryTensor, Plan, PlanError, PlannerId, Region, RegionKind, TensorFormat,
+    TensorInventory, append_split_region, append_tensor_regions,
+};
+use crate::contract::{Contract, Stamp};
 
 const MAGIC: [u8; 4] = *b"GGUF";
 const DEFAULT_ALIGNMENT: u64 = 32;
@@ -242,8 +246,11 @@ impl MetadataBudget {
     }
 }
 
-pub(crate) fn try_plan<S: ByteSource + ?Sized>(source: &S) -> Result<Option<Plan>, PlanError> {
-    lift(parse(source).and_then(|layout| plan_layout(source.len(), &layout)))
+pub(crate) fn try_plan<S: ByteSource + ?Sized>(
+    source: &S,
+    contract: Option<&Contract>,
+) -> Result<Option<Plan>, PlanError> {
+    lift(parse(source).and_then(|layout| plan_layout(source.len(), &layout, contract)))
 }
 
 /// The whole structural proof, shared by the planner and by composition.
@@ -387,7 +394,7 @@ fn parse<S: ByteSource + ?Sized>(source: &S) -> ParseResult<Layout> {
 /// pre-data padding as separate header domains, then every tensor's unpadded
 /// extent with its own trailing padding kept out of it. Isolating padding is
 /// what lets a GGUF share tensor objects with a safetensors twin.
-fn plan_layout(file_size: u64, layout: &Layout) -> ParseResult<Plan> {
+fn plan_layout(file_size: u64, layout: &Layout, contract: Option<&Contract>) -> ParseResult<Plan> {
     let mut regions = Vec::new();
     append_domain(&mut regions, 0, layout.directory_start, RegionKind::Header)?;
     append_domain(
@@ -408,12 +415,10 @@ fn plan_layout(file_size: u64, layout: &Layout) -> ParseResult<Plan> {
             .data_start
             .checked_add(tensor.offset)
             .ok_or(ParseFailure::Invalid)?;
-        append_domain(
-            &mut regions,
-            tensor_start,
-            tensor.length,
-            RegionKind::Tensor,
-        )?;
+        let seams = contract.map_or_else(Vec::new, |contract| {
+            contract.seam_offsets(&tensor.name, &logical_shape(tensor), tensor.length)
+        });
+        append_seamed_domain(&mut regions, tensor_start, tensor.length, &seams)?;
         let padded_length =
             align_up(tensor.length, layout.alignment).ok_or(ParseFailure::Invalid)?;
         append_domain(
@@ -426,6 +431,7 @@ fn plan_layout(file_size: u64, layout: &Layout) -> ParseResult<Plan> {
 
     Ok(Plan {
         planner: PlannerId::GgufV1,
+        contract: contract.map_or(Stamp::None, Contract::stamp),
         file_size,
         regions,
     })
@@ -603,6 +609,95 @@ fn append_domain(
         Err(PlanError::ResourceExhausted) => Err(ParseFailure::ResourceExhausted),
         Err(_) => Err(ParseFailure::Invalid),
     }
+}
+
+fn append_seamed_domain(
+    regions: &mut Vec<Region>,
+    offset: u64,
+    length: u64,
+    seams: &[u64],
+) -> ParseResult<()> {
+    match append_tensor_regions(regions, offset, length, seams, RegionKind::Tensor) {
+        Ok(()) => Ok(()),
+        Err(PlanError::ObjectLimit) => Err(ParseFailure::Invalid),
+        Err(PlanError::ResourceExhausted) => Err(ParseFailure::ResourceExhausted),
+        Err(_) => Err(ParseFailure::Invalid),
+    }
+}
+
+/// GGUF stores `ne` fastest-varying first; the contract vocabulary is logical
+/// row-major, so "axis 0" names the same axis in every container.
+fn logical_shape(tensor: &TensorInfo) -> Vec<u64> {
+    tensor.dimensions[..tensor.dimension_count as usize]
+        .iter()
+        .rev()
+        .copied()
+        .collect()
+}
+
+/// The header inventory of a validated layout.
+pub(crate) fn inventory(layout: &Layout) -> TensorInventory {
+    TensorInventory {
+        format: TensorFormat::GgufV1,
+        tensors: layout
+            .tensors
+            .iter()
+            .map(|tensor| InventoryTensor {
+                name: tensor.name.clone(),
+                dtype: ggml_type_name(tensor.ggml_type)
+                    .unwrap_or("UNKNOWN")
+                    .to_owned(),
+                shape: logical_shape(tensor),
+                offset: layout.data_start + tensor.offset,
+                length: tensor.length,
+            })
+            .collect(),
+    }
+}
+
+/// The canonical name of a ggml type. `F16`, `BF16` and `F32` deliberately
+/// read exactly as safetensors spells them, so one contract can describe a
+/// checkpoint and its GGUF twin.
+pub(crate) const fn ggml_type_name(ggml_type: u32) -> Option<&'static str> {
+    let name = match ggml_type {
+        0 => "F32",
+        1 => "F16",
+        2 => "Q4_0",
+        3 => "Q4_1",
+        6 => "Q5_0",
+        7 => "Q5_1",
+        8 => "Q8_0",
+        9 => "Q8_1",
+        10 => "Q2_K",
+        11 => "Q3_K",
+        12 => "Q4_K",
+        13 => "Q5_K",
+        14 => "Q6_K",
+        15 => "Q8_K",
+        16 => "IQ2_XXS",
+        17 => "IQ2_XS",
+        18 => "IQ3_XXS",
+        19 => "IQ1_S",
+        20 => "IQ4_NL",
+        21 => "IQ3_S",
+        22 => "IQ2_S",
+        23 => "IQ4_XS",
+        24 => "I8",
+        25 => "I16",
+        26 => "I32",
+        27 => "I64",
+        28 => "F64",
+        29 => "IQ1_M",
+        30 => "BF16",
+        34 => "TQ1_0",
+        35 => "TQ2_0",
+        39 => "MXFP4",
+        40 => "NVFP4",
+        41 => "Q1_0",
+        42 => "Q2_0",
+        _ => return None,
+    };
+    Some(name)
 }
 
 // Reviewed and pinned against ggml-org/llama.cpp at
@@ -817,7 +912,7 @@ mod tests {
     }
 
     fn assert_raw_fallback(bytes: &[u8]) {
-        assert!(try_plan(&SliceFixture(bytes)).unwrap().is_none());
+        assert!(try_plan(&SliceFixture(bytes), None).unwrap().is_none());
     }
 
     #[test]
@@ -830,7 +925,7 @@ mod tests {
 
         for version in [2, 3] {
             let bytes = build(version, &entries, &tensors, 64);
-            let plan = try_plan(&SliceFixture(&bytes)).unwrap().unwrap();
+            let plan = try_plan(&SliceFixture(&bytes), None).unwrap().unwrap();
             assert_eq!(plan.planner, PlannerId::GgufV1);
             assert_eq!(plan.file_size, bytes.len() as u64);
             plan.validate().unwrap();
@@ -903,7 +998,7 @@ mod tests {
         ));
 
         let bytes = build(3, &entries, &[], DEFAULT_ALIGNMENT);
-        let plan = try_plan(&SliceFixture(&bytes)).unwrap().unwrap();
+        let plan = try_plan(&SliceFixture(&bytes), None).unwrap().unwrap();
         assert_eq!(plan.planner, PlannerId::GgufV1);
         plan.validate().unwrap();
     }
@@ -931,12 +1026,12 @@ mod tests {
         let exact_value_length = MAX_METADATA_INSPECTION_BYTES - encoded_overhead;
 
         assert!(
-            try_plan(&sparse_string(exact_value_length))
+            try_plan(&sparse_string(exact_value_length), None)
                 .unwrap()
                 .is_some()
         );
         assert!(
-            try_plan(&sparse_string(exact_value_length + 1))
+            try_plan(&sparse_string(exact_value_length + 1), None)
                 .unwrap()
                 .is_none()
         );
@@ -1021,7 +1116,7 @@ mod tests {
             tensor("q1_0", &[128], 41),
         ];
         let bytes = build(3, &[], &tensors, DEFAULT_ALIGNMENT);
-        let plan = try_plan(&SliceFixture(&bytes)).unwrap().unwrap();
+        let plan = try_plan(&SliceFixture(&bytes), None).unwrap().unwrap();
         let lengths: Vec<_> = plan
             .regions
             .iter()
@@ -1040,7 +1135,7 @@ mod tests {
         let (prefix, length) = build_prefix(3, &[], &tensors, DEFAULT_ALIGNMENT);
         let source = SparseFixture { prefix, length };
 
-        let plan = try_plan(&source).unwrap().unwrap();
+        let plan = try_plan(&source, None).unwrap().unwrap();
         let tensor_regions: Vec<_> = plan
             .regions
             .iter()
@@ -1207,14 +1302,14 @@ mod tests {
         for length in 0..valid.len() {
             assert_raw_fallback(&valid[..length]);
         }
-        assert!(try_plan(&SliceFixture(&valid)).unwrap().is_some());
+        assert!(try_plan(&SliceFixture(&valid), None).unwrap().is_some());
     }
 
     #[test]
     fn accepts_empty_tensors_without_zero_length_regions() {
         let tensors = [tensor("empty", &[0], 0), tensor("data", &[1], 0)];
         let bytes = build(3, &[], &tensors, DEFAULT_ALIGNMENT);
-        let plan = try_plan(&SliceFixture(&bytes)).unwrap().unwrap();
+        let plan = try_plan(&SliceFixture(&bytes), None).unwrap().unwrap();
         assert!(plan.regions.iter().all(|region| region.length > 0));
         assert_eq!(
             plan.regions

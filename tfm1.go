@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -18,6 +19,8 @@ import (
 const (
 	// TFM1MaxPathBytes bounds one entry path and one symlink target.
 	TFM1MaxPathBytes = 4096
+	// TFM1MaxContractNameBytes bounds a tensor body's layout-contract name.
+	TFM1MaxContractNameBytes = 64
 	// TFM1MaxFileRecords mirrors the planner's bounded object cardinality.
 	TFM1MaxFileRecords = 1_000_000
 
@@ -71,6 +74,9 @@ type TFM1Entry struct {
 	Kind        TFM1EntryKind
 	Executable  bool
 	Planner     string
+	// Contract is the layout contract that directed this file's chunking,
+	// spelled name@version, or "" for the plain per-tensor grid.
+	Contract    string
 	LogicalSize uint64
 	Records     []TFM1Record
 	Digest      Ref
@@ -156,6 +162,70 @@ func (r *tfm1Reader) takeU64() (uint64, error) {
 
 func (r *tfm1Reader) remaining() uint64 {
 	return uint64(len(r.data) - r.pos)
+}
+
+// takeContract reads a tensor body's layout-contract stamp: a bounded name and
+// its version, or the canonical absent stamp (empty name, version zero). Every
+// other combination refuses -- a nameless version and a version-less name are
+// both unreadable claims about which layout produced these boundaries.
+func (r *tfm1Reader) takeContract() (string, error) {
+	length, err := r.takeU8()
+	if err != nil {
+		return "", err
+	}
+	if int(length) > TFM1MaxContractNameBytes {
+		return "", tfm1Refuse("contract-name")
+	}
+	nameBytes, err := r.take(int(length))
+	if err != nil {
+		return "", err
+	}
+	version, err := r.takeU32()
+	if err != nil {
+		return "", err
+	}
+	name := string(nameBytes)
+	if name == "" {
+		if version != 0 {
+			return "", tfm1Refuse("contract-version")
+		}
+		return "", nil
+	}
+	if !isTFM1ContractName(name) {
+		return "", tfm1Refuse("contract-name")
+	}
+	if version == 0 {
+		return "", tfm1Refuse("contract-version")
+	}
+	return fmt.Sprintf("%s@%d", name, version), nil
+}
+
+// isTFM1ContractName mirrors the handle shape gen-worker uses for layout
+// contracts: <producer>.<format>, lowercase alphanumeric producer, and a
+// format of lowercase alphanumerics plus '.', '-' and '_'.
+func isTFM1ContractName(name string) bool {
+	producer, format, found := strings.Cut(name, ".")
+	if !found || producer == "" || format == "" {
+		return false
+	}
+	for _, character := range []byte(producer) {
+		if !isTFM1Lower(character) {
+			return false
+		}
+	}
+	if !isTFM1Lower(format[0]) {
+		return false
+	}
+	for _, character := range []byte(format) {
+		if !isTFM1Lower(character) && character != '.' && character != '-' && character != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func isTFM1Lower(character byte) bool {
+	return (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9')
 }
 
 var tfm1WindowsReserved = []string{
@@ -392,6 +462,11 @@ func ParseTFM1(data []byte) (TFM1Snapshot, error) {
 			}
 			if entry.LogicalSize, err = reader.takeU64(); err != nil {
 				return TFM1Snapshot{}, err
+			}
+			if entry.Planner != TFM1PlannerBlobV1 {
+				if entry.Contract, err = reader.takeContract(); err != nil {
+					return TFM1Snapshot{}, err
+				}
 			}
 			if entry.Planner == TFM1PlannerBlobV1 {
 				// A blob body is the whole-file digest — no record list is

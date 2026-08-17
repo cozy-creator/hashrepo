@@ -47,6 +47,7 @@ var tfm1KnownReasons = map[string]bool{
 	"data-too-large": true, "record-limit": true,
 	"length-sum-mismatch": true, "empty-blob-digest": true,
 	"symlink-target": true, "hardlink-ordinal": true,
+	"contract-name": true, "contract-version": true,
 }
 
 func loadTFM1Corpus(t *testing.T) tfm1Corpus {
@@ -283,6 +284,30 @@ func TestSharedTFM1GoldenFactsMatchTheRustBuilder(t *testing.T) {
 		snapshot := decode(t, "fixtures/gguf-provenance.hex")
 		if snapshot.Entries[0].Planner != TFM1PlannerGgufV1 {
 			t.Fatalf("planner %q", snapshot.Entries[0].Planner)
+		}
+		if snapshot.Entries[0].Contract != "" {
+			t.Fatalf("contract %q: the plain grid stamps nothing", snapshot.Entries[0].Contract)
+		}
+	})
+
+	// The stamp is the serve-time answer to "what layout is this": a reader
+	// gets it out of the manifest, with no probing and no registry.
+	t.Run("contract-stamped", func(t *testing.T) {
+		snapshot := decode(t, "fixtures/contract-stamped.hex")
+		got := map[string]string{}
+		for _, entry := range snapshot.Entries {
+			if entry.Kind == TFM1File {
+				got[entry.Path] = entry.Contract
+			}
+		}
+		want := map[string]string{
+			"weights/model.safetensors": "minimax.h3-dit-native@1",
+			"weights/twin.gguf":         "dit.blocks-fused-qkv@2",
+		}
+		for path, contract := range want {
+			if got[path] != contract {
+				t.Fatalf("%s: contract %q, want %q", path, got[path], contract)
+			}
 		}
 	})
 }

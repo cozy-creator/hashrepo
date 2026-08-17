@@ -9,6 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use tensorfs_core::compose::{ComposeError, rekey, subset};
+use tensorfs_core::contract::Stamp;
 use tensorfs_core::object::{ObjectDigest, plan_and_hash};
 use tensorfs_core::planner::{self, ByteSource, MAX_OBJECT_SIZE, PlannerId};
 use tensorfs_core::store::ObjectStore;
@@ -140,6 +141,7 @@ fn commit(store: &ObjectStore, bytes: &[u8]) -> FileBody {
         .collect();
     FileBody::Tensor {
         format,
+        contract: Stamp::None,
         logical_size: bytes.len() as u64,
         records,
     }
@@ -374,6 +376,7 @@ fn a_packed_source_cannot_be_inherited() {
         format: PlannerId::SafetensorsV1
             .tensor_format()
             .expect("safetensors is a tensor format"),
+        contract: Stamp::None,
         logical_size: whole.length(),
         records: vec![FileRecord::Data {
             digest: whole.digest(),

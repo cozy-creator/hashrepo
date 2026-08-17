@@ -4,6 +4,10 @@
 /// a re-key or a record subset. Needs the store, so it shares its gate.
 #[cfg(all(feature = "store", any(unix, windows)))]
 pub mod compose;
+/// Tensor layout contracts: the declarative, versioned input that identifies
+/// a file's layout and directs its chunking seams. Pure data and pure
+/// functions — no filesystem, no store.
+pub mod contract;
 /// Snapshot symlink trees, pointer stubs and refs beside the object store.
 /// Shares the store's real-filesystem platform gate and needs nothing else —
 /// a projection is a pure function of a manifest and the store root.

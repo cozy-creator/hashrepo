@@ -79,6 +79,25 @@ its bytes — so there is no manifest namespace. Trees are projections: zero
 bytes copied, derivable from the manifest, disposable, and they pin nothing.
 `docs/mixed-cas-layout.md` is the design.
 
+## Tensor layout contracts
+
+`spec/v1/contracts/` holds versioned JSON documents describing how a
+checkpoint family is spelled on disk: tensor patterns, the fusion seams inside
+fused tensors, and named removable tensor sets. They are DATA, not planner
+code.
+
+At ingestion a file is identified from its **header alone** — names, shapes,
+dtypes; no tensor byte is read — against the registry, with a total tie-break
+(most specific, then highest version, then name). The winning contract cuts
+fused tensors at their seams *before* the 64 MiB grid, so a fused packaging
+and its split twin share every data object, and the snapshot records
+`contract@version` so identity stays self-describing.
+
+Seams may be interleaved (`fusion.groups`): MiniMax-H3 fuses qkv head-major,
+and its two packagings still share every attention byte. Byte ORDER never
+moves — only cut points do. `docs/dedup-invariance.md` §4 is the design, and
+`spec/v1/contracts/README.md` the format.
+
 ## The Python distribution
 
 `tensorfs` is **one** PyPI distribution carrying two things:

@@ -32,8 +32,15 @@ file body (kind 2) :=
 
 tensor body (planner 1, 2) :=
   logical_size  u64
+  contract      stamp        the layout contract that directed the chunking
   record_count  u64 (<= 1,000,000)
   record * record_count
+
+stamp :=
+  name_len      u8 (0..=64)
+  name          ASCII <producer>.<format>, lowercase alphanumeric producer,
+                            format of lowercase alphanumerics and `.` `-` `_`
+  version       u32          >= 1 iff name_len > 0, else exactly 0
 
 blob body (planner 4) :=
   logical_size  u64
@@ -57,6 +64,16 @@ Tensor bodies: record lengths must sum exactly to `logical_size` (overflow
 refuses). Zero lengths and adjacent holes refuse. A data record never exceeds
 64 MiB — the tensor chunk grid constant, which bounds nothing but tensor
 records; holes are unbounded. An empty tensor file has zero records.
+
+The contract stamp records WHICH tensor-layout contract directed this file's
+chunking (`spec/v1/contracts/`). An empty name with version 0 is
+`contract:none` — the plain per-tensor grid; a name without a version, or a
+version without a name, refuses (`contract-name`, `contract-version`). The
+stamp is part of the canonical bytes, so it is part of the snapshot id:
+identity stays self-describing as the contract library evolves, and the same
+file chunked under two contracts is two snapshots rather than one ambiguous
+one. Readers get the serve-time layout answer from the stamp without probing
+tensor bytes and without consulting whatever registry is installed.
 
 Blob bodies: every non-tensor file is ONE unchunked blob of any size. The
 body is its logical size and the SHA-256 of its whole byte content — there is
