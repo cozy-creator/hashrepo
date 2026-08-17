@@ -22,7 +22,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::PlannerId;
@@ -436,12 +435,15 @@ fn a_scrub_racing_a_deletion_never_costs_a_live_root() {
         "multiprocess={} rounds={rounds}",
         store.supports_multiprocess()
     ));
-    let done = AtomicBool::new(false);
+    // Raised when the rounds below LEAVE, panic included: a scrubber whose
+    // stop flag only a healthy main thread sets turns any failure into a
+    // hang, which is what #109 was.
+    let stop = harness::StopFlag::new();
     let (scrubs, scrubbed_trees) = std::thread::scope(|scope| {
         let handle = scope.spawn(|| {
             let mut passes = 0_u64;
             let mut trees = 0_u64;
-            while !done.load(Ordering::Acquire) {
+            while !stop.raised() {
                 probe(&format!("s{passes}+"));
                 let report = scrubber.scrub().expect("scrub runs");
                 probe(&format!("s{passes}-"));
@@ -459,57 +461,57 @@ fn a_scrub_racing_a_deletion_never_costs_a_live_root() {
             (passes, trees)
         });
 
-        for round in 0..rounds {
-            probe(&format!("main: round {round} seal"));
-            let doomed = sealed_only(
-                &store,
-                "doomed",
-                &[("round.bin", format!("round {round}").as_bytes())],
-            );
-            probe(&format!("main: round {round} load"));
-            let manifest = store.load_snapshot(&doomed).expect("loads");
-            probe(&format!("main: round {round} project"));
-            store.project_snapshot(&doomed).expect("projects");
-            probe(&format!("main: round {round} set_ref"));
-            store.layout().set_ref("doomed", &doomed).expect("ref");
-            probe(&format!("main: round {round} delete_snapshot"));
-            store.delete_snapshot(&doomed).expect("deletes");
-            // The late projection: a tree for a root that no longer exists.
-            // It may also lose a rename race with the scrubber's own removal,
-            // which is a cache outcome and not a claim this test makes.
-            probe(&format!("main: round {round} late project"));
-            let _ = store.layout().project(&manifest);
-            probe(&format!("main: round {round} late set_ref"));
-            let _ = store.layout().set_ref("doomed", &doomed);
-            probe(&format!("main: round {round} asserts"));
+        stop.racing(|| {
+            for round in 0..rounds {
+                probe(&format!("main: round {round} seal"));
+                let doomed = sealed_only(
+                    &store,
+                    "doomed",
+                    &[("round.bin", format!("round {round}").as_bytes())],
+                );
+                probe(&format!("main: round {round} load"));
+                let manifest = store.load_snapshot(&doomed).expect("loads");
+                probe(&format!("main: round {round} project"));
+                store.project_snapshot(&doomed).expect("projects");
+                probe(&format!("main: round {round} set_ref"));
+                store.layout().set_ref("doomed", &doomed).expect("ref");
+                probe(&format!("main: round {round} delete_snapshot"));
+                store.delete_snapshot(&doomed).expect("deletes");
+                // The late projection: a tree for a root that no longer exists.
+                // It may also lose a rename race with the scrubber's own removal,
+                // which is a cache outcome and not a claim this test makes.
+                probe(&format!("main: round {round} late project"));
+                let _ = store.layout().project(&manifest);
+                probe(&format!("main: round {round} late set_ref"));
+                let _ = store.layout().set_ref("doomed", &doomed);
+                probe(&format!("main: round {round} asserts"));
 
-            assert!(
-                survivor_tree.is_dir(),
-                "round {round}: the live root's tree was removed by a racing scrub"
-            );
-            assert_eq!(
-                store.layout().read_ref("survivor").unwrap(),
-                Some(survivor),
-                "round {round}: the live root's ref was removed by a racing scrub"
-            );
-            assert!(
-                resident(&store, &survivor_digest),
-                "round {round}: a scrub cost a live root its bytes"
-            );
-            probe(&format!("main: round {round} collect"));
-            store.collect().expect("collection completes");
-            probe(&format!("main: round {round} reload"));
-            assert_eq!(
-                store.load_snapshot(&survivor).expect("loads").snapshot_id(),
-                survivor,
-                "round {round}: the live root stopped loading"
-            );
-            probe(&format!("main: round {round} done"));
-        }
-        probe("main: rounds finished, raising the stop flag");
-        done.store(true, Ordering::Release);
+                assert!(
+                    survivor_tree.is_dir(),
+                    "round {round}: the live root's tree was removed by a racing scrub"
+                );
+                assert_eq!(
+                    store.layout().read_ref("survivor").unwrap(),
+                    Some(survivor),
+                    "round {round}: the live root's ref was removed by a racing scrub"
+                );
+                assert!(
+                    resident(&store, &survivor_digest),
+                    "round {round}: a scrub cost a live root its bytes"
+                );
+                probe(&format!("main: round {round} collect"));
+                store.collect().expect("collection completes");
+                probe(&format!("main: round {round} reload"));
+                assert_eq!(
+                    store.load_snapshot(&survivor).expect("loads").snapshot_id(),
+                    survivor,
+                    "round {round}: the live root stopped loading"
+                );
+                probe(&format!("main: round {round} done"));
+            }
+        });
         probe("main: joining the scrub thread");
-        handle.join().expect("scrub thread joins")
+        harness::join_worker(handle)
     });
 
     eprintln!(

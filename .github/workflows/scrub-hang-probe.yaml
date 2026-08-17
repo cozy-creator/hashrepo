@@ -78,3 +78,54 @@ jobs:
             fi
           done
           echo "shard ${{ matrix.shard }}: ${passed} passed, ${failed} failed, ${hung} hung, of ${runs}"
+
+  # #109's own repro shape: the WHOLE gc binary, whose tests run in parallel
+  # threads against their own stores, so the racing test runs under the load
+  # the real job gives it.
+  probe-binary:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.0
+      - uses: Swatinem/rust-cache@v2
+      - name: build
+        shell: bash
+        run: |
+          set -uo pipefail
+          cargo test -p tensorfs-core --all-features --test gc --no-run \
+            --message-format=json > build.json
+          python -c "import json,sys;\
+          print([j['executable'] for j in map(json.loads, open('build.json')) \
+          if j.get('executable') and 'gc-' in j['executable']][-1])" > bin.txt
+      - name: repeat
+        shell: bash
+        run: |
+          set +e
+          bin="$(cat bin.txt)"
+          hung=0
+          failed=0
+          passed=0
+          for i in $(seq 1 5); do
+            echo "=== RUN ${i} START ==="
+            timeout -k 5 180 "${bin}" --nocapture > "run-${i}.log" 2>&1
+            status=$?
+            if [ "${status}" -eq 124 ]; then
+              hung=$((hung + 1)); echo "=== RUN ${i} HUNG ==="
+              grep -a "main:" "run-${i}.log" | tail -n 5
+              echo "--- scrub passes: $(grep -ac '^\[probe\] s' "run-${i}.log")"
+              grep -a -A 4 "panicked" "run-${i}.log" | head -n 40
+            elif [ "${status}" -ne 0 ]; then
+              failed=$((failed + 1)); echo "=== RUN ${i} FAILED (${status}) ==="
+              grep -a -A 4 "panicked" "run-${i}.log" | head -n 40
+              grep -a "test result" "run-${i}.log"
+            else
+              passed=$((passed + 1)); echo "=== RUN ${i} PASSED ==="
+              grep -a "test result" "run-${i}.log"
+            fi
+          done
+          echo "binary shard ${{ matrix.shard }}: ${passed} passed, ${failed} failed, ${hung} hung, of 5"

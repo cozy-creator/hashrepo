@@ -1324,9 +1324,12 @@ impl WorkspaceStore {
             }
         }
         // Scratch belongs to a process, not to a root, so it is decided by its
-        // lease and not by the root set this transaction pins.
-        report.scratch = layout.reap_scratch()?;
+        // lease and not by the root set this transaction pins — which is why
+        // it runs AFTER the commit. A write transaction held across
+        // filesystem work is a peer's wait, and this is the part of the sweep
+        // that needs none of it.
         tx.commit()?;
+        report.scratch = layout.reap_scratch()?;
         Ok(report)
     }
 

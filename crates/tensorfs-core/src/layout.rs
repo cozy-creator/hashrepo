@@ -35,6 +35,7 @@ static SWAP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// The scratch names this module owns: a half-built projection under
 /// `snapshots/`, its lease under the store's `tmp/`, and a ref mid-swap.
 const BUILDING_PREFIX: &str = ".building-";
+const REMOVED_PREFIX: &str = ".removed-";
 const LEASE_PREFIX: &str = "building-";
 const LEASE_SUFFIX: &str = ".tmp";
 const SWAP_PREFIX: &str = ".swap-";
@@ -62,6 +63,10 @@ pub struct ScratchReap {
     pub examined: u64,
     pub trees_removed: u64,
     pub swaps_removed: u64,
+    /// Artifacts a removal had already unlinked from the namespace, whose
+    /// bytes only this reap could finally take — a Windows reader holding a
+    /// file open is the one thing that defers them.
+    pub unlinked_removed: u64,
     /// What was reclaimed, recorded BEFORE each removal.
     ///
     /// A sweep that frees resources and reports only a count leaves nobody
@@ -82,14 +87,17 @@ pub struct ReclaimedScratch {
     pub lease: LeaseState,
 }
 
-/// Why a scratch artifact was reclaimable. Both mean the same thing — no
-/// live process owns it — and neither is a statement about age.
+/// Why a scratch artifact was reclaimable. None of these is a statement about
+/// age.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LeaseState {
     /// A lease file existed and its lock was free: the holder is gone.
     Free,
     /// No lease file at all: the holder never got one, or it was reaped.
     Absent,
+    /// No live NAME: a removal renamed the artifact out of the namespace, so
+    /// nothing can reach it and no lease could make it live again.
+    Unreachable,
 }
 
 /// What one pointer stub says: which file body it stands for, and how many
@@ -337,6 +345,31 @@ impl<'store> Layout<'store> {
                 report.reclaimed.push(evidence);
             }
         }
+        // Whatever a removal already took the name away from. It is
+        // unreachable by construction — no name resolves to it and no lease
+        // can make it live again — so it goes on sight, and the only thing
+        // that can have delayed it is a reader that still holds its bytes.
+        for directory in [self.snapshots_dir(), self.refs_dir()] {
+            for entry in read_dir_or_empty(&directory)? {
+                let name = entry.file_name();
+                let Some(token) = name
+                    .to_str()
+                    .and_then(|name| name.strip_prefix(REMOVED_PREFIX))
+                else {
+                    continue;
+                };
+                report.examined += 1;
+                let evidence = ReclaimedScratch {
+                    path: entry.path(),
+                    creator: token.to_owned(),
+                    lease: LeaseState::Unreachable,
+                };
+                if delete_scratch(&entry.path()) {
+                    report.unlinked_removed += 1;
+                    report.reclaimed.push(evidence);
+                }
+            }
+        }
         // Leases last: a lease whose scratch was renamed into place, or which
         // the sweeps above just finished with. Removing them earlier would
         // answer "why was this reclaimable?" with `Absent` for artifacts whose
@@ -435,13 +468,45 @@ impl<'store> Layout<'store> {
 
     /// Removes one snapshot's projected tree. A tree pins nothing, so this is
     /// pure cache eviction; the manifest can re-project it byte for byte.
+    ///
+    /// Removal is [`unlink_scratch`]: the live name is given up by one
+    /// `rename`, and only the private name it leaves behind is deleted.
+    ///
+    /// [`unlink_scratch`]: Self::unlink_scratch
     pub fn remove_tree(&self, id: &SnapshotId) -> Result<bool, LayoutError> {
-        let path = self.tree_path(id);
-        match fs::remove_dir_all(&path) {
-            Ok(()) => Ok(true),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error.into()),
+        self.unlink_scratch(&self.tree_path(id), &self.snapshots_dir())
+    }
+
+    /// Takes one live name away and deletes what it named, in that order.
+    ///
+    /// Deleting a live name in place is the wrong primitive under
+    /// concurrency, and Windows says so out loud. Two removers of one tree
+    /// both call `remove_dir_all` on the same directory and the loser gets
+    /// `ERROR_ACCESS_DENIED`, not `NotFound` — a scrub racing a deletion
+    /// failed for doing exactly what it is for (#109). A reader holding one
+    /// file inside a tree refuses the whole removal for the same reason,
+    /// where POSIX would unlink the name and keep the bytes for the reader.
+    ///
+    /// So the name goes first, by `rename` into a `.removed-…` scratch name
+    /// nothing else can reach, and the bytes go second. The rename is the
+    /// claim: exactly one remover can win it, the loser is told `NotFound`
+    /// and reports the honest `false`, and no two removers ever meet inside
+    /// one artifact. A delete that then fails — a Windows reader still has
+    /// the bytes open — leaves only unreachable scratch that
+    /// [`reap_scratch`] takes on sight, so it is not a removal failure and
+    /// is not reported as one: the caller asked for the name to be gone, and
+    /// it is.
+    ///
+    /// [`reap_scratch`]: Self::reap_scratch
+    fn unlink_scratch(&self, path: &Path, scratch_dir: &Path) -> Result<bool, LayoutError> {
+        let claimed = scratch_dir.join(format!("{REMOVED_PREFIX}{}", scratch_token()));
+        match fs::rename(path, &claimed) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
         }
+        delete_scratch(&claimed);
+        Ok(true)
     }
 
     /// Points `refs/<name>` at one snapshot, replacing any previous value by
@@ -509,12 +574,14 @@ impl<'store> Layout<'store> {
             .ok_or_else(|| LayoutError::UnreadableRef(name.to_owned()))
     }
 
+    /// Drops `refs/<name>`, by the same claim-then-delete as a tree
+    /// ([`unlink_scratch`]) and for the same reason: a ref is removed by a
+    /// scrub and by `delete_snapshot` at once, and a reader may hold it open.
+    ///
+    /// [`unlink_scratch`]: Self::unlink_scratch
     pub fn remove_ref(&self, name: &str) -> Result<bool, LayoutError> {
-        match fs::remove_file(self.refs_dir().join(validated_ref_name(name)?)) {
-            Ok(()) => Ok(true),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error.into()),
-        }
+        let path = self.refs_dir().join(validated_ref_name(name)?);
+        self.unlink_scratch(&path, &self.refs_dir())
     }
 
     /// Every ref name currently pointing at one snapshot, sorted.
@@ -589,6 +656,16 @@ fn scratch_token() -> String {
         process::id(),
         SWAP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+/// Deletes one unreachable scratch artifact, directory or file. Best effort
+/// on purpose: what a reader still holds open is taken by the next reap.
+fn delete_scratch(path: &Path) -> bool {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path).is_ok(),
+        Ok(_) => fs::remove_file(path).is_ok(),
+        Err(_) => false,
+    }
 }
 
 /// Why this lease says its creator is gone, or `None` while one holds it.
