@@ -439,16 +439,18 @@ fn a_scrub_racing_a_deletion_never_costs_a_live_root() {
     // stop flag only a healthy main thread sets turns any failure into a
     // hang, which is what #109 was.
     let stop = harness::StopFlag::new();
-    let (scrubs, scrubbed_trees) = std::thread::scope(|scope| {
+    let (scrubs, scrubbed_trees, deferred) = std::thread::scope(|scope| {
         let handle = scope.spawn(|| {
             let mut passes = 0_u64;
             let mut trees = 0_u64;
+            let mut deferred = 0_u64;
             while !stop.raised() {
                 probe(&format!("s{passes}+"));
                 let report = scrubber.scrub().expect("scrub runs");
                 probe(&format!("s{passes}-"));
                 passes += 1;
                 trees += report.trees_removed.len() as u64;
+                deferred += (report.trees_deferred.len() + report.refs_deferred.len()) as u64;
                 assert!(
                     !report.trees_removed.contains(&survivor),
                     "a scrub removed a LIVE root's tree"
@@ -458,7 +460,7 @@ fn a_scrub_racing_a_deletion_never_costs_a_live_root() {
                     "a scrub removed a LIVE root's ref"
                 );
             }
-            (passes, trees)
+            (passes, trees, deferred)
         });
 
         stop.racing(|| {
@@ -514,8 +516,12 @@ fn a_scrub_racing_a_deletion_never_costs_a_live_root() {
         harness::join_worker(handle)
     });
 
+    // `deferred` is zero on POSIX by construction and non-zero on Windows
+    // whenever another handle was inside a doomed artifact — the outcome that
+    // used to be an error, and used to end the run.
     eprintln!(
-        "scrub race over {rounds} rounds: {scrubs} scrubs, {scrubbed_trees} dangling trees removed"
+        "scrub race over {rounds} rounds: {scrubs} scrubs, {scrubbed_trees} dangling trees \
+         removed, {deferred} removals deferred"
     );
     assert!(
         scrubbed_trees > 0,

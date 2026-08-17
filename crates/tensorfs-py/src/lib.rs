@@ -34,7 +34,7 @@ use pyo3::types::PyBytes;
 
 use tensorfs_core::compose;
 use tensorfs_core::contract;
-use tensorfs_core::layout::{self, Layout, STUB_MAGIC};
+use tensorfs_core::layout::{self, Layout, Removal, STUB_MAGIC};
 use tensorfs_core::object::{self, ObjectDigest};
 use tensorfs_core::planner::{self, ByteSource, PlannerId, RegionKind};
 use tensorfs_core::source::FileByteSource;
@@ -1043,6 +1043,7 @@ impl PyObjectStore {
         let id = SnapshotId::from_bytes(parse_hex32(snapshot_id)?);
         let store = Arc::clone(&self.inner);
         py.detach(move || Layout::new(&store).remove_tree(&id))
+            .map(Removal::taken)
             .map_err(layout_error)
     }
 
@@ -1070,6 +1071,7 @@ impl PyObjectStore {
         let store = Arc::clone(&self.inner);
         let name = name.to_owned();
         py.detach(move || Layout::new(&store).remove_ref(&name))
+            .map(Removal::taken)
             .map_err(layout_error)
     }
 

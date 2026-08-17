@@ -368,10 +368,18 @@ only writer. What each layer protects:
   refuses the whole removal the same way. So `remove_tree` and `remove_ref`
   rename the live name into a `.removed-…` scratch name nothing can reach and
   delete only that: the rename is the claim, exactly one remover wins it, the
-  loser is told `NotFound` and reports the honest `false`, and a delete that
-  then fails leaves unreachable scratch the next reap takes rather than a
-  removal failure. POSIX gains the same property it already had by unlinking;
-  Windows gains it for the first time.
+  loser is told `NotFound` and reports `Absent`, and a delete that then fails
+  leaves unreachable scratch the next reap takes rather than a removal failure.
+- **And the removal contract is per-platform, because Windows cannot give the
+  POSIX one.** A rename cannot take a name Windows has an open handle inside —
+  Defender or an indexer touching a freshly projected file is enough — so a
+  removal reports one of three outcomes rather than a `bool`: `Taken`,
+  `Absent`, or `Deferred`. `Deferred` says nothing about the caller's rights
+  and nothing about the artifact: the identical call succeeds once the handle
+  closes, the artifact is untouched and still garbage, and the next scrub takes
+  it, exactly like a tree left by a crash. POSIX never returns it, and there
+  every such error still propagates. `ScrubReport` carries what it deferred, so
+  a pass that could take nothing is visible rather than silent.
 - **Dangling links inside a tree** (target object GC'd) cannot occur for a
   rooted snapshot — its manifest pins its objects. Found anyway, they mean
   the tree's root is gone: the whole tree is garbage, removed as above.

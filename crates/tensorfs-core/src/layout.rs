@@ -100,6 +100,37 @@ pub enum LeaseState {
     Unreachable,
 }
 
+/// What a removal did to the name it was asked to take.
+///
+/// Three outcomes rather than a `bool`, because Windows cannot promise the
+/// second one away: a name is taken, was never there, or **could not be taken
+/// right now**.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Removal {
+    /// The name is gone. Its bytes are gone too, or are unreachable scratch a
+    /// reap will take.
+    Taken,
+    /// Nothing was there — including the case of losing a removal race, which
+    /// is a success for everyone who wanted the name gone.
+    Absent,
+    /// The name is still there and this caller did nothing wrong: another
+    /// handle is inside the artifact, which on Windows refuses the rename that
+    /// takes the name away. It says nothing about rights and nothing about the
+    /// artifact — the same call succeeds once that handle closes — so the
+    /// artifact stays and the next scrub takes it, exactly like one left by a
+    /// crash. POSIX never returns this.
+    Deferred,
+}
+
+impl Removal {
+    /// True only for [`Removal::Taken`], for callers whose whole question is
+    /// "is that name gone because of me".
+    #[must_use]
+    pub const fn taken(self) -> bool {
+        matches!(self, Self::Taken)
+    }
+}
+
 /// What one pointer stub says: which file body it stands for, and how many
 /// bytes that file really has.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -473,7 +504,7 @@ impl<'store> Layout<'store> {
     /// `rename`, and only the private name it leaves behind is deleted.
     ///
     /// [`unlink_scratch`]: Self::unlink_scratch
-    pub fn remove_tree(&self, id: &SnapshotId) -> Result<bool, LayoutError> {
+    pub fn remove_tree(&self, id: &SnapshotId) -> Result<Removal, LayoutError> {
         self.unlink_scratch(&self.tree_path(id), &self.snapshots_dir())
     }
 
@@ -498,15 +529,16 @@ impl<'store> Layout<'store> {
     /// it is.
     ///
     /// [`reap_scratch`]: Self::reap_scratch
-    fn unlink_scratch(&self, path: &Path, scratch_dir: &Path) -> Result<bool, LayoutError> {
+    fn unlink_scratch(&self, path: &Path, scratch_dir: &Path) -> Result<Removal, LayoutError> {
         let claimed = scratch_dir.join(format!("{REMOVED_PREFIX}{}", scratch_token()));
         match fs::rename(path, &claimed) {
             Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Removal::Absent),
+            Err(error) if is_share_refusal(&error) => return Ok(Removal::Deferred),
             Err(error) => return Err(error.into()),
         }
         delete_scratch(&claimed);
-        Ok(true)
+        Ok(Removal::Taken)
     }
 
     /// Points `refs/<name>` at one snapshot, replacing any previous value by
@@ -579,7 +611,7 @@ impl<'store> Layout<'store> {
     /// scrub and by `delete_snapshot` at once, and a reader may hold it open.
     ///
     /// [`unlink_scratch`]: Self::unlink_scratch
-    pub fn remove_ref(&self, name: &str) -> Result<bool, LayoutError> {
+    pub fn remove_ref(&self, name: &str) -> Result<Removal, LayoutError> {
         let path = self.refs_dir().join(validated_ref_name(name)?);
         self.unlink_scratch(&path, &self.refs_dir())
     }
@@ -656,6 +688,23 @@ fn scratch_token() -> String {
         process::id(),
         SWAP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+/// Windows refuses to rename or delete an artifact another handle is inside:
+/// `ERROR_ACCESS_DENIED` (5) for a directory whose contents are open, and
+/// `ERROR_SHARING_VIOLATION` (32) for a file. Neither is a statement about
+/// this caller's rights — the identical call succeeds once the other handle
+/// closes — and neither has a POSIX equivalent, where a rename cannot be
+/// refused for a busy artifact. So this clause is Windows-only, deliberately:
+/// on POSIX every one of these errors is real and propagates.
+#[cfg(windows)]
+fn is_share_refusal(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(5 | 32))
+}
+
+#[cfg(not(windows))]
+const fn is_share_refusal(_error: &io::Error) -> bool {
+    false
 }
 
 /// Deletes one unreachable scratch artifact, directory or file. Best effort

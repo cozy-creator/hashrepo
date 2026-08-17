@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tensorfs_core::layout::{Layout, STUB_MAGIC, stub_bytes};
+use tensorfs_core::layout::{Layout, Removal, STUB_MAGIC, stub_bytes};
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::PlannerId;
 use tensorfs_core::tfm1::{Entry, FileRecord, SnapshotId};
@@ -785,29 +785,56 @@ fn a_removal_gives_up_the_name_while_a_reader_still_holds_the_bytes() {
 
     let tree = store.project_snapshot(&id).unwrap();
     layout.set_ref("held", &id).unwrap();
+    let ref_path = layout.refs_dir().join("held");
     let held_file = fs::File::open(tree.join("config.json")).unwrap();
-    let held_ref = fs::File::open(layout.refs_dir().join("held")).unwrap();
+    let held_ref = fs::File::open(&ref_path).unwrap();
 
-    assert!(layout.remove_tree(&id).unwrap(), "the tree was not removed");
-    assert!(
-        layout.remove_ref("held").unwrap(),
-        "the ref was not removed"
-    );
-    assert!(!tree.exists(), "a held file kept the tree's name alive");
-    assert!(!layout.tree_ids().unwrap().contains(&id));
-    assert_eq!(layout.read_ref("held").unwrap(), None);
-    assert!(!layout.ref_names().unwrap().contains(&"held".to_owned()));
+    // Neither removal may fail: an open handle is a normal state of the
+    // store, not an error in the caller.
+    let tree_outcome = layout.remove_tree(&id).unwrap();
+    let ref_outcome = layout.remove_ref("held").unwrap();
+    if cfg!(unix) {
+        assert_eq!(
+            (tree_outcome, ref_outcome),
+            (Removal::Taken, Removal::Taken),
+            "POSIX unlinks a held name and keeps the bytes for the reader"
+        );
+    }
 
-    // The name is free the instant it is given up: re-projecting and
-    // re-pointing the ref work while the old bytes are still held open.
-    assert_eq!(store.project_snapshot(&id).unwrap(), tree);
-    layout.set_ref("held", &id).unwrap();
-    assert_eq!(layout.read_ref("held").unwrap(), Some(id));
+    // Whatever each said has to be true on disk: a name reported taken is
+    // gone, and a deferred one is untouched — never a claim that missed.
+    for (outcome, path) in [(tree_outcome, &tree), (ref_outcome, &ref_path)] {
+        match outcome {
+            Removal::Taken | Removal::Absent => {
+                assert!(
+                    !path.exists(),
+                    "{path:?} outlived a removal that claimed it"
+                )
+            }
+            Removal::Deferred => {
+                assert!(path.exists(), "a deferred removal took {path:?} anyway")
+            }
+        }
+    }
+    if tree_outcome.taken() {
+        assert!(!layout.tree_ids().unwrap().contains(&id));
+        // The name is free the instant it is given up: re-projecting works
+        // while the old bytes are still held open.
+        assert_eq!(store.project_snapshot(&id).unwrap(), tree);
+    }
+    if ref_outcome.taken() {
+        assert_eq!(layout.read_ref("held").unwrap(), None);
+        assert!(!layout.ref_names().unwrap().contains(&"held".to_owned()));
+    }
 
-    // And nothing is stranded: what the reader was holding goes on the first
-    // reap after it lets go.
+    // Once the reader lets go, one retry finishes whatever was deferred — no
+    // waiting on a clock, and nothing left stranded once the reap runs.
     drop(held_file);
     drop(held_ref);
+    assert_ne!(layout.remove_tree(&id).unwrap(), Removal::Deferred);
+    assert_ne!(layout.remove_ref("held").unwrap(), Removal::Deferred);
+    assert!(!tree.exists());
+    assert_eq!(layout.read_ref("held").unwrap(), None);
     layout.reap_scratch().unwrap();
     for directory in [layout.snapshots_dir(), layout.refs_dir()] {
         for entry in fs::read_dir(directory).unwrap() {
@@ -831,7 +858,7 @@ fn a_deleted_tree_re_projects_identically_from_the_manifest() {
 
     let tree = store.project_snapshot(&id).unwrap();
     let before = fingerprint(&tree);
-    assert!(store.layout().remove_tree(&id).unwrap());
+    assert!(store.layout().remove_tree(&id).unwrap().taken());
     assert!(!tree.exists());
 
     let again = store.project_snapshot(&id).unwrap();
