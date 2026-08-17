@@ -160,7 +160,7 @@ impl ObjectStore {
         self.root.join("objects").join("sha256")
     }
 
-    fn tmp_dir(&self) -> PathBuf {
+    pub(crate) fn tmp_dir(&self) -> PathBuf {
         self.root.join("tmp")
     }
 

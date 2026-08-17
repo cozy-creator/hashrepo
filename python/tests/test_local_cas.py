@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -11,10 +12,13 @@ import pytest
 from repo_ingest import ingest_file, ingest_repository
 from tensorfs import (
     MAX_CHUNK_SIZE,
+    DigestMismatch,
     FileEntry,
     LocalCAS,
     RefConflict,
     RepositoryManifest,
+    TempCollection,
+    project_snapshot,
     read_entry,
 )
 
@@ -372,3 +376,326 @@ def test_an_interpreter_without_fcntl_is_refused_by_name() -> None:
     assert message.startswith("ImportError: "), message
     assert "Linux and macOS only" in message, message
     assert "fcntl" in message, message
+# ---------------------------------------------------------------------------
+# `contains` is presence (#42)
+# ---------------------------------------------------------------------------
+
+
+def test_contains_answers_presence_without_rehashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    payload = b"resident bytes"
+    ref = cas.put_bytes(payload)
+
+    def reject_rehash(*args: object, **kwargs: object) -> None:
+        pytest.fail("contains must not rehash: presence is one stat")
+
+    monkeypatch.setattr(LocalCAS, "_verify_object_unlocked", reject_rehash)
+    assert cas.contains(ref) is True
+    assert cas.contains(ref, size=len(payload)) is True
+    assert cas.contains(ref, size=len(payload) + 1) is False
+
+
+def test_contains_is_true_for_corruption_that_only_the_scrub_refuses(tmp_path: Path) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    ref = cas.put_bytes(b"good")
+    cas.object_path(ref).write_bytes(b"evil")
+
+    # Corrupted in place, so the length is unchanged: presence says yes.
+    assert cas.contains(ref, size=4) is True
+    with pytest.raises(DigestMismatch, match="do not match"):
+        cas.verify_object(ref, size=4)
+
+    # Admitting new bytes still verifies, and still repairs.
+    assert cas.put_bytes(b"good", expected=ref) == ref
+    assert cas.verify_object(ref, size=4).read_bytes() == b"good"
+
+
+def test_contains_refuses_absent_truncated_and_non_regular_objects(tmp_path: Path) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    ref = cas.put_bytes(b"payload")
+    path = cas.object_path(ref)
+
+    path.write_bytes(b"pay")
+    assert cas.contains(ref, size=7) is False, "a declared size makes truncation free to catch"
+    assert cas.contains(ref) is True, "with no size declared the question is presence alone"
+
+    path.unlink()
+    assert cas.contains(ref) is False
+    path.symlink_to(tmp_path / "elsewhere")
+    assert cas.contains(ref) is False, "a symlink at the object path is not the object"
+
+
+def test_a_ref_target_must_be_present_but_is_never_rehashed(tmp_path: Path) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    ref = cas.put_bytes(b"good")
+    cas.object_path(ref).write_bytes(b"evil")
+
+    # Pointing a ref is not an admission, so it asks presence and succeeds.
+    assert cas.compare_and_swap_ref("graph", ref, expected=None) == ref
+    assert cas.read_ref("graph") == ref
+
+    cas.object_path(ref).unlink()
+    with pytest.raises(FileNotFoundError, match="absent object"):
+        cas.compare_and_swap_ref("graph", ref, expected=ref)
+
+
+# ---------------------------------------------------------------------------
+# Leased temp collection (#2)
+# ---------------------------------------------------------------------------
+
+_HOLD_PREAMBLE = """
+import sys
+from pathlib import Path
+from tensorfs import CASRef, LocalCAS
+cas = LocalCAS(Path(sys.argv[1]))
+def hold(*args, **kwargs):
+    sys.stdout.write('ready\\n')
+    sys.stdout.flush()
+    sys.stdin.read()
+"""
+
+_HOLD_PUT = (
+    _HOLD_PREAMBLE
+    + """
+LocalCAS._commit_temp = hold
+cas.put_bytes(b'abandoned put bytes')
+"""
+)
+
+_HOLD_STREAM = (
+    _HOLD_PREAMBLE
+    + """
+with cas.open_writer(CASRef.parse('sha256:' + 'c' * 64), size=64) as writer:
+    writer.write(b'partial stream')
+    writer.flush()
+    hold()
+"""
+)
+
+_HOLD_ADOPT = (
+    _HOLD_PREAMBLE
+    + """
+with cas.open_temp() as staged:
+    staged.write_bytes(b'abandoned download bytes')
+    hold()
+"""
+)
+
+
+@pytest.mark.parametrize(
+    ("script", "size"),
+    [(_HOLD_PUT, 19), (_HOLD_STREAM, 14), (_HOLD_ADOPT, 24)],
+    ids=["put", "stream", "adopt"],
+)
+def test_a_live_temp_is_retained_and_its_holders_death_reclaims_it(
+    tmp_path: Path, script: str, size: int
+) -> None:
+    root = tmp_path / "cas"
+    cas = LocalCAS(root)
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(root)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert child.stdout is not None
+    assert child.stdout.readline() == "ready\n", "the child reports its temp is on disk"
+
+    held = cas.collect_abandoned_temps()
+    assert held == TempCollection(examined=1, deleted=0, bytes_deleted=0), (
+        "another process's lease retains its temp, however old it is"
+    )
+
+    child.kill()
+    child.wait()
+
+    # No grace and no clock: the lease died with its holder, so the very next
+    # sweep reclaims the bytes.
+    reclaimed = cas.collect_abandoned_temps()
+    assert (reclaimed.examined, reclaimed.deleted, reclaimed.bytes_deleted) == (1, 1, size)
+    # The evidence outlives the artifact: the report names the dead creator
+    # and what it cost, which the directory can no longer say.
+    assert [(item.creator, item.bytes_deleted) for item in reclaimed.reclaimed] == [
+        (child.pid, size)
+    ]
+    assert list(cas.tmp.iterdir()) == []
+    assert cas.collect_abandoned_temps() == TempCollection(), "collection is idempotent"
+
+
+def test_files_this_library_did_not_create_are_never_collected(tmp_path: Path) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    caller_owned = cas.tmp / "caller-owned.dat"
+    caller_owned.write_bytes(b"not ours")
+    descriptor, raw_path = tempfile.mkstemp(prefix="download-", dir=cas.tmp)
+    os.close(descriptor)
+
+    assert cas.collect_abandoned_temps() == TempCollection()
+    assert caller_owned.exists() and Path(raw_path).exists()
+
+
+def test_a_leased_download_temp_survives_collection_and_is_adopted(tmp_path: Path) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    payload = b"downloaded bytes"
+    expected = cas.put_bytes(payload)
+    cas.object_path(expected).unlink()
+
+    with cas.open_temp() as staged:
+        staged.write_bytes(payload)
+        # The lease is this process's own, on another descriptor, and it still
+        # outranks the sweep.
+        assert cas.collect_abandoned_temps() == TempCollection(
+            examined=1, deleted=0, bytes_deleted=0
+        )
+        assert cas.adopt_file(staged, expected=expected, size=len(payload)) == expected
+
+    assert cas.verify_object(expected, size=len(payload)).read_bytes() == payload
+    assert cas.collect_abandoned_temps() == TempCollection()
+
+
+def test_collection_racing_adoptions_never_takes_a_live_temp(tmp_path: Path) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    payload = b"one object from many downloads" * 512
+    expected = cas.put_bytes(payload)
+    cas.object_path(expected).unlink()
+
+    stop = threading.Event()
+    reports: list[TempCollection] = []
+
+    def sweep() -> None:
+        while not stop.is_set():
+            reports.append(cas.collect_abandoned_temps())
+
+    def adopt(_: int) -> object:
+        with cas.open_temp() as staged:
+            staged.write_bytes(payload)
+            return cas.adopt_file(staged, expected=expected, size=len(payload))
+
+    sweeper = threading.Thread(target=sweep)
+    sweeper.start()
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            refs = list(pool.map(adopt, range(24)))
+    finally:
+        stop.set()
+        sweeper.join()
+
+    assert refs == [expected] * 24
+    assert cas.verify_object(expected, size=len(payload)).read_bytes() == payload
+    assert sum(report.deleted for report in reports) == 0, "a live temp was collected"
+    assert any(report.examined for report in reports), (
+        "the sweeps never overlapped an adoption, so this proved nothing"
+    )
+
+
+def test_a_temp_name_recycled_between_listing_and_open_is_never_reclaimed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    abandoned = cas.tmp / "tfs-put-recycled"
+    abandoned.write_bytes(b"abandoned bytes")
+
+    real_open = os.open
+
+    def recycle_then_open(path: str | Path, flags: int) -> int:
+        if str(path).endswith("tfs-put-recycled"):
+            monkeypatch.undo()
+            Path(path).unlink()
+            Path(path).write_bytes(b"a brand new writer's longer bytes")
+        return real_open(path, flags)
+
+    monkeypatch.setattr(os, "open", recycle_then_open)
+    assert cas.collect_abandoned_temps() == TempCollection(examined=1, deleted=0, bytes_deleted=0)
+    assert abandoned.read_bytes() == b"a brand new writer's longer bytes"
+
+
+# ---------------------------------------------------------------------------
+# Crashed-projection scratch (#88), the Python renderer
+# ---------------------------------------------------------------------------
+
+_HOLD_PROJECTION = """
+import sys
+from pathlib import Path
+from tensorfs import LocalCAS, project_snapshot
+cas = LocalCAS(Path(sys.argv[1]))
+import tensorfs.project as project
+real_fill = project._fill
+def block(*args, **kwargs):
+    real_fill(*args, **kwargs)
+    sys.stdout.write('ready\\n')
+    sys.stdout.flush()
+    sys.stdin.read()
+project._fill = block
+project_snapshot(cas, cas.read_ref('tree'), Path(sys.argv[2]))
+"""
+
+
+def test_a_crashed_python_projection_leaves_reapable_scratch(tmp_path: Path) -> None:
+    root = tmp_path / "cas"
+    cas = LocalCAS(root)
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"projected weights")
+    manifest_ref = cas.store_manifest(ingest_repository(cas, source))
+    cas.compare_and_swap_ref("tree", manifest_ref, expected=None)
+    target = tmp_path / "trees" / "snapshot"
+    target.parent.mkdir()
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", _HOLD_PROJECTION, str(root), str(target)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert child.stdout is not None
+    assert child.stdout.readline() == "ready\n", "the child reports its scratch is on disk"
+    scratch = [path for path in target.parent.iterdir() if path.name.startswith(".building-")]
+    assert len(scratch) == 1, "the projection builds under exactly one scratch name"
+
+    held = cas.reap_projection_scratch(target.parent)
+    assert (held.examined, held.deleted) == (1, 0), "a live projection's scratch was reaped"
+    assert scratch[0].is_dir()
+
+    child.kill()
+    child.wait()
+
+    reaped = cas.reap_projection_scratch(target.parent)
+    assert (reaped.examined, reaped.deleted) == (1, 1)
+    assert [item.creator for item in reaped.reclaimed] == [child.pid]
+    assert reaped.reclaimed[0].bytes_deleted > 0, "the evidence must say what it freed"
+    assert not scratch[0].exists()
+    assert not target.exists(), "a crashed projection publishes no tree"
+
+    # The orphaned lease is a library temp, so the store's own sweep takes it.
+    assert cas.collect_abandoned_temps().deleted == 1
+    assert cas.reap_projection_scratch(target.parent) == TempCollection()
+
+
+def test_a_completed_python_projection_leaves_no_scratch_or_lease(tmp_path: Path) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"projected weights")
+    manifest = ingest_repository(cas, source)
+    target = tmp_path / "trees" / "snapshot"
+    target.parent.mkdir()
+
+    assert project_snapshot(cas, manifest, target) == target
+    assert (target / "weights.bin").exists()
+    assert [path.name for path in target.parent.iterdir()] == ["snapshot"]
+    assert list(cas.tmp.iterdir()) == [], "the scratch lease is released and removed"
+
+
+def test_projection_scratch_this_library_did_not_create_is_left_alone(tmp_path: Path) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    trees = tmp_path / "trees"
+    trees.mkdir()
+    # Another tool's half-built directory, sharing only the name shape. It
+    # holds no lease this store issued, so it is not this store's to judge.
+    foreign = trees / ".building-some-other-tool"
+    foreign.mkdir()
+    (foreign / "payload.bin").write_bytes(b"not ours to reap")
+
+    assert cas.reap_projection_scratch(trees) == TempCollection()
+    assert (foreign / "payload.bin").exists()

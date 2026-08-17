@@ -20,7 +20,7 @@ use crate::workspace_db::{Connection, OptionalExtension, Param, TransactionBehav
 use thiserror::Error;
 
 use crate::contract::{Registry, Stamp};
-use crate::layout::{Layout, LayoutError};
+use crate::layout::{Layout, LayoutError, ScratchReap};
 use crate::object::ObjectDigest;
 use crate::planner::{ByteSource as _, PlanError, PlannerId, inventory, plan_with};
 use crate::store::{ObjectStore, StoreError};
@@ -182,12 +182,13 @@ pub struct SnapshotUsage {
     pub exclusive: u64,
 }
 
-/// What one scrub removed. Both kinds are cache: trees and refs pin nothing,
-/// so a scrub never frees an object byte.
+/// What one scrub removed. Every kind is cache: trees, refs and scratch pin
+/// nothing, so a scrub never frees an object byte.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ScrubReport {
     pub trees_removed: Vec<SnapshotId>,
     pub refs_removed: Vec<String>,
+    pub scratch: ScratchReap,
 }
 
 /// One reachability walk over both object kinds.
@@ -1272,8 +1273,9 @@ impl WorkspaceStore {
     }
 
     /// Removes what the projected layout can no longer justify: a tree whose
-    /// root row is gone, and a ref that names a snapshot which is not rooted
-    /// or whose content is unreadable.
+    /// root row is gone, a ref that names a snapshot which is not rooted or
+    /// whose content is unreadable, and the scratch of a projection or ref
+    /// swap whose creator died.
     ///
     /// Trees and refs pin nothing, so this frees no object bytes and can never
     /// unroot one — deleting a live root's objects is not a failure mode this
@@ -1316,6 +1318,9 @@ impl WorkspaceStore {
                 report.refs_removed.push(name);
             }
         }
+        // Scratch belongs to a process, not to a root, so it is decided by its
+        // lease and not by the root set this transaction pins.
+        report.scratch = layout.reap_scratch()?;
         tx.commit()?;
         Ok(report)
     }
