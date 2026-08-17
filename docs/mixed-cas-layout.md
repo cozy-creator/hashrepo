@@ -377,9 +377,9 @@ only writer. What each layer protects:
   deletes with POSIX semantics, measured 5/5 on master's own removal path.) So
   a removal reports one of three outcomes rather than a `bool`: `Taken`,
   `Absent`, or `Deferred`. `Deferred` says nothing about the caller's rights
-  and nothing about the artifact: the identical call succeeds once the handle
-  closes, the artifact is untouched and still garbage, and the next scrub takes
-  it, exactly like a tree left by a crash. POSIX never returns it, and there
+  and nothing about the artifact: the identical call succeeds moments later,
+  the artifact is untouched and still garbage, and the next scrub takes it,
+  exactly like a tree left by a crash. POSIX never returns it, and there
   every such error still propagates. `ScrubReport` carries what it deferred, so
   a pass that could take nothing is visible rather than silent.
 - **Dangling links inside a tree** (target object GC'd) cannot occur for a
@@ -391,10 +391,13 @@ inside ONE metadata write transaction — the same transaction `seal_snapshot`
 and `delete_snapshot` commit their row through — so no row can appear or
 vanish under it and a live root's tree can never be judged garbage. It removes
 no objects at all, which is what makes "a scrub racing a deletion costs a live
-root nothing" a structural fact rather than a timing argument.
+root nothing" a structural fact rather than a timing argument. Reaping scratch
+is the one part of the pass outside that transaction, deliberately: it is
+decided by leases rather than by the root set, and a write transaction held
+across filesystem work is a peer's wait.
 
-**Scratch reaping (#88, #109).** `.building-…` and `.swap-…` were originally left
-alone, on the grounds that either may belong to an in-flight projection or
+**Scratch reaping (#88, #109).** `.building-…` and `.swap-…` were originally
+left alone, on the grounds that either may belong to an in-flight projection or
 `set_ref` in another process. True of a live one, and wrong for a crashed
 one — which nothing then removed, so a projector killed inside `fill` stranded
 its scratch forever (on a filesystem without symlinks, a whole copied tree).
