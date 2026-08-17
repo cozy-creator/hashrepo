@@ -24,8 +24,9 @@ use live_support::{
 };
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::sync::{
-    CompleteStatus, DownloadGrant, GrantsPlan, PackClaim, PackGrant, ProgressSink, SyncError,
-    SyncPlan, SyncTransport, TransportError, pull_snapshot, push_snapshot,
+    BlobGrant, BlobPart, BlobPartReport, CompleteStatus, DownloadGrant, GrantsPlan, PackClaim,
+    PackGrant, ProgressSink, SyncError, SyncPlan, SyncTransport, TransportError, pull_snapshot,
+    push_snapshot,
 };
 use tensorfs_core::tfm1::SnapshotId;
 use tensorfs_core::workspace::WorkspaceStore;
@@ -770,11 +771,38 @@ impl<T: SyncTransport> SyncTransport for DropsAClaimedMember<'_, T> {
         self.inner.download_grants(digests)
     }
 
+    fn blob_grants(
+        &self,
+        session: &str,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<BlobGrant>, TransportError> {
+        self.inner.blob_grants(session, digests)
+    }
+
+    fn upload_blob_part(
+        &self,
+        part: &BlobPart,
+        bytes: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<String, TransportError> {
+        self.inner.upload_blob_part(part, bytes, progress)
+    }
+
+    fn report_blob_parts(
+        &self,
+        session: &str,
+        digest: &ObjectDigest,
+        parts: &[BlobPartReport],
+    ) -> Result<(), TransportError> {
+        self.inner.report_blob_parts(session, digest, parts)
+    }
+
     fn download(
         &self,
         grant: &DownloadGrant,
+        sink: &mut dyn std::io::Write,
         progress: ProgressSink<'_>,
-    ) -> Result<Vec<u8>, TransportError> {
-        self.inner.download(grant, progress)
+    ) -> Result<u64, TransportError> {
+        self.inner.download(grant, sink, progress)
     }
 }

@@ -6,9 +6,13 @@
 //! assembles whole-object TFP1 packs and requests grants that bind each
 //! pack's own envelope checksum, uploads ride those presigned grants, and
 //! `complete` is driven through retryable incompleteness to a terminal
-//! answer. Bytes never proxy through the control plane; downloads are
-//! per-object presigned reads admitted through the local store's verifying
-//! writer. The local `ObjectStore` is the pull-side resume journal; on push,
+//! answer. An object too large for a pack rides the th#2064 **blob lane**
+//! instead: the remote opens one multipart upload per blob and presigns its
+//! parts, the client PUTs parts and reports their etags, and the remote
+//! stream-hashes the assembled object once at `complete`. Parts are transport
+//! and never enter identity. Bytes never proxy through the control plane;
+//! downloads are per-object presigned reads streamed straight into the local
+//! store's verifying writer. The local `ObjectStore` is the pull-side resume journal; on push,
 //! staging is scoped to one hub session, so within-run replans never
 //! retransmit a staged pack, and across process restarts resumption is
 //! promotion-level (a re-declare opens a fresh session whose staging starts
@@ -16,20 +20,26 @@
 
 use std::collections::HashSet;
 use std::io::Read;
-use std::io::Write as _;
 use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use crate::object::ObjectDigest;
+use crate::planner::ByteSource as _;
 use crate::store::StoreError;
 use crate::tfm1::{Entry, FileRecord, Snapshot, SnapshotId, Tfm1Error, decode};
 use crate::tfp1::{MAX_PACK_OBJECTS, MAX_PACK_PAYLOAD, Tfp1Error};
 use crate::workspace::{LeaseId, WorkspaceError, WorkspaceStore};
+use crate::workspace_source::RecordsSource;
 
 /// One bounded download-grant batch, per the wire contract.
 pub const DOWNLOAD_GRANT_BATCH: usize = 256;
+
+/// How many blobs one `blob-grants` call may ask for, per the landed hub wire
+/// (th#2064). Each grant opens a real multipart upload, so the bound is the
+/// remote's, not a preference of ours.
+pub const BLOB_GRANT_BATCH: usize = 16;
 
 /// One observation that a transfer advanced.
 ///
@@ -133,6 +143,41 @@ pub struct DownloadGrant {
     pub url: String,
 }
 
+/// One presigned authorization to PUT one exact part of one blob's multipart
+/// upload. `size_bytes` is the remote's, not a choice: the parts of one upload
+/// must be uniform apart from the last.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BlobPart {
+    pub part_number: u32,
+    pub size_bytes: u64,
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+}
+
+/// One blob's live multipart upload: where it stages, which parts it wants,
+/// and which of them the remote already holds.
+///
+/// Re-asking for a grant adopts the SAME `upload_id` and refreshes
+/// `uploaded_parts`, which is what makes resume free — a second upload id
+/// would orphan the first one's parts into billed state no listing shows.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BlobGrant {
+    pub digest: ObjectDigest,
+    pub length: u64,
+    pub staging_key: String,
+    pub upload_id: String,
+    pub part_size: u64,
+    pub parts: Vec<BlobPart>,
+    pub uploaded_parts: Vec<u32>,
+}
+
+/// One part the client has landed, as the store named it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BlobPartReport {
+    pub part_number: u32,
+    pub etag: String,
+}
+
 /// One pack the session has granted before, with its live staged state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StagedPack {
@@ -157,7 +202,12 @@ pub struct SyncPlan {
     pub session: String,
     pub have: Vec<ObjectDigest>,
     pub staged_packs: Vec<StagedPack>,
+    /// The PACK lane: every missing object the pack payload bound can carry.
     pub missing: Vec<(ObjectDigest, u64)>,
+    /// The BLOB lane: every missing object above that bound. Disjoint from
+    /// `missing` by construction, and the two cannot be confused — a grant
+    /// naming the wrong lane is refused at both ends.
+    pub missing_blobs: Vec<(ObjectDigest, u64)>,
     pub max_pack_payload: u64,
     pub max_packs_per_request: usize,
 }
@@ -169,6 +219,7 @@ pub struct GrantsPlan {
     pub grants: Vec<PackGrant>,
     pub staged_packs: Vec<StagedPack>,
     pub missing: Vec<(ObjectDigest, u64)>,
+    pub missing_blobs: Vec<(ObjectDigest, u64)>,
 }
 
 /// The terminal-or-not answer of one `complete` call. Retryability is a
@@ -224,18 +275,49 @@ pub trait SyncTransport {
         pack: &[u8],
         progress: ProgressSink<'_>,
     ) -> Result<(), TransportError>;
+    /// Opens or re-opens the multipart uploads for up to [`BLOB_GRANT_BATCH`]
+    /// blobs. Re-asking for a digest already in flight adopts its live upload
+    /// and reports the parts it already holds.
+    fn blob_grants(
+        &self,
+        session: &str,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<BlobGrant>, TransportError>;
+    /// Uploads one part and returns the etag the store named it with,
+    /// reporting bytes to `progress` as they leave.
+    fn upload_blob_part(
+        &self,
+        part: &BlobPart,
+        bytes: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<String, TransportError>;
+    /// Reports the etags of one blob's landed parts to the session.
+    fn report_blob_parts(
+        &self,
+        session: &str,
+        digest: &ObjectDigest,
+        parts: &[BlobPartReport],
+    ) -> Result<(), TransportError>;
     fn complete(&self, session: &str) -> Result<CompleteStatus, TransportError>;
     fn head(&self) -> Result<Option<SnapshotId>, TransportError>;
     fn download_grants(
         &self,
         digests: &[ObjectDigest],
     ) -> Result<Vec<DownloadGrant>, TransportError>;
-    /// Fetches one object, reporting bytes to `progress` as they arrive.
+    /// Streams one object into `sink`, reporting bytes to `progress` as they
+    /// arrive, and returns how many it wrote.
+    ///
+    /// A sink and not a `Vec`: the blob lane admits objects of any size, and
+    /// buffering a multi-gigabyte dataset video in RAM to hand it to a writer
+    /// that streams anyway is a cliff, not a simplification. The caller's sink
+    /// is the store's verifying writer, so bytes are hashed as they land and
+    /// never exist whole anywhere.
     fn download(
         &self,
         grant: &DownloadGrant,
+        sink: &mut dyn std::io::Write,
         progress: ProgressSink<'_>,
-    ) -> Result<Vec<u8>, TransportError>;
+    ) -> Result<u64, TransportError>;
 }
 
 #[derive(Debug, Error)]
@@ -285,23 +367,41 @@ pub enum SyncError {
     ReplansExhausted(u32),
     #[error("completion still not terminal after {attempts} calls (last: {last})")]
     CompletionExhausted { attempts: u32, last: String },
+    #[error("the remote omitted a blob grant for requested object {0}")]
+    BlobGrantOmitted(ObjectDigest),
     #[error(
-        "object {digest} is {length} bytes, above the {limit}-byte TFP1 pack payload; \
-         blobs above the pack bound need the th#2064 multipart direct-R2 blob grants, \
-         which this wire does not carry yet"
+        "the remote put object {digest} ({length} bytes) in the {lane} lane, but the \
+         {limit}-byte pack payload bound puts it in the other one"
     )]
-    ObjectExceedsPackPayload {
+    BlobLaneMismatch {
         digest: ObjectDigest,
         length: u64,
         limit: u64,
+        lane: &'static str,
     },
+    #[error(
+        "the remote granted {granted} bytes of parts for object {digest}, which is \
+         {length} bytes"
+    )]
+    BlobPartCoverage {
+        digest: ObjectDigest,
+        length: u64,
+        granted: u64,
+    },
+    #[error("blob part uploads exhausted after {attempts} attempts for object {digest}")]
+    BlobPartAttemptsExhausted { digest: ObjectDigest, attempts: u32 },
+    #[error("the remote still lists object {0} as missing after its parts were reported")]
+    BlobNotAccepted(ObjectDigest),
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct PushOptions {
     /// Bounded replans across expired grants and staged-state refreshes.
     pub max_replans: u32,
-    /// Bounded transient retries per pack upload.
+    /// Bounded transient retries per pack upload, and per blob PART upload. A
+    /// part PUT over a residential uplink is reset often enough that the retry
+    /// loop is required rather than optional (measured on the standing stack,
+    /// th#2064).
     pub max_upload_attempts: u32,
     /// Bounded `complete` calls through retryable incompleteness.
     pub max_complete_attempts: u32,
@@ -322,6 +422,11 @@ pub struct PushReport {
     pub uploaded_objects: u64,
     pub uploaded_bytes: u64,
     pub packs: u64,
+    /// Objects that rode the blob lane, and the parts they took. `blob_parts`
+    /// counts parts actually PUT, so a resumed push that adopts landed parts
+    /// reports fewer of them than a cold one.
+    pub blobs: u64,
+    pub blob_parts: u64,
     pub skipped_remote_resident: u64,
     pub complete_attempts: u32,
     pub replans: u32,
@@ -451,20 +556,7 @@ pub fn push_snapshot<T: SyncTransport>(
     let _pin = PendingSyncPin { meta, lease };
     let tfm1_bytes = decoded.to_bytes();
 
-    // A blob larger than one pack payload cannot ride this wire at all: TFP1
-    // stays capped by design, and the multipart lane is th#2064's. Refuse
-    // typed and up front — before any transport call — rather than encoding
-    // a pack that can only fail.
     let closure = data_closure(&decoded);
-    for (digest, length) in &closure {
-        if *length > MAX_PACK_PAYLOAD {
-            return Err(SyncError::ObjectExceedsPackPayload {
-                digest: *digest,
-                length: *length,
-                limit: MAX_PACK_PAYLOAD,
-            });
-        }
-    }
 
     let mut report = PushReport::default();
     let plan = transport.declare(&tfm1_bytes, expected_head)?;
@@ -500,7 +592,35 @@ pub fn push_snapshot<T: SyncTransport>(
     // and in what order; the remote's answer is checked against it, never
     // trusted for it.
     let mut missing = plan.missing;
-    verify_canonical_missing(&closure, &missing)?;
+    let mut missing_blobs = plan.missing_blobs;
+    verify_lanes(&closure, &missing, &missing_blobs, max_payload)?;
+
+    // The blob lane first. Each blob is one multipart upload of its own, so
+    // nothing about it shares state with a pack, and doing it first means a
+    // push whose only missing object is a 4 GiB dataset never builds a pack
+    // at all.
+    if !missing_blobs.is_empty() {
+        push_blob_lane(
+            meta,
+            transport,
+            &session,
+            &missing_blobs,
+            options,
+            &mut report,
+            progress,
+        )?;
+        let refreshed = transport.pack_grants(&session, &[])?;
+        missing = refreshed.missing;
+        missing_blobs = refreshed.missing_blobs;
+        verify_lanes(&closure, &missing, &missing_blobs, max_payload)?;
+        // The remote accepted the parts or it did not; a blob still in the
+        // lane after its parts were reported means the report did not take,
+        // and re-uploading the same bytes would loop forever.
+        if let Some((digest, _)) = missing_blobs.first() {
+            return Err(SyncError::BlobNotAccepted(*digest));
+        }
+    }
+
     loop {
         if missing.is_empty() {
             break;
@@ -608,8 +728,9 @@ pub fn push_snapshot<T: SyncTransport>(
         if report.replans > options.max_replans {
             return Err(SyncError::ReplansExhausted(report.replans));
         }
-        missing = transport.pack_grants(&session, &[])?.missing;
-        verify_canonical_missing(&closure, &missing)?;
+        let refreshed = transport.pack_grants(&session, &[])?;
+        missing = refreshed.missing;
+        verify_lanes(&closure, &missing, &refreshed.missing_blobs, max_payload)?;
     }
 
     loop {
@@ -629,6 +750,243 @@ pub fn push_snapshot<T: SyncTransport>(
     }
 }
 
+/// Both lanes together must be a faithful projection of the manifest just
+/// declared, and each object must be in the lane its size puts it in.
+///
+/// The lane rule is checked in BOTH directions on purpose. A pack-lane row
+/// above the payload bound would be encoded into a pack that can only be
+/// refused; a blob-lane row below it would open a multipart upload for an
+/// object the pack lane already carries, and the remote refuses cross-lane
+/// grants at its end too. Neither is a thing to work around locally: a remote
+/// that partitions wrongly is broken, and the honest answer names the object
+/// that proves it.
+fn verify_lanes(
+    closure: &[(ObjectDigest, u64)],
+    missing: &[(ObjectDigest, u64)],
+    missing_blobs: &[(ObjectDigest, u64)],
+    max_payload: u64,
+) -> Result<(), SyncError> {
+    verify_canonical_missing(closure, missing)?;
+    verify_canonical_missing(closure, missing_blobs)?;
+    for (digest, length) in missing {
+        if *length > max_payload {
+            return Err(SyncError::BlobLaneMismatch {
+                digest: *digest,
+                length: *length,
+                limit: max_payload,
+                lane: "pack",
+            });
+        }
+    }
+    for (digest, length) in missing_blobs {
+        if *length <= max_payload {
+            return Err(SyncError::BlobLaneMismatch {
+                digest: *digest,
+                length: *length,
+                limit: max_payload,
+                lane: "blob",
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Drives the multipart blob lane for every object the remote put in it.
+///
+/// Per blob: ask for the grant, PUT every part the remote does not already
+/// hold — reading each part's bytes out of the local object by RANGE, so peak
+/// memory is one part however large the blob is — and report the etags.
+///
+/// A grant lease that runs out mid-blob is a REPLAN, not a failure and not a
+/// retry against a URL the store has stopped honouring: the blob goes back in
+/// the queue and the next round re-asks, which adopts the same upload and
+/// skips every part that already landed. Replans are bounded by the caller's
+/// budget, so a remote that expires every grant fails in bounded time.
+fn push_blob_lane<T: SyncTransport>(
+    meta: &WorkspaceStore,
+    transport: &T,
+    session: &str,
+    blobs: &[(ObjectDigest, u64)],
+    options: PushOptions,
+    report: &mut PushReport,
+    progress: ProgressSink<'_>,
+) -> Result<(), SyncError> {
+    let mut pending: Vec<(ObjectDigest, u64)> = blobs.to_vec();
+    let mut rounds = 0_u32;
+    while !pending.is_empty() {
+        rounds += 1;
+        if rounds > options.max_replans {
+            return Err(SyncError::ReplansExhausted(rounds));
+        }
+        let mut deferred = Vec::new();
+        for batch in pending.chunks(BLOB_GRANT_BATCH) {
+            let digests: Vec<ObjectDigest> = batch.iter().map(|(digest, _)| *digest).collect();
+            let grants = match transport.blob_grants(session, &digests) {
+                Ok(grants) => grants,
+                Err(TransportError::Expired(_)) => {
+                    deferred.extend_from_slice(batch);
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
+            for (digest, length) in batch {
+                let grant = grants
+                    .iter()
+                    .find(|grant| grant.digest == *digest)
+                    .ok_or(SyncError::BlobGrantOmitted(*digest))?;
+                match push_one_blob(
+                    meta, transport, session, grant, *length, options, report, progress,
+                ) {
+                    Ok(()) => {
+                        report.blobs += 1;
+                        report.uploaded_objects += 1;
+                        report.uploaded_bytes += *length;
+                        // Reported as this blob's parts finish landing, not
+                        // once every blob has: one blob can be the whole
+                        // transfer.
+                        progress.object(*digest, *length);
+                    }
+                    Err(BlobOutcome::Expired) => deferred.push((*digest, *length)),
+                    Err(BlobOutcome::Failed(error)) => return Err(error),
+                }
+            }
+        }
+        pending = deferred;
+        report.replans += 1;
+    }
+    Ok(())
+}
+
+/// Why one blob's upload stopped: a lease that ran out is the caller's
+/// replan, anything else is terminal.
+enum BlobOutcome {
+    Expired,
+    Failed(SyncError),
+}
+
+impl From<SyncError> for BlobOutcome {
+    fn from(error: SyncError) -> Self {
+        Self::Failed(error)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_one_blob<T: SyncTransport>(
+    meta: &WorkspaceStore,
+    transport: &T,
+    session: &str,
+    grant: &BlobGrant,
+    length: u64,
+    options: PushOptions,
+    report: &mut PushReport,
+    progress: ProgressSink<'_>,
+) -> Result<(), BlobOutcome> {
+    let digest = grant.digest;
+    if grant.length != length {
+        return Err(SyncError::MissingLength {
+            digest,
+            expected: length,
+            actual: grant.length,
+        }
+        .into());
+    }
+    // The granted parts must cover the object exactly. Fewer bytes would
+    // assemble a truncated object the remote then refuses on its own
+    // stream-hash — a whole transfer spent to learn something arithmetic
+    // answers here.
+    let granted: u64 = grant.parts.iter().map(|part| part.size_bytes).sum();
+    if granted != length {
+        return Err(SyncError::BlobPartCoverage {
+            digest,
+            length,
+            granted,
+        }
+        .into());
+    }
+
+    let resident = meta
+        .store()
+        .open_object(&digest)
+        .map_err(SyncError::Store)?
+        .metadata()
+        .map_err(|error| SyncError::Store(StoreError::Io(error)))?
+        .len();
+    if resident != length {
+        return Err(SyncError::LocalObjectLength {
+            digest,
+            expected: length,
+            actual: resident,
+        }
+        .into());
+    }
+    // One whole-file record IS the blob's shape, so this is the same
+    // record-addressed source a direct tensor read uses, pointed at one
+    // object. Parts are read by RANGE: peak memory is one part.
+    let source = RecordsSource::new(meta.store(), &[FileRecord::Data { digest, length }]);
+
+    let mut landed: Vec<BlobPartReport> = Vec::new();
+    let mut offset = 0_u64;
+    let mut buffer = Vec::new();
+    for part in &grant.parts {
+        let start = offset;
+        offset += part.size_bytes;
+        // Resume is free, and taken: a part the remote already holds is
+        // skipped without reading a byte of it.
+        if grant.uploaded_parts.contains(&part.part_number) {
+            continue;
+        }
+        let take = usize::try_from(part.size_bytes).map_err(|_| {
+            SyncError::Store(StoreError::Io(std::io::ErrorKind::InvalidInput.into()))
+        })?;
+        buffer.clear();
+        buffer.resize(take, 0);
+        source
+            .read_exact_at(start, &mut buffer)
+            .map_err(|error| SyncError::Store(StoreError::Io(error)))?;
+
+        let mut attempt = 0;
+        let etag = loop {
+            match transport.upload_blob_part(part, &buffer, progress) {
+                Ok(etag) => break etag,
+                Err(TransportError::Io(_)) => {
+                    attempt += 1;
+                    if attempt >= options.max_upload_attempts {
+                        return Err(SyncError::BlobPartAttemptsExhausted {
+                            digest,
+                            attempts: attempt,
+                        }
+                        .into());
+                    }
+                    back_off(attempt);
+                }
+                Err(TransportError::Expired(_)) => {
+                    // Whatever landed stays landed; the re-grant will report
+                    // it and the retry sends only the rest.
+                    if !landed.is_empty() {
+                        transport
+                            .report_blob_parts(session, &digest, &landed)
+                            .map_err(|error| BlobOutcome::Failed(error.into()))?;
+                    }
+                    return Err(BlobOutcome::Expired);
+                }
+                Err(error) => return Err(SyncError::Transport(error).into()),
+            }
+        };
+        landed.push(BlobPartReport {
+            part_number: part.part_number,
+            etag,
+        });
+        report.blob_parts += 1;
+    }
+
+    if !landed.is_empty() {
+        transport
+            .report_blob_parts(session, &digest, &landed)
+            .map_err(|error| BlobOutcome::Failed(error.into()))?;
+    }
+    Ok(())
+}
+
 /// Bounded exponential backoff before retrying a transient carrier failure.
 /// Capped so a long outage still fails in bounded time rather than hanging.
 fn back_off(attempt: u32) {
@@ -638,27 +996,41 @@ fn back_off(attempt: u32) {
     std::thread::sleep(delay);
 }
 
-/// Fetches one object, retrying only genuinely transient carrier failures. A
-/// refusal or an expired grant is never retried here: the first is terminal
-/// and the second belongs to the caller's replan.
-fn download_with_retry<T: SyncTransport>(
+/// Streams one object into a fresh verifying writer and admits it, retrying
+/// only genuinely transient carrier failures. A refusal or an expired grant is
+/// never retried here: the first is terminal and the second belongs to the
+/// caller's replan.
+///
+/// A retry starts a NEW writer, because a half-written one has already hashed
+/// bytes the retry is about to send again. The abandoned temp is removed by
+/// the writer's own `Drop`, and a killed process leaves it to the age-bounded
+/// collector.
+fn download_and_admit<T: SyncTransport>(
+    meta: &WorkspaceStore,
     transport: &T,
     grant: &DownloadGrant,
     attempts: u32,
     progress: ProgressSink<'_>,
-) -> Result<Vec<u8>, TransportError> {
+) -> Result<(), SyncError> {
     let mut attempt = 0;
     loop {
-        match transport.download(grant, progress) {
-            Ok(bytes) => return Ok(bytes),
+        let mut writer = meta.store().writer()?;
+        match transport.download(grant, &mut writer, progress) {
+            Ok(_) => {
+                // The admission boundary is the trust boundary: remote bytes
+                // were hashed while written and are refused on any length or
+                // digest lie.
+                writer.finish_expecting(grant.digest, grant.length)?;
+                return Ok(());
+            }
             Err(TransportError::Io(detail)) => {
                 attempt += 1;
                 if attempt >= attempts {
-                    return Err(TransportError::Io(detail));
+                    return Err(TransportError::Io(detail).into());
                 }
                 back_off(attempt);
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into()),
         }
     }
 }
@@ -731,7 +1103,11 @@ pub fn pull_snapshot<T: SyncTransport>(
                 .iter()
                 .find(|grant| grant.digest == manifest)
                 .ok_or(SyncError::GrantOmitted(manifest))?;
-            let bytes = transport.download(grant, progress)?;
+            // A manifest is kilobytes and its identity has to be checked
+            // before anything is decoded from it, so this one download is
+            // collected in memory on purpose.
+            let mut bytes = Vec::new();
+            transport.download(grant, &mut bytes, progress)?;
             if SnapshotId::of(&bytes) != *id {
                 return Err(SyncError::RemoteManifestCorrupt(*id));
             }
@@ -768,14 +1144,7 @@ pub fn pull_snapshot<T: SyncTransport>(
             // A single transient reset must not abandon a whole pull: a
             // multi-gigabyte fetch crosses too many packets for one-shot
             // transfer to be a defensible contract.
-            let bytes = download_with_retry(transport, grant, DOWNLOAD_ATTEMPTS, progress)?;
-            let mut writer = meta.store().writer()?;
-            writer
-                .write_all(&bytes)
-                .map_err(|error| SyncError::Store(StoreError::Io(error)))?;
-            // The admission boundary is the trust boundary: remote bytes are
-            // hashed while written and refused on any length or digest lie.
-            writer.finish_expecting(*digest, *length)?;
+            download_and_admit(meta, transport, grant, DOWNLOAD_ATTEMPTS, progress)?;
             report.fetched_objects += 1;
             report.fetched_bytes += length;
             // Reported the moment this object is durable, so the next fetch
@@ -803,8 +1172,9 @@ pub mod http {
     use serde::Deserialize;
 
     use super::{
-        CompleteStatus, DownloadGrant, GrantsPlan, ObjectDigest, PackClaim, PackGrant,
-        ProgressSink, SnapshotId, StagedPack, SyncPlan, SyncTransport, TransportError,
+        BlobGrant, BlobPart, BlobPartReport, CompleteStatus, DownloadGrant, GrantsPlan,
+        ObjectDigest, PackClaim, PackGrant, ProgressSink, SnapshotId, StagedPack, SyncPlan,
+        SyncTransport, TransportError,
     };
 
     const CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -1001,6 +1371,35 @@ pub mod http {
     }
 
     #[derive(Deserialize)]
+    struct WireBlobPart {
+        part_number: u32,
+        size_bytes: u64,
+        put_url: String,
+        #[serde(default)]
+        headers: std::collections::BTreeMap<String, String>,
+    }
+
+    #[derive(Deserialize)]
+    struct WireBlobGrant {
+        digest: String,
+        length: u64,
+        #[serde(default)]
+        staging_key: String,
+        upload_id: String,
+        part_size: u64,
+        #[serde(default)]
+        parts: Vec<WireBlobPart>,
+        #[serde(default)]
+        uploaded_parts: Vec<u32>,
+    }
+
+    #[derive(Deserialize)]
+    struct WireBlobGrants {
+        #[serde(default)]
+        grants: Vec<WireBlobGrant>,
+    }
+
+    #[derive(Deserialize)]
     struct WireDeclare {
         snapshot_id: String,
         session_id: String,
@@ -1009,6 +1408,8 @@ pub mod http {
         staged_packs: Vec<WirePackStatus>,
         #[serde(default)]
         missing: Vec<WireMissing>,
+        #[serde(default)]
+        missing_blobs: Vec<WireMissing>,
         #[serde(default)]
         max_pack_payload: u64,
         #[serde(default)]
@@ -1032,6 +1433,8 @@ pub mod http {
         staged_packs: Vec<WirePackStatus>,
         #[serde(default)]
         missing: Vec<WireMissing>,
+        #[serde(default)]
+        missing_blobs: Vec<WireMissing>,
     }
 
     #[derive(Deserialize)]
@@ -1110,6 +1513,7 @@ pub mod http {
                     .collect::<Result<_, _>>()?,
                 staged_packs: staged_rows(wire.staged_packs),
                 missing: missing_pairs(wire.missing)?,
+                missing_blobs: missing_pairs(wire.missing_blobs)?,
                 max_pack_payload: wire.max_pack_payload,
                 max_packs_per_request: wire.max_packs_per_request,
             })
@@ -1156,7 +1560,118 @@ pub mod http {
                     .collect(),
                 staged_packs: staged_rows(wire.staged_packs),
                 missing: missing_pairs(wire.missing)?,
+                missing_blobs: missing_pairs(wire.missing_blobs)?,
             })
+        }
+
+        fn blob_grants(
+            &self,
+            session: &str,
+            digests: &[ObjectDigest],
+        ) -> Result<Vec<BlobGrant>, TransportError> {
+            let body = serde_json::json!({
+                "digests": digests.iter().map(tagged).collect::<Vec<_>>(),
+            });
+            let url = self.route(&format!("/{session}/blob-grants"));
+            let (status, value) = self.exchange("POST", &url, Some(&body))?;
+            if status != 200 {
+                return Err(refuse(status, &value));
+            }
+            let wire: WireBlobGrants = serde_json::from_value(value)
+                .map_err(|error| TransportError::Io(format!("blob-grants response: {error}")))?;
+            wire.grants
+                .into_iter()
+                .map(|grant| {
+                    Ok(BlobGrant {
+                        digest: parse_ref(&grant.digest)?,
+                        length: grant.length,
+                        staging_key: grant.staging_key,
+                        upload_id: grant.upload_id,
+                        part_size: grant.part_size,
+                        parts: grant
+                            .parts
+                            .into_iter()
+                            .map(|part| BlobPart {
+                                part_number: part.part_number,
+                                size_bytes: part.size_bytes,
+                                url: part.put_url,
+                                headers: part.headers.into_iter().collect(),
+                            })
+                            .collect(),
+                        uploaded_parts: grant.uploaded_parts,
+                    })
+                })
+                .collect()
+        }
+
+        fn upload_blob_part(
+            &self,
+            part: &BlobPart,
+            bytes: &[u8],
+            progress: ProgressSink<'_>,
+        ) -> Result<String, TransportError> {
+            let mut request = self.agent.put(&part.url).timeout(TRANSFER_TIMEOUT);
+            for (name, value) in &part.headers {
+                request = request.set(name, value);
+            }
+            if !part
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            {
+                request = request.set("content-length", &bytes.len().to_string());
+            }
+            let body = ReportingBody {
+                rest: bytes,
+                progress,
+            };
+            match request.send(body) {
+                // The etag is the store's name for these exact bytes, and the
+                // hub needs it verbatim — quotes included — to complete the
+                // upload. A part with no etag cannot be completed at all, so
+                // its absence is a refusal rather than an empty string.
+                Ok(response) => match response.header("etag") {
+                    Some(etag) if !etag.is_empty() => Ok(etag.to_owned()),
+                    _ => Err(TransportError::Io(format!(
+                        "part {} landed without an etag",
+                        part.part_number
+                    ))),
+                },
+                Err(ureq::Error::Status(403, _)) => Err(TransportError::Expired(
+                    "blob part grant refused (403)".to_owned(),
+                )),
+                Err(ureq::Error::Status(status, response)) => Err(TransportError::Refused {
+                    code: format!("http-{status}"),
+                    detail: response.into_string().unwrap_or_default(),
+                }),
+                Err(ureq::Error::Transport(transport)) => {
+                    Err(TransportError::Io(transport.to_string()))
+                }
+            }
+        }
+
+        fn report_blob_parts(
+            &self,
+            session: &str,
+            digest: &ObjectDigest,
+            parts: &[BlobPartReport],
+        ) -> Result<(), TransportError> {
+            let body = serde_json::json!({
+                "digest": tagged(digest),
+                "parts": parts
+                    .iter()
+                    .map(|part| serde_json::json!({
+                        "part_number": part.part_number,
+                        "etag": part.etag,
+                    }))
+                    .collect::<Vec<_>>(),
+            });
+            let url = self.route(&format!("/{session}/blob-parts"));
+            let (status, value) = self.exchange("POST", &url, Some(&body))?;
+            if status != 200 && status != 204 {
+                return Err(refuse(status, &value));
+            }
+            Ok(())
         }
 
         fn upload_pack(
@@ -1269,8 +1784,9 @@ pub mod http {
         fn download(
             &self,
             grant: &DownloadGrant,
+            sink: &mut dyn std::io::Write,
             progress: ProgressSink<'_>,
-        ) -> Result<Vec<u8>, TransportError> {
+        ) -> Result<u64, TransportError> {
             let response = match self.agent.get(&grant.url).timeout(TRANSFER_TIMEOUT).call() {
                 Ok(response) => response,
                 Err(ureq::Error::Status(403, _)) => {
@@ -1288,9 +1804,12 @@ pub mod http {
                     return Err(TransportError::Io(transport.to_string()));
                 }
             };
-            // Read block by block rather than in one gulp, so a slow
-            // multi-megabyte object still reports movement while it arrives.
-            let mut bytes = Vec::new();
+            // Block by block into the caller's sink, so a slow object reports
+            // movement while it arrives and a multi-gigabyte one never exists
+            // whole in memory. Reading one byte past the granted length is
+            // deliberate: a remote sending MORE than it granted must be
+            // caught, not silently truncated into a passing admission.
+            let mut written = 0_u64;
             let mut reader = response.into_reader().take(grant.length + 1);
             let mut block = vec![0_u8; DOWNLOAD_BLOCK];
             loop {
@@ -1300,18 +1819,18 @@ pub mod http {
                 if read == 0 {
                     break;
                 }
-                bytes.extend_from_slice(&block[..read]);
+                sink.write_all(&block[..read])
+                    .map_err(|error| TransportError::Io(error.to_string()))?;
+                written += read as u64;
                 progress.bytes(read as u64);
             }
-            if bytes.len() as u64 != grant.length {
+            if written != grant.length {
                 return Err(TransportError::Io(format!(
-                    "download for {} returned {} bytes, grant says {}",
-                    grant.digest,
-                    bytes.len(),
-                    grant.length
+                    "download for {} returned {written} bytes, grant says {}",
+                    grant.digest, grant.length
                 )));
             }
-            Ok(bytes)
+            Ok(written)
         }
     }
 }

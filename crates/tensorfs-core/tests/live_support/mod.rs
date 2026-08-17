@@ -12,13 +12,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
+use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::object::plan_and_hash;
 use tensorfs_core::planner::{ByteSource, PlannerId};
 use tensorfs_core::store::ObjectStore;
 use tensorfs_core::sync::http::{HttpTransport, TokenSource};
 use tensorfs_core::sync::{
-    CompleteStatus, DownloadGrant, GrantsPlan, PackClaim, PackGrant, ProgressSink, SyncPlan,
-    SyncTransport, TransportError,
+    BlobGrant, BlobPart, BlobPartReport, CompleteStatus, DownloadGrant, GrantsPlan, PackClaim,
+    PackGrant, ProgressSink, SyncPlan, SyncTransport, TransportError,
 };
 use tensorfs_core::tfm1::{Entry, FileRecord, SnapshotId};
 use tensorfs_core::workspace::{Mutation, WorkspaceStore};
@@ -366,19 +367,46 @@ impl<T: SyncTransport> SyncTransport for Counting<'_, T> {
         self.inner.download_grants(digests)
     }
 
+    fn blob_grants(
+        &self,
+        session: &str,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<BlobGrant>, TransportError> {
+        self.inner.blob_grants(session, digests)
+    }
+
+    fn upload_blob_part(
+        &self,
+        part: &BlobPart,
+        bytes: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<String, TransportError> {
+        self.inner.upload_blob_part(part, bytes, progress)
+    }
+
+    fn report_blob_parts(
+        &self,
+        session: &str,
+        digest: &ObjectDigest,
+        parts: &[BlobPartReport],
+    ) -> Result<(), TransportError> {
+        self.inner.report_blob_parts(session, digest, parts)
+    }
+
     fn download(
         &self,
         grant: &DownloadGrant,
+        sink: &mut dyn std::io::Write,
         progress: ProgressSink<'_>,
-    ) -> Result<Vec<u8>, TransportError> {
-        let bytes = self.record(|| self.inner.download(grant, progress));
-        if let Ok(bytes) = &bytes {
+    ) -> Result<u64, TransportError> {
+        let written = self.record(|| self.inner.download(grant, sink, progress));
+        if let Ok(written) = &written {
             self.bump(|counts| {
                 counts.download += 1;
-                counts.downloaded_bytes += bytes.len() as u64;
+                counts.downloaded_bytes += *written;
             });
         }
-        bytes
+        written
     }
 }
 
@@ -461,11 +489,38 @@ impl<T: SyncTransport> SyncTransport for FailUploadAfter<'_, T> {
         self.inner.download_grants(digests)
     }
 
+    fn blob_grants(
+        &self,
+        session: &str,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<BlobGrant>, TransportError> {
+        self.inner.blob_grants(session, digests)
+    }
+
+    fn upload_blob_part(
+        &self,
+        part: &BlobPart,
+        bytes: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<String, TransportError> {
+        self.inner.upload_blob_part(part, bytes, progress)
+    }
+
+    fn report_blob_parts(
+        &self,
+        session: &str,
+        digest: &ObjectDigest,
+        parts: &[BlobPartReport],
+    ) -> Result<(), TransportError> {
+        self.inner.report_blob_parts(session, digest, parts)
+    }
+
     fn download(
         &self,
         grant: &DownloadGrant,
+        sink: &mut dyn std::io::Write,
         progress: ProgressSink<'_>,
-    ) -> Result<Vec<u8>, TransportError> {
-        self.inner.download(grant, progress)
+    ) -> Result<u64, TransportError> {
+        self.inner.download(grant, sink, progress)
     }
 }

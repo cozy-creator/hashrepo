@@ -17,10 +17,20 @@ use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::PlannerId;
 use tensorfs_core::store::StoreError;
 use tensorfs_core::sync::{
-    CompleteStatus, DownloadGrant, GrantsPlan, PackClaim, PackGrant, Progress, ProgressSink,
-    PullReport, PushOptions, PushReport, StagedPack, SyncError, SyncPlan, SyncTransport,
-    TransportError, manifest_object_digest, pull_snapshot, push_snapshot,
+    BlobGrant, BlobPart, BlobPartReport, CompleteStatus, DownloadGrant, GrantsPlan, PackClaim,
+    PackGrant, Progress, ProgressSink, PullReport, PushOptions, PushReport, StagedPack, SyncError,
+    SyncPlan, SyncTransport, TransportError, manifest_object_digest, pull_snapshot, push_snapshot,
 };
+
+/// What a hub whose corpus never reaches the blob lane answers if the engine
+/// ever asks. It never should — a lane it never lists cannot be driven — so
+/// this is a loud refusal rather than a silent success.
+fn blob_lane_absent() -> TransportError {
+    TransportError::Refused {
+        code: "blob_lane_unsupported".to_owned(),
+        detail: "this hub lists no blob-lane objects".to_owned(),
+    }
+}
 use tensorfs_core::tfm1::{FileRecord, SnapshotId, decode};
 use tensorfs_core::tfp1;
 use tensorfs_core::workspace::{Mutation, WorkspaceStore};
@@ -226,6 +236,9 @@ impl SyncTransport for FakeHub {
             have,
             staged_packs: Vec::new(),
             missing,
+            // This hub carries no blob lane; the multipart path is covered
+            // against the full-fidelity hub in `tests/blob_lane.rs`.
+            missing_blobs: Vec::new(),
             max_pack_payload: if state.pack_payload_cap == 0 {
                 tfp1::MAX_PACK_PAYLOAD
             } else {
@@ -334,6 +347,7 @@ impl SyncTransport for FakeHub {
             grants,
             staged_packs: Self::staged_rows(&state, session),
             missing: Self::missing_view(&state, session),
+            missing_blobs: Vec::new(),
         })
     }
 
@@ -492,18 +506,46 @@ impl SyncTransport for FakeHub {
             .collect())
     }
 
+    fn blob_grants(
+        &self,
+        _session: &str,
+        _digests: &[ObjectDigest],
+    ) -> Result<Vec<BlobGrant>, TransportError> {
+        Err(blob_lane_absent())
+    }
+
+    fn upload_blob_part(
+        &self,
+        _part: &BlobPart,
+        _bytes: &[u8],
+        _progress: ProgressSink<'_>,
+    ) -> Result<String, TransportError> {
+        Err(blob_lane_absent())
+    }
+
+    fn report_blob_parts(
+        &self,
+        _session: &str,
+        _digest: &ObjectDigest,
+        _parts: &[BlobPartReport],
+    ) -> Result<(), TransportError> {
+        Err(blob_lane_absent())
+    }
     fn download(
         &self,
         grant: &DownloadGrant,
+        sink: &mut dyn std::io::Write,
         progress: ProgressSink<'_>,
-    ) -> Result<Vec<u8>, TransportError> {
+    ) -> Result<u64, TransportError> {
         let state = self.state.borrow();
         let mut bytes = state.objects[grant.digest.as_bytes()].clone();
         if state.corrupt_download_of == Some(*grant.digest.as_bytes()) {
             bytes[0] ^= 0xFF;
         }
+        sink.write_all(&bytes)
+            .map_err(|error| TransportError::Io(error.to_string()))?;
         progress.bytes(bytes.len() as u64);
-        Ok(bytes)
+        Ok(bytes.len() as u64)
     }
 }
 
@@ -750,49 +792,6 @@ fn packs_hold_whole_sorted_objects_within_the_payload_bound() {
     // lying about size, members or bytes would have refused there.
 }
 
-/// A blob above one pack payload cannot ride TFP1 at all — its lane is the
-/// th#2064 multipart direct-R2 blob grant, which this wire does not carry.
-/// The refusal is TYPED, names the object, and fires before any transport
-/// call, so nothing is staged, declared, or half-uploaded.
-#[test]
-fn a_blob_above_the_pack_payload_refuses_typed_before_any_transport_call() {
-    let mib = 1024 * 1024;
-    let root = scratch("big-blob");
-    let meta = WorkspaceStore::open(&root).expect("workspace store opens");
-    meta.create_workspace("publisher")
-        .expect("workspace creates");
-    let big = vec![0x5A_u8; 64 * mib + 1];
-    let admitted = meta.store().put_bytes(&big).expect("blob admits");
-    meta.commit_generation(
-        "publisher",
-        &[Mutation::CreateFile {
-            path: "video.webm".to_owned(),
-            executable: false,
-            planner: PlannerId::BlobV1,
-            records: vec![FileRecord::Data {
-                digest: admitted.digest(),
-                length: admitted.length(),
-            }],
-        }],
-    )
-    .expect("the oversized blob commits");
-    let id = meta.seal_snapshot("publisher", None).expect("seals");
-
-    let hub = FakeHub::new();
-    match push(&meta, &hub, &id, None) {
-        Err(SyncError::ObjectExceedsPackPayload { digest, length, .. }) => {
-            assert_eq!(digest, admitted.digest());
-            assert_eq!(length, 64 * (mib as u64) + 1);
-        }
-        other => panic!("expected the typed th#2064 refusal, got {other:?}"),
-    }
-    let state = hub.state.borrow();
-    assert!(
-        state.sessions.is_empty() && state.staged.is_empty() && state.head.is_none(),
-        "the refusal fired before any transport call"
-    );
-}
-
 #[test]
 fn completion_retries_through_incompleteness_and_surfaces_terminal_refusal() {
     let root = scratch("complete");
@@ -896,12 +895,38 @@ impl SyncTransport for PerturbingHub {
         self.inner.download_grants(digests)
     }
 
+    fn blob_grants(
+        &self,
+        session: &str,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<BlobGrant>, TransportError> {
+        self.inner.blob_grants(session, digests)
+    }
+
+    fn upload_blob_part(
+        &self,
+        part: &BlobPart,
+        bytes: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<String, TransportError> {
+        self.inner.upload_blob_part(part, bytes, progress)
+    }
+
+    fn report_blob_parts(
+        &self,
+        session: &str,
+        digest: &ObjectDigest,
+        parts: &[BlobPartReport],
+    ) -> Result<(), TransportError> {
+        self.inner.report_blob_parts(session, digest, parts)
+    }
     fn download(
         &self,
         grant: &DownloadGrant,
+        sink: &mut dyn std::io::Write,
         progress: ProgressSink<'_>,
-    ) -> Result<Vec<u8>, TransportError> {
-        self.inner.download(grant, progress)
+    ) -> Result<u64, TransportError> {
+        self.inner.download(grant, sink, progress)
     }
 }
 
@@ -1144,12 +1169,38 @@ impl SyncTransport for SaboteurHub<'_> {
         self.inner.download_grants(digests)
     }
 
+    fn blob_grants(
+        &self,
+        session: &str,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<BlobGrant>, TransportError> {
+        self.inner.blob_grants(session, digests)
+    }
+
+    fn upload_blob_part(
+        &self,
+        part: &BlobPart,
+        bytes: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<String, TransportError> {
+        self.inner.upload_blob_part(part, bytes, progress)
+    }
+
+    fn report_blob_parts(
+        &self,
+        session: &str,
+        digest: &ObjectDigest,
+        parts: &[BlobPartReport],
+    ) -> Result<(), TransportError> {
+        self.inner.report_blob_parts(session, digest, parts)
+    }
     fn download(
         &self,
         grant: &DownloadGrant,
+        sink: &mut dyn std::io::Write,
         progress: ProgressSink<'_>,
-    ) -> Result<Vec<u8>, TransportError> {
-        self.inner.download(grant, progress)
+    ) -> Result<u64, TransportError> {
+        self.inner.download(grant, sink, progress)
     }
 }
 
@@ -1296,11 +1347,37 @@ impl SyncTransport for GatedPull<'_> {
         self.inner.download_grants(digests)
     }
 
+    fn blob_grants(
+        &self,
+        session: &str,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<BlobGrant>, TransportError> {
+        self.inner.blob_grants(session, digests)
+    }
+
+    fn upload_blob_part(
+        &self,
+        part: &BlobPart,
+        bytes: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<String, TransportError> {
+        self.inner.upload_blob_part(part, bytes, progress)
+    }
+
+    fn report_blob_parts(
+        &self,
+        session: &str,
+        digest: &ObjectDigest,
+        parts: &[BlobPartReport],
+    ) -> Result<(), TransportError> {
+        self.inner.report_blob_parts(session, digest, parts)
+    }
     fn download(
         &self,
         grant: &DownloadGrant,
+        sink: &mut dyn std::io::Write,
         progress: ProgressSink<'_>,
-    ) -> Result<Vec<u8>, TransportError> {
+    ) -> Result<u64, TransportError> {
         if grant.digest != self.manifest {
             if self.served.get() > 0 && self.beats.objects() == 0 {
                 return Err(TransportError::Refused {
@@ -1312,7 +1389,7 @@ impl SyncTransport for GatedPull<'_> {
             }
             self.served.set(self.served.get() + 1);
         }
-        self.inner.download(grant, progress)
+        self.inner.download(grant, sink, progress)
     }
 }
 
@@ -1374,12 +1451,38 @@ impl SyncTransport for GatedPush<'_> {
         self.inner.download_grants(digests)
     }
 
+    fn blob_grants(
+        &self,
+        session: &str,
+        digests: &[ObjectDigest],
+    ) -> Result<Vec<BlobGrant>, TransportError> {
+        self.inner.blob_grants(session, digests)
+    }
+
+    fn upload_blob_part(
+        &self,
+        part: &BlobPart,
+        bytes: &[u8],
+        progress: ProgressSink<'_>,
+    ) -> Result<String, TransportError> {
+        self.inner.upload_blob_part(part, bytes, progress)
+    }
+
+    fn report_blob_parts(
+        &self,
+        session: &str,
+        digest: &ObjectDigest,
+        parts: &[BlobPartReport],
+    ) -> Result<(), TransportError> {
+        self.inner.report_blob_parts(session, digest, parts)
+    }
     fn download(
         &self,
         grant: &DownloadGrant,
+        sink: &mut dyn std::io::Write,
         progress: ProgressSink<'_>,
-    ) -> Result<Vec<u8>, TransportError> {
-        self.inner.download(grant, progress)
+    ) -> Result<u64, TransportError> {
+        self.inner.download(grant, sink, progress)
     }
 }
 
