@@ -1,0 +1,8 @@
+# Conformance fixtures are byte contracts, so git must never translate their
+# line endings. The Windows runner proved the need: `core.autocrlf` rewrote a
+# committed `.stub` fixture's trailing LF to CRLF on checkout, and a stub's
+# single trailing line feed is part of the format (`spec/v1/TFSSTUB1.md`).
+spec/v1/tfsstub1-vectors/fixtures/*.stub -text
+spec/v1/tfm1-vectors/fixtures/*.hex      -text
+spec/v1/tfp1-vectors/fixtures/*.hex      -text
+spec/v1/planner-vectors/fixtures/*.hex   -text

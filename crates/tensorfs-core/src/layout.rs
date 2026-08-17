@@ -47,7 +47,19 @@ pub enum LayoutError {
     UnreadableRef(String),
 }
 
+/// What one pointer stub says: which file body it stands for, and how many
+/// bytes that file really has.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Stub {
+    pub body_sha256: ObjectDigest,
+    pub size: u64,
+}
+
 /// One pointer stub's bytes: the magic, one space, one line of JSON.
+///
+/// Emitted by hand rather than by a serializer because the BYTES are the
+/// contract (`spec/v1/TFSSTUB1.md`, `spec/v1/tfsstub1-vectors/`) — key order,
+/// absence of whitespace and the single trailing line feed included.
 ///
 /// `body_sha256` is the SHA-256 of the manifest's canonical file **body**
 /// encoding — the file's identity under TFM1, which deliberately carries no
@@ -60,6 +72,44 @@ pub fn stub_bytes(body_sha256: &ObjectDigest, size: u64) -> Vec<u8> {
         body_sha256.to_hex()
     )
     .into_bytes()
+}
+
+/// Reads one pointer stub, or `None` when the bytes are not one.
+///
+/// Cheap enough to run on any small file: the magic decides in eight bytes.
+#[must_use]
+pub fn parse_stub(bytes: &[u8]) -> Option<Stub> {
+    let rest = bytes.strip_prefix(STUB_MAGIC)?.strip_prefix(b" ")?;
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Wire {
+        body_sha256: String,
+        size: u64,
+        read: String,
+    }
+    let wire: Wire = serde_json::from_slice(rest.strip_suffix(b"\n").unwrap_or(rest)).ok()?;
+    if wire.read != "tensorfs" {
+        return None;
+    }
+    Some(Stub {
+        body_sha256: parse_hex_digest(&wire.body_sha256)?,
+        size: wire.size,
+    })
+}
+
+fn parse_hex_digest(text: &str) -> Option<ObjectDigest> {
+    if text.len() != 64 {
+        return None;
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, pair) in text.as_bytes().chunks_exact(2).enumerate() {
+        let digits = std::str::from_utf8(pair).ok()?;
+        if digits.bytes().any(|byte| byte.is_ascii_uppercase()) {
+            return None;
+        }
+        bytes[index] = u8::from_str_radix(digits, 16).ok()?;
+    }
+    Some(ObjectDigest::from_bytes(bytes))
 }
 
 /// The projected trees and refs beside one object store.

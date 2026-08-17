@@ -762,10 +762,30 @@ fn a_stub_carries_the_body_digest_and_logical_size_of_its_manifest_entry() {
         })
         .expect("the fixture has a tensor entry");
     assert_eq!(body.logical_size(), fixture.weights.len() as u64);
+    let stub = tree.join("model.safetensors");
     assert_eq!(
-        fs::read(tree.join("model.safetensors")).unwrap(),
+        fs::read(&stub).unwrap(),
         stub_bytes(&body.body_sha256(), body.logical_size())
     );
+
+    // A stub is a REAL FILE at the real filename — not a symlink, not a
+    // directory, not absent — and it is immutable like every other artifact
+    // in the tree.
+    let metadata = fs::symlink_metadata(&stub).unwrap();
+    assert!(metadata.is_file() && !metadata.file_type().is_symlink());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o444);
+        assert_eq!(
+            fs::OpenOptions::new()
+                .append(true)
+                .open(&stub)
+                .expect_err("a stub must refuse a write")
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

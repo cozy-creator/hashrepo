@@ -210,6 +210,11 @@ real filename, containing one line —
 TFSSTUB1 {"body_sha256":"…","size":4000000000,"read":"tensorfs"}
 ```
 
+**The format is pinned** in `spec/v1/TFSSTUB1.md`, with a byte corpus in
+`spec/v1/tfsstub1-vectors/` that both the Rust renderer and the Python
+consumer read. Key order, the single space after the magic, the absence of
+whitespace and the one trailing line feed are all contract.
+
 **The digest field is `body_sha256`, not `file_sha256`** (decided while
 implementing #69, flagged for Paul). §2 above establishes that TFM1 carries
 **no whole-file hash** for a tensor container — its identity IS its record
@@ -230,9 +235,20 @@ Argued per consumer experience:
   the real filename; absence would make every weights directory look empty and
   break layout probes far from the cause. Proven below: `rglob` finds the stub.
 - **naive `open()`** — reads `TFSSTUB1 …`, which no safetensors u64 header or
-  GGUF magic will parse: a **loud error at the parse site**, pointing at the
-  file, versus absence's `FileNotFoundError` (misread as a corrupt snapshot) —
-  fail fast beats fail mysterious. Proven below.
+  GGUF magic will parse: a **loud error at the parse site** versus absence's
+  `FileNotFoundError` (misread as a corrupt snapshot) — fail fast beats fail
+  mysterious. Measured against the real libraries in
+  `python/tests/test_pointer_stubs.py`:
+
+  | reader | on a stub | on absence |
+  |---|---|---|
+  | `safetensors.safe_open` | `SafetensorError: Error while deserializing header: header too large` | `FileNotFoundError` |
+  | `gguf.GGUFReader` | `ValueError: GGUF magic invalid` | `FileNotFoundError` |
+
+  One correction to the original claim: **neither library names the file in
+  the message.** Both raise their own parse-error type, and the caller knows
+  the path because it passed it — which is the distinction that matters
+  (parse failure vs. `OSError`), and is what the tests assert.
 - **`stat` / `du`** — the honest cost: size reads ~128 B, not 4 GB. Accepted:
   a consumer that cares about weight *bytes* is a tensor consumer and must go
   through tensorfs regardless; the stub's `size` field carries the truth for
@@ -420,7 +436,11 @@ changes, hub-side anything, and Windows fallback behaviour.
   `WorkspaceStore::project_snapshot`/`delete_snapshot` own root ordering. The
   `snapshots` table is `(id, sealed_generation)` — bytes live at
   `objects/sha256/…/<id>` and a root row roots the manifest itself.
-- **tensorfs#70** — pointer stubs, format pinned.
+- **tensorfs#70** — pointer stubs, format pinned. **Landed.**
+  `spec/v1/TFSSTUB1.md` + `spec/v1/tfsstub1-vectors/`; `layout::stub_bytes` /
+  `layout::parse_stub` are the only renderer and reader, fenced by a
+  magic-uniqueness test. The projection, refs and stub codecs reach Python
+  through `tensorfs.native`.
 - **tensorfs#71** — GC + accounting over the unified store.
 - **th#2064** (tracker) — multipart direct-R2 blob grants; hub re-pins the Go
   module; TFP1 untouched.
