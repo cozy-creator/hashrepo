@@ -156,6 +156,22 @@ impl FileBody {
         }
     }
 
+    /// This file's identity: SHA-256 over the body's canonical encoding —
+    /// exactly the bytes the manifest carries for it, planner tag included.
+    ///
+    /// TFM1 deliberately has no whole-file hash for a tensor container (its
+    /// identity IS its record list), so this is the only file-level digest
+    /// derivable from a manifest entry without reading the file's bytes. A
+    /// pointer stub carries it for that reason.
+    #[must_use]
+    pub fn body_sha256(&self) -> ObjectDigest {
+        let mut bytes = Vec::new();
+        emit_body(&mut bytes, self);
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        ObjectDigest::from_bytes(hasher.finalize().into())
+    }
+
     /// The body as an ordered record run. A tensor body is its records; a
     /// nonempty blob is one whole-file data record; an empty blob is none.
     /// This is the one read-path vocabulary, so record consumers need no blob
@@ -493,6 +509,43 @@ fn validate_tree<E>(
     Ok(())
 }
 
+/// One file body's canonical encoding: the planner tag and the body per
+/// planner. Shared by the manifest writer and [`FileBody::body_sha256`], so a
+/// stub's digest is provably over the same bytes the manifest carries.
+fn emit_body(bytes: &mut Vec<u8>, body: &FileBody) {
+    bytes.push(planner_tag(body));
+    match body {
+        FileBody::Tensor {
+            logical_size,
+            records,
+            ..
+        } => {
+            bytes.extend_from_slice(&logical_size.to_le_bytes());
+            bytes.extend_from_slice(&(records.len() as u64).to_le_bytes());
+            for record in records {
+                match record {
+                    FileRecord::Data { digest, length } => {
+                        bytes.push(RECORD_DATA);
+                        bytes.extend_from_slice(digest.as_bytes());
+                        bytes.extend_from_slice(&length.to_le_bytes());
+                    }
+                    FileRecord::Hole { length } => {
+                        bytes.push(RECORD_HOLE);
+                        bytes.extend_from_slice(&length.to_le_bytes());
+                    }
+                }
+            }
+        }
+        FileBody::Blob {
+            logical_size,
+            digest,
+        } => {
+            bytes.extend_from_slice(&logical_size.to_le_bytes());
+            bytes.extend_from_slice(digest.as_bytes());
+        }
+    }
+}
+
 fn emit(parent: Option<&SnapshotId>, entries: &[(String, Entry)]) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&MAGIC);
@@ -512,37 +565,7 @@ fn emit(parent: Option<&SnapshotId>, entries: &[(String, Entry)]) -> Vec<u8> {
             Entry::File { executable, body } => {
                 bytes.push(KIND_FILE);
                 bytes.push(u8::from(*executable));
-                bytes.push(planner_tag(body));
-                match body {
-                    FileBody::Tensor {
-                        logical_size,
-                        records,
-                        ..
-                    } => {
-                        bytes.extend_from_slice(&logical_size.to_le_bytes());
-                        bytes.extend_from_slice(&(records.len() as u64).to_le_bytes());
-                        for record in records {
-                            match record {
-                                FileRecord::Data { digest, length } => {
-                                    bytes.push(RECORD_DATA);
-                                    bytes.extend_from_slice(digest.as_bytes());
-                                    bytes.extend_from_slice(&length.to_le_bytes());
-                                }
-                                FileRecord::Hole { length } => {
-                                    bytes.push(RECORD_HOLE);
-                                    bytes.extend_from_slice(&length.to_le_bytes());
-                                }
-                            }
-                        }
-                    }
-                    FileBody::Blob {
-                        logical_size,
-                        digest,
-                    } => {
-                        bytes.extend_from_slice(&logical_size.to_le_bytes());
-                        bytes.extend_from_slice(digest.as_bytes());
-                    }
-                }
+                emit_body(&mut bytes, body);
             }
             Entry::Symlink { target } => {
                 bytes.push(KIND_SYMLINK);

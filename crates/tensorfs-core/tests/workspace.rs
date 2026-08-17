@@ -595,15 +595,8 @@ fn corrupt_stored_snapshot(
     shape: Corruption,
     named: &ObjectDigest,
 ) -> Vec<u8> {
-    let connection =
-        rusqlite::Connection::open(root.join("metadata.sqlite3")).expect("rusqlite opens");
-    let honest: Vec<u8> = connection
-        .query_row(
-            "SELECT blob FROM snapshots WHERE id = ?1",
-            rusqlite::params![id.as_bytes().as_slice()],
-            |row| row.get(0),
-        )
-        .expect("the snapshot row reads");
+    let path = manifest_object_path(root, id);
+    let honest = fs::read(&path).expect("the manifest object reads");
     assert_eq!(
         SnapshotId::of(&honest),
         *id,
@@ -616,13 +609,25 @@ fn corrupt_stored_snapshot(
         *id,
         "the damaged bytes must stop hashing to their id, or nothing is under test"
     );
-    connection
-        .execute(
-            "UPDATE snapshots SET blob = ?1 WHERE id = ?2",
-            rusqlite::params![damaged, id.as_bytes().as_slice()],
-        )
-        .expect("the corruption writes");
+    // Objects install 0444, so damaging one takes the chmod the design says
+    // it does not defend against — which is exactly the fixture wanted here.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("object unlocks");
+    }
+    fs::write(&path, &damaged).expect("the corruption writes");
     damaged
+}
+
+/// A manifest lives in the object store at its own id.
+fn manifest_object_path(root: &Path, id: &SnapshotId) -> PathBuf {
+    let hex = id.to_string();
+    root.join("objects")
+        .join("sha256")
+        .join(&hex[..2])
+        .join(&hex[2..4])
+        .join(&hex)
 }
 
 /// Flips the low bit of the last byte of `named`'s digest where it appears in
@@ -810,20 +815,11 @@ fn a_corrupt_generation_is_isolated_and_the_last_known_good_snapshot_survives() 
         }
         // The damaged bytes are still there: a refusal reports, it does not
         // repair, and it does not destroy the evidence.
-        let connection =
-            rusqlite::Connection::open(root.0.join("metadata.sqlite3")).expect("rusqlite opens");
-        let resident: Vec<u8> = connection
-            .query_row(
-                "SELECT blob FROM snapshots WHERE id = ?1",
-                rusqlite::params![doomed.as_bytes().as_slice()],
-                |row| row.get(0),
-            )
-            .expect("the damaged row is still there");
         assert_eq!(
-            resident, damaged,
+            fs::read(manifest_object_path(&root.0, &doomed)).expect("the damaged object is there"),
+            damaged,
             "{shape_name}: the evidence was rewritten"
         );
-        drop(connection);
 
         // The operator recovery path: dropping the unreadable generation
         // un-wedges GC, and the surviving snapshot still roots its own bytes.

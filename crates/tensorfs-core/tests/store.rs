@@ -14,6 +14,19 @@ fn digest_of(bytes: &[u8]) -> ObjectDigest {
     ObjectDigest::from_bytes(Sha256::digest(bytes).into())
 }
 
+/// Chmods an installed 0444 object writable. The design declines to defend
+/// against the store's owner doing exactly this, so a tamper fixture stages
+/// it explicitly rather than relying on objects being writable.
+fn unlock(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 fn digest_path(root: &Path, digest: &ObjectDigest) -> PathBuf {
     let hex = digest
         .to_string()
@@ -176,6 +189,49 @@ fn open_refuses_missing_and_non_regular_objects() {
     }
 }
 
+/// Admission installs the immutable mode, on the first admission and on the
+/// re-admission that finds the object already resident.
+///
+/// Red proof: remove `set_read_only` from `ObjectWriter::install` and both
+/// arms report 0644 (or whatever the umask allows).
+#[test]
+#[cfg(unix)]
+fn admitted_objects_install_read_only() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = TempRoot::new("readonly");
+    let store = ObjectStore::open(&root.0).unwrap();
+
+    let admitted = store
+        .put_bytes(b"immutable from the moment it lands")
+        .unwrap();
+    let path = digest_path(&root.0, &admitted.digest());
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o444
+    );
+
+    let error = fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect_err("an object must refuse an ordinary write open");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+
+    // A second admission of the same bytes is a verified no-op; the mode
+    // survives it, and the leased temp it wrote is cleaned up.
+    assert!(
+        store
+            .put_bytes(b"immutable from the moment it lands")
+            .unwrap()
+            .preexisting()
+    );
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o444
+    );
+    assert!(tmp_entries(&root.0).is_empty());
+}
+
 #[test]
 fn verify_reports_corruption_without_deleting_the_object() {
     let root = TempRoot::new("verify");
@@ -185,6 +241,7 @@ fn verify_reports_corruption_without_deleting_the_object() {
     assert_eq!(store.verify(&admitted.digest()).unwrap(), 11);
 
     let path = digest_path(&root.0, &admitted.digest());
+    unlock(&path);
     fs::write(&path, b"tampered!!!").unwrap();
     assert!(matches!(
         store.verify(&admitted.digest()),

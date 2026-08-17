@@ -512,8 +512,18 @@ fn a_multi_gb_declared_blob_reseals_by_offset_length_with_zero_rehash() {
     let sealed = store.seal_snapshot("w", None).expect("seal");
     assert_eq!(
         count_objects(root.path()),
-        objects,
-        "reuse by (offset, length): the seal admitted nothing"
+        objects + 1,
+        "reuse by (offset, length): the seal admitted nothing but the manifest"
+    );
+    assert!(
+        root.path()
+            .join("objects")
+            .join("sha256")
+            .join(&sealed.to_string()[..2])
+            .join(&sealed.to_string()[2..4])
+            .join(sealed.to_string())
+            .is_file(),
+        "the one new object is the manifest, stored at its own id"
     );
     assert_eq!(
         store.head_generation("w").expect("generation reads"),

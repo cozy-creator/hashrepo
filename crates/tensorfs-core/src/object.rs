@@ -19,6 +19,18 @@ impl ObjectDigest {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// The bare lowercase hex spelling — the object's filename in the store
+    /// and the value a pointer stub carries. `Display` prints the
+    /// algorithm-tagged form instead, which is never a path component.
+    #[must_use]
+    pub fn to_hex(self) -> String {
+        let mut hex = String::with_capacity(64);
+        for byte in self.0 {
+            hex.push_str(&format!("{byte:02x}"));
+        }
+        hex
+    }
 }
 
 impl fmt::Debug for ObjectDigest {

@@ -40,7 +40,7 @@ Rust planner is the sole authority).
 <root>/
   objects/sha256/xx/yy/<64-hex>    # every CAS blob: whole files AND tensor chunks
   snapshots/<snapshot-id>/…        # projected symlink trees (disposable)
-  refs/<name> -> ../snapshots/<id> # relative symlink, atomically replaced
+  refs/<name>                      # one snapshot id + LF, replaced by rename(2)
   tmp/                             # leased admission temps (unchanged)
   workspace metadata DB            # roots index, leases, GC state (unchanged home)
 ```
@@ -60,10 +60,31 @@ stub per tensor-planner file (§4). It is a **projection, never authoritative**
 — derivable from the manifest at any time, deletable at any time, and pins
 nothing (§6).
 
-**`refs/<name>`** is a relative symlink to `../snapshots/<id>`, replaced
-atomically by `rename(2)`. The HF cache stores a hex-containing file; a
-symlink is strictly better here — same atomic swap, but `cd refs/main` and
-`readlink` both work, and naive tooling traverses it for free.
+**`refs/<name>`** is a plain text file holding one snapshot id and a line
+feed, replaced atomically by `rename(2)` — git's `.git/refs/heads/*` and the
+HF cache's `refs/main`.
+
+**This retires the symlink ref this document originally specified** (decided
+while implementing #69, forced by measurement, flagged for Paul). The symlink
+was chosen for two ergonomic wins over HF's hex file: `readlink` works, and
+naive tooling traverses `refs/main/<file>` for free. Under 2,000 concurrent
+swaps, on CI, **both wins failed**:
+
+- **`readlink` on a name being renamed transiently returns EINVAL on APFS** —
+  about 2 reads in 45,000, while the name itself was never once absent. A
+  reader that `lstat`s first and `readlink`s second fails more often still:
+  two lookups of a renamed name are not one observation.
+- **A multi-component walk THROUGH a renamed name transiently returns
+  ENOENT**, on Linux as well as macOS, reproduced locally. It never returns
+  wrong bytes and the miss is self-healing, but "traverses it for free" is
+  not true while anything is swapping.
+
+`open`-then-`read` of a rename-swapped name yields the old id or the new one
+on every platform and nothing else, which is why git and HF both chose it.
+The supported consumer pattern is therefore the one a hex file forces anyway:
+**resolve the ref once, then use `snapshots/<id>`** — a resolved tree is
+immutable and a swap deletes nothing, so the path stays valid for as long as
+the snapshot exists. `cd snapshots/$(cat refs/main)` replaces `cd refs/main`.
 
 **There is no `/manifests` directory.** A TFM1 snapshot id IS the SHA-256 of
 the manifest bytes, so the manifest is admitted to the blob store **at its own
@@ -186,8 +207,21 @@ pointer stub**, and the decision is a **stub**: a 0444 file named exactly the
 real filename, containing one line —
 
 ```text
-TFSSTUB1 {"file_sha256":"…","size":4000000000,"read":"tensorfs"}
+TFSSTUB1 {"body_sha256":"…","size":4000000000,"read":"tensorfs"}
 ```
+
+**The digest field is `body_sha256`, not `file_sha256`** (decided while
+implementing #69, flagged for Paul). §2 above establishes that TFM1 carries
+**no whole-file hash** for a tensor container — its identity IS its record
+list — and the only files that have a whole-file digest, blobs, project as
+symlinks and never as stubs. A field spelled `file_sha256` would therefore
+either be a lie about what it holds, or force the projection to read every
+tensor byte to compute one, destroying the zero-copy property this whole
+layout exists for. `body_sha256` is SHA-256 over the entry's canonical file
+**body** encoding — planner tag included, exactly the bytes the manifest
+carries for it — so it is derivable from the manifest alone, is stable across
+snapshots, and identifies the file precisely. Reverting to the original
+spelling is a one-line change if Paul prefers the name over the accuracy.
 
 Argued per consumer experience:
 
@@ -227,7 +261,18 @@ only writer. What each layer protects:
 - **Filesystems without symlinks** (Windows dev boxes): probe at store open,
   HF-style; the projection falls back to copies — local dedup lost,
   correctness kept. Pods are Linux; this is a dev nicety and gets no more
-  design than this paragraph.
+  design than this paragraph. The 0444 install is POSIX-only for the same
+  reason it is a nicety there: Windows' read-only *attribute* would make the
+  store's own `remove_file` — of a leased temp, and of a quarantined object in
+  GC — fail, so Windows keeps inherited ACLs.
+- **The executable bit is not projectable** (recorded while implementing #69).
+  A blob's mode belongs to the shared object, and executability is a tree
+  fact, not a content fact: the same blob may be executable in one snapshot
+  and not in another, so 0555-ing the object would be wrong for its other
+  referents. TFM1 keeps the bit; the projected symlink does not carry it —
+  the HF cache loses it identically. The one consumer that would care,
+  `dlopen` of a compiled graph, does not need `+x` on Linux; a projected
+  script that must be executed is a `extract()` case.
 
 ## 6. Symlink specifics
 
@@ -243,7 +288,7 @@ only writer. What each layer protects:
   manifest blob → record digests + blob digests), exactly as today — never
   from walking `snapshots/`. A symlink tree is cache, not evidence.
 - **Snapshot deletion** = delete the DB root row, then `rm -rf
-  snapshots/<id>`, then drop any `refs/` symlink pointing at it — in that
+  snapshots/<id>`, then drop any `refs/` entry naming it — in that
   order, because a tree without a root is inert garbage while a root without a
   tree is merely unprojected. A dangling tree or dangling ref left by a crash
   between steps is garbage the next scrub removes.
@@ -371,6 +416,10 @@ changes, hub-side anything, and Windows fallback behaviour.
   vectors regenerate in the same cut.
 - **tensorfs#69** — the layout: snapshot symlink trees, atomic refs,
   manifests as blobs at their own id; tree builder replaces materialization.
+  **Landed.** `tensorfs_core::layout` owns the projection and refs;
+  `WorkspaceStore::project_snapshot`/`delete_snapshot` own root ordering. The
+  `snapshots` table is `(id, sealed_generation)` — bytes live at
+  `objects/sha256/…/<id>` and a root row roots the manifest itself.
 - **tensorfs#70** — pointer stubs, format pinned.
 - **tensorfs#71** — GC + accounting over the unified store.
 - **th#2064** (tracker) — multipart direct-R2 blob grants; hub re-pins the Go

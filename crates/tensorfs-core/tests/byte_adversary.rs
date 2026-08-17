@@ -42,6 +42,22 @@ fn object_path(root: &std::path::Path, digest: &ObjectDigest) -> PathBuf {
         .join(&hex)
 }
 
+/// Chmods a 0444 object writable so a corruption fixture can be staged.
+///
+/// This IS the attack the design declines to defend — the store's owner can
+/// always chmod-and-edit — so an adversary test stages it explicitly. Every
+/// caller below would fail with EACCES without it, which is the mode's own
+/// evidence.
+fn unlock(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o644)).expect("object unlocks");
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 /// One way to damage an object's bytes in place.
 type Corruption = Box<dyn Fn(&[u8]) -> Vec<u8>>;
 
@@ -113,6 +129,7 @@ fn verify_catches_every_content_corruption_shape() {
         let (scratch, meta, _id, digest) = built("content");
         let path = object_path(scratch.path(), &digest);
         let original = fs::read(&path).expect("object reads");
+        unlock(&path);
         fs::write(&path, mutate(&original)).expect("corruption writes");
 
         let error = meta
@@ -150,6 +167,7 @@ fn a_valid_object_filed_under_the_wrong_digest_is_refused() {
         .expect("second object admits");
     let victim = object_path(scratch.path(), &digest);
     let impostor = object_path(scratch.path(), &other.digest());
+    unlock(&victim);
     fs::copy(&impostor, &victim).expect("impostor overwrites the victim");
 
     let error = meta
@@ -625,6 +643,7 @@ fn reads_do_not_rehash_which_is_why_verify_exists() {
     let original = fs::read(&path).expect("object reads");
     let mut corrupted = original.clone();
     corrupted[0] ^= 0xFF;
+    unlock(&path);
     fs::write(&path, &corrupted).expect("corruption writes");
 
     // The read path opens it happily...

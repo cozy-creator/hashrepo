@@ -121,6 +121,7 @@ pub struct TempCollection {
 #[derive(Debug)]
 pub struct ObjectStore {
     root: PathBuf,
+    symlinks: bool,
 }
 
 impl ObjectStore {
@@ -134,10 +135,28 @@ impl ObjectStore {
         fsync_dir(&root.join("objects"))?;
         fsync_dir(&sha256)?;
         fsync_dir(&tmp)?;
-        Ok(Self { root })
+        let symlinks = probe_symlinks(&root);
+        Ok(Self { root, symlinks })
     }
 
-    fn sha256_dir(&self) -> PathBuf {
+    /// The store root every projected tree and ref is relative to.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Whether this filesystem let the store create a symlink at open.
+    ///
+    /// False on a Windows box without the create-symlink privilege, and on
+    /// the handful of filesystems that have no symlinks at all. The
+    /// projection falls back to copies there: local dedup is lost,
+    /// correctness is kept.
+    #[must_use]
+    pub const fn supports_symlinks(&self) -> bool {
+        self.symlinks
+    }
+
+    pub(crate) fn sha256_dir(&self) -> PathBuf {
         self.root.join("objects").join("sha256")
     }
 
@@ -145,8 +164,8 @@ impl ObjectStore {
         self.root.join("tmp")
     }
 
-    fn object_path(&self, digest: &ObjectDigest) -> PathBuf {
-        let hex = digest_hex(digest);
+    pub(crate) fn object_path(&self, digest: &ObjectDigest) -> PathBuf {
+        let hex = digest.to_hex();
         self.sha256_dir().join(&hex[..2]).join(&hex[2..4]).join(hex)
     }
 
@@ -597,6 +616,10 @@ impl ObjectWriter<'_> {
             .parent()
             .expect("object paths always have a parent");
         fs::create_dir_all(leaf)?;
+        // The mode lands on the temp inode BEFORE it is linked into the
+        // object tree, so a resident object is never briefly writable. The
+        // write fd above is already open and unaffected.
+        set_read_only(&self.path)?;
         match fs::hard_link(&self.path, &final_path) {
             Ok(()) => {
                 fsync_dir(leaf)?;
@@ -699,12 +722,53 @@ fn parse_digest_hex(name: &str) -> Option<ObjectDigest> {
     Some(ObjectDigest::from_bytes(bytes))
 }
 
-fn digest_hex(digest: &ObjectDigest) -> String {
-    let mut hex = String::with_capacity(64);
-    for byte in digest.as_bytes() {
-        hex.push_str(&format!("{byte:02x}"));
+/// Installs the immutable mode HF and git both use: readable by everyone,
+/// writable by nobody.
+///
+/// This stops accidents — an editor, a `>` redirection, an `open("ab")`
+/// through a snapshot symlink — which is the entire practical threat on a
+/// pod. A determined chmod-and-edit by the store's owner is explicitly not
+/// defended; `verify` is the scrub for suspicion.
+///
+/// Unix only. Windows' read-only ATTRIBUTE would make the store's own
+/// `remove_file` — of the leased temp here, and of a quarantined object in
+/// GC — fail, so Windows keeps inherited ACLs and this is a no-op there.
+pub(crate) fn set_read_only(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o444))
     }
-    hex
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
+/// One symlink created and removed at the store root, answering whether this
+/// filesystem supports the projection's links at all.
+///
+/// The root and not `tmp/`: a process killed between the create and the
+/// remove would otherwise strand a file in the directory whose emptiness is a
+/// crash-safety assertion. At the root a stranded probe is inert — nothing
+/// reads it, and the next open uses a fresh unique name.
+fn probe_symlinks(root: &Path) -> bool {
+    let probe = root.join(format!(
+        ".symlink-probe-{}-{}",
+        process::id(),
+        TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = fs::remove_file(&probe);
+    #[cfg(unix)]
+    let created = std::os::unix::fs::symlink("probe-target", &probe);
+    #[cfg(windows)]
+    let created = std::os::windows::fs::symlink_file("probe-target", &probe);
+    #[cfg(not(any(unix, windows)))]
+    let created = Err(io::Error::from(io::ErrorKind::Unsupported));
+    let supported = created.is_ok();
+    let _ = fs::remove_file(&probe);
+    supported
 }
 
 /// Directory fsync seals a rename/link against the containing directory. The
