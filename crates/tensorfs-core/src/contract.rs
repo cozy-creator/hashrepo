@@ -90,6 +90,8 @@ pub enum ContractError {
     RoleHoles(String),
     #[error("fusion declaration on {0:?} is malformed")]
     Fusion(String),
+    #[error("permute declaration on {0:?} is malformed")]
+    Permute(String),
     #[error("named set {0:?} is malformed")]
     Set(String),
     #[error("the registry holds {0} twice")]
@@ -407,6 +409,16 @@ pub struct FusionRun {
 }
 
 impl FusionRun {
+    /// The whole tensor as its own single run: what an undeclared (unfused)
+    /// tensor contributes to the role map.
+    #[must_use]
+    pub const fn whole(length: u64) -> Self {
+        Self {
+            role: String::new(),
+            length,
+        }
+    }
+
     #[must_use]
     pub fn role(&self) -> &str {
         &self.role
@@ -506,6 +518,112 @@ impl Fusion {
 }
 
 // ---------------------------------------------------------------------------
+// Permutes
+// ---------------------------------------------------------------------------
+
+/// One dimension of a permute view: a literal, one axis of the tensor's own
+/// shape (optionally divided), or the single inferred dimension.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Dim {
+    Literal(u64),
+    /// `shape[k]`, optionally `shape[k]/n`.
+    Axis {
+        axis: usize,
+        divisor: u64,
+    },
+    /// `auto`: whatever makes the product come out right. At most one.
+    Auto,
+}
+
+impl Dim {
+    fn parse(text: &str) -> Option<Self> {
+        if text == "auto" {
+            return Some(Self::Auto);
+        }
+        if let Ok(literal) = text.parse::<u64>() {
+            return (literal > 0).then_some(Self::Literal(literal));
+        }
+        let (head, divisor) = match text.split_once('/') {
+            None => (text, 1),
+            Some((head, tail)) => (head, tail.parse::<u64>().ok().filter(|value| *value > 0)?),
+        };
+        let axis = head
+            .strip_prefix("shape[")?
+            .strip_suffix(']')?
+            .parse::<usize>()
+            .ok()?;
+        Some(Self::Axis { axis, divisor })
+    }
+}
+
+/// A GENERALIZED permute: reshape to `view`, permute those axes, reshape
+/// back. Plain transpose is the two-axis case; the llama.cpp rope-permute
+/// (`reshape(n_head, 2, d/2, …).swapaxes(1, 2)`) is why the primitive has to
+/// be this and not `transpose`.
+///
+/// A permute is the one thing in this vocabulary that MOVES bytes inside a
+/// tensor. It is exactly invertible and dtype-preserving — layout, not math —
+/// so it is servable from bytes we already hold; it is simply not
+/// chunk-shareable, which is why it is declared here rather than as a fusion.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Permute {
+    pub(crate) view: Vec<Dim>,
+    pub(crate) axes: Vec<usize>,
+}
+
+impl Permute {
+    #[must_use]
+    pub fn axes(&self) -> &[usize] {
+        &self.axes
+    }
+
+    /// The concrete view dimensions for a tensor of this shape, or `None`
+    /// when the declaration cannot apply to it.
+    #[must_use]
+    pub fn resolve(&self, shape: &[u64]) -> Option<Vec<u64>> {
+        let elements: u64 = shape
+            .iter()
+            .try_fold(1_u64, |product, dimension| product.checked_mul(*dimension))?;
+        let mut resolved = Vec::with_capacity(self.view.len());
+        let mut auto = None;
+        let mut known = 1_u64;
+        for (index, dimension) in self.view.iter().enumerate() {
+            let value = match dimension {
+                Dim::Literal(literal) => *literal,
+                Dim::Axis { axis, divisor } => {
+                    let axis = *shape.get(*axis)?;
+                    if *divisor == 0 || !axis.is_multiple_of(*divisor) {
+                        return None;
+                    }
+                    axis / divisor
+                }
+                Dim::Auto => {
+                    if auto.replace(index).is_some() {
+                        return None;
+                    }
+                    1
+                }
+            };
+            if value == 0 {
+                return None;
+            }
+            known = known.checked_mul(value)?;
+            resolved.push(value);
+        }
+        match auto {
+            None => (known == elements).then_some(resolved),
+            Some(index) => {
+                if known == 0 || !elements.is_multiple_of(known) {
+                    return None;
+                }
+                resolved[index] = elements / known;
+                Some(resolved)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The contract
 // ---------------------------------------------------------------------------
 
@@ -518,6 +636,7 @@ pub struct TensorPattern {
     pub(crate) rank: Option<usize>,
     pub(crate) required: bool,
     pub(crate) fusion: Option<Fusion>,
+    pub(crate) permute: Option<Permute>,
 }
 
 impl TensorPattern {
@@ -531,9 +650,23 @@ impl TensorPattern {
         &self.pattern
     }
 
+    /// Whether a file must carry this declaration to implement the contract.
+    #[must_use]
+    pub const fn is_required(&self) -> bool {
+        self.required
+    }
+
     #[must_use]
     pub const fn fusion(&self) -> Option<&Fusion> {
         self.fusion.as_ref()
+    }
+
+    /// How this layout re-arranges the role's canonical element order, if it
+    /// does. Two contracts whose permutes differ for one role serve the same
+    /// bytes in a different order: viewable, not chunk-shareable.
+    #[must_use]
+    pub const fn permute(&self) -> Option<&Permute> {
+        self.permute.as_ref()
     }
 
     #[must_use]
@@ -622,6 +755,20 @@ impl Contract {
                 tensor.required,
                 tensor.dtypes.join(","),
             ));
+            if let Some(permute) = &tensor.permute {
+                text.push_str(" permute=");
+                for dimension in &permute.view {
+                    match dimension {
+                        Dim::Literal(literal) => text.push_str(&literal.to_string()),
+                        Dim::Auto => text.push_str("auto"),
+                        Dim::Axis { axis, divisor } => {
+                            text.push_str(&format!("shape[{axis}]/{divisor}"));
+                        }
+                    }
+                    text.push(',');
+                }
+                text.push_str(&format!(":{:?}", permute.axes));
+            }
             if let Some(fusion) = &tensor.fusion {
                 text.push_str(&format!(" fusion=groups:{},", fusion.groups));
                 for part in &fusion.parts {
@@ -734,6 +881,11 @@ impl Contract {
             }
             if let Some(fusion) = &entry.fusion
                 && fusion.runs(tensor.shape(), tensor.length()).is_none()
+            {
+                return None;
+            }
+            if let Some(permute) = &entry.permute
+                && permute.resolve(tensor.shape()).is_none()
             {
                 return None;
             }
@@ -921,6 +1073,17 @@ struct RawTensor {
     required: bool,
     #[serde(default)]
     fusion: Option<RawFusion>,
+    #[serde(default)]
+    permute: Option<RawPermute>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPermute {
+    /// Dimensions to reshape to before permuting: a positive integer (as a
+    /// number or a string), `shape[k]`, `shape[k]/n`, or `auto` (at most one).
+    view: Vec<serde_json::Value>,
+    axes: Vec<usize>,
 }
 
 const fn yes() -> bool {
@@ -1020,6 +1183,55 @@ impl RawContract {
                     })
                 }
             };
+            let permute = match raw.permute {
+                None => None,
+                Some(raw_permute) => {
+                    let malformed = || ContractError::Permute(raw.pattern.clone());
+                    // A permute inside a fused tensor would mean its seam runs
+                    // are NOT the split packaging's bytes, which is the one
+                    // thing a seam declaration promises.
+                    if fusion.is_some() {
+                        return Err(malformed());
+                    }
+                    if raw_permute.view.len() < 2
+                        || raw_permute.axes.len() != raw_permute.view.len()
+                    {
+                        return Err(malformed());
+                    }
+                    let mut seen = vec![false; raw_permute.axes.len()];
+                    for axis in &raw_permute.axes {
+                        if *axis >= seen.len() || seen[*axis] {
+                            return Err(malformed());
+                        }
+                        seen[*axis] = true;
+                    }
+                    if raw_permute
+                        .axes
+                        .iter()
+                        .enumerate()
+                        .all(|(at, axis)| at == *axis)
+                    {
+                        // The identity permute is the absence of one; two
+                        // spellings of "canonical" would break comparison.
+                        return Err(malformed());
+                    }
+                    let mut view = Vec::with_capacity(raw_permute.view.len());
+                    for dimension in &raw_permute.view {
+                        let parsed = match dimension {
+                            serde_json::Value::Number(number) => {
+                                number.as_u64().filter(|value| *value > 0).map(Dim::Literal)
+                            }
+                            serde_json::Value::String(text) => Dim::parse(text),
+                            _ => None,
+                        };
+                        view.push(parsed.ok_or_else(malformed)?);
+                    }
+                    Some(Permute {
+                        view,
+                        axes: raw_permute.axes,
+                    })
+                }
+            };
             tensors.push(TensorPattern {
                 role,
                 pattern,
@@ -1027,6 +1239,7 @@ impl RawContract {
                 rank: raw.rank,
                 required: raw.required,
                 fusion,
+                permute,
             });
         }
 

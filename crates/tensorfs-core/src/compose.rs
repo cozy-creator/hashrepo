@@ -19,10 +19,12 @@ use std::fmt::Write as _;
 
 use thiserror::Error;
 
+use crate::adapter;
 use crate::contract::Contract;
 use crate::object::ObjectDigest;
 use crate::planner::{
-    ByteSource as _, MAX_OBJECT_SIZE, PlanError, Region, TensorFormat, gguf, plan_with, safetensors,
+    ByteSource as _, MAX_OBJECT_SIZE, PlanError, Region, TensorFormat, gguf,
+    inventory as planner_inventory, plan_with, safetensors,
 };
 use crate::store::{ObjectStore, StoreError};
 use crate::tfm1::{FileBody, FileRecord};
@@ -46,6 +48,8 @@ pub enum ComposeError {
     NotObjectAligned(String),
     #[error("the composed header does not fit the format's bounds")]
     HeaderTooLarge,
+    #[error("this layout is not derivable from that one: {0}")]
+    NotDerivable(String),
     #[error(transparent)]
     Plan(#[from] PlanError),
     #[error(transparent)]
@@ -306,24 +310,164 @@ fn compose_safetensors(
         }
     }
 
-    // `data_offsets` are relative to the data section, so recomputing them for
-    // the new header length can never shift a tensor against its own grid.
+    let declared: Vec<(&str, &str, &[u64], u64)> = kept
+        .iter()
+        .map(|(name, tensor)| {
+            (
+                *name,
+                tensor.dtype.as_str(),
+                tensor.shape.as_slice(),
+                tensor.end - tensor.start,
+            )
+        })
+        .collect();
+    let file = safetensors_header(&declared)?;
+
+    let mut composed = admit(store, &file)?;
+    for (_, tensor) in kept {
+        composed.extend(
+            inherit(
+                records,
+                layout.header_end + tensor.start,
+                tensor.end - tensor.start,
+            )
+            .ok_or_else(|| ComposeError::NotObjectAligned(tensor.name.clone()))?,
+        );
+    }
+    Ok(composed)
+}
+
+/// Derives one container in a DIFFERENT layout contract from a committed
+/// one's own bytes.
+///
+/// Renames, reshapes and fuse/splits along the outer axis are run-preserving,
+/// so the derived file inherits every data object by digest and admits one
+/// new header — a derived snapshot is an ORDINARY manifest, with no program
+/// and no new grammar, and GC pins its sources through the existing mark
+/// walk. Tensors the two contracts declare re-arranged (a generalized
+/// permute) cannot be inherited: those, and only those, are materialized
+/// here, at DEFINITION time. That is the load-order ruling in force — the
+/// stored copy ends up in the order it will be read, instead of paying a
+/// gather on every load.
+///
+/// The result is stamped with the target contract, because its boundaries are
+/// the target layout's, not the source's.
+pub fn derive(
+    store: &ObjectStore,
+    body: &FileBody,
+    source_contract: &Contract,
+    target_contract: &Contract,
+) -> Result<FileBody, ComposeError> {
+    let FileBody::Tensor { records, .. } = body else {
+        return Err(ComposeError::NotATensorContainer);
+    };
+    let source = RecordsSource::new(store, records);
+    let inventory = planner_inventory(&source)?.ok_or(ComposeError::Unreadable("safetensors"))?;
+    let decision = adapter::decide(source_contract, &inventory, target_contract)
+        .map_err(|error| ComposeError::NotDerivable(error.to_string()))?;
+    let adapter = match &decision {
+        adapter::Decision::Conversion { reason } => {
+            return Err(ComposeError::NotDerivable(reason.clone()));
+        }
+        adapter::Decision::RunPreserving(adapter)
+        | adapter::Decision::Rearranged { adapter, .. } => adapter,
+    };
+
+    let declared: Vec<(&str, &str, &[u64], u64)> = adapter
+        .tensors()
+        .iter()
+        .map(|tensor| {
+            (
+                tensor.name(),
+                tensor.dtype(),
+                tensor.shape(),
+                tensor.length(),
+            )
+        })
+        .collect();
+    let mut composed = admit(store, &safetensors_header(&declared)?)?;
+
+    for tensor in adapter.tensors() {
+        if tensor.transform().is_identity() {
+            for run in tensor.runs() {
+                composed.extend(
+                    inherit(records, run.offset(), run.length())
+                        .ok_or_else(|| ComposeError::NotObjectAligned(run.role().to_owned()))?,
+                );
+            }
+            continue;
+        }
+        // The re-arranged minority: read once, permute once, admit once.
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(usize::try_from(tensor.length()).unwrap_or(usize::MAX))
+            .map_err(|_| ComposeError::Plan(PlanError::ResourceExhausted))?;
+        bytes.resize(usize::try_from(tensor.length()).unwrap_or(usize::MAX), 0);
+        let mut written = 0_usize;
+        for run in tensor.runs() {
+            let span = usize::try_from(run.length()).unwrap_or(usize::MAX);
+            source
+                .read_exact_at(run.offset(), &mut bytes[written..written + span])
+                .map_err(|error| ComposeError::Plan(PlanError::Read(error)))?;
+            written += span;
+        }
+        let elements: u64 = tensor.shape().iter().product();
+        let element_size = usize::try_from(tensor.length() / elements.max(1)).unwrap_or(0);
+        if element_size == 0 {
+            return Err(ComposeError::NotDerivable(format!(
+                "{:?} has no whole-byte element size",
+                tensor.name()
+            )));
+        }
+        let moved = tensor
+            .transform()
+            .apply(&bytes, element_size, tensor.shape())
+            .ok_or_else(|| {
+                ComposeError::NotDerivable(format!(
+                    "the declared permute does not fit {:?}",
+                    tensor.name()
+                ))
+            })?;
+        for piece in moved.chunks(usize::try_from(MAX_OBJECT_SIZE).unwrap_or(usize::MAX)) {
+            let admitted = store.put_bytes(piece)?;
+            composed.push(FileRecord::Data {
+                digest: admitted.digest(),
+                length: admitted.length(),
+            });
+        }
+    }
+
+    Ok(FileBody::Tensor {
+        format: TensorFormat::SafetensorsV1,
+        contract: target_contract.stamp(),
+        logical_size: composed.iter().map(record_length).sum(),
+        records: composed,
+    })
+}
+
+/// The complete header of a safetensors file declaring exactly these tensors,
+/// in this order: the 8-byte length prefix and the JSON.
+///
+/// `data_offsets` are relative to the data section, so recomputing them for a
+/// header of a different length can never shift a tensor against its own
+/// chunk grid — which is what makes every composition here a header rewrite
+/// and nothing else.
+fn safetensors_header(tensors: &[(&str, &str, &[u64], u64)]) -> Result<Vec<u8>, ComposeError> {
     let mut header = String::from("{");
     let mut cursor = 0_u64;
-    for (index, (name, tensor)) in kept.iter().enumerate() {
+    for (index, (name, dtype, shape, length)) in tensors.iter().enumerate() {
         if index > 0 {
             header.push(',');
         }
         let quoted = serde_json::to_string(name).expect("a string always serializes");
-        let dtype = serde_json::to_string(&tensor.dtype).expect("a string always serializes");
+        let dtype = serde_json::to_string(dtype).expect("a string always serializes");
         write!(header, "{quoted}:{{\"dtype\":{dtype},\"shape\":[").expect("writing to a String");
-        for (axis, dimension) in tensor.shape.iter().enumerate() {
+        for (axis, dimension) in shape.iter().enumerate() {
             if axis > 0 {
                 header.push(',');
             }
             write!(header, "{dimension}").expect("writing to a String");
         }
-        let length = tensor.end - tensor.start;
         write!(
             header,
             "],\"data_offsets\":[{cursor},{}]}}",
@@ -341,19 +485,7 @@ fn compose_safetensors(
     let length = u64::try_from(bytes.len()).map_err(|_| ComposeError::HeaderTooLarge)?;
     let mut file = length.to_le_bytes().to_vec();
     file.append(&mut bytes);
-
-    let mut composed = admit(store, &file)?;
-    for (_, tensor) in kept {
-        composed.extend(
-            inherit(
-                records,
-                layout.header_end + tensor.start,
-                tensor.end - tensor.start,
-            )
-            .ok_or_else(|| ComposeError::NotObjectAligned(tensor.name.clone()))?,
-        );
-    }
-    Ok(composed)
+    Ok(file)
 }
 
 // ---------------------------------------------------------------------------

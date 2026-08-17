@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+/// Layout-only adapters: serving one contract from another contract's bytes.
+/// Pure decision logic over headers — no store, no filesystem.
+pub mod adapter;
 /// Composing a new tensor container out of a committed one's own objects —
 /// a re-key or a record subset. Needs the store, so it shares its gate.
 #[cfg(all(feature = "store", any(unix, windows)))]
