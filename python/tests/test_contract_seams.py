@@ -87,7 +87,8 @@ def _fuse_head_interleaved(parts: dict[str, Array]) -> Array:
     reshaped = [
         parts[part].reshape(HEADS, HEAD_ROWS, COLUMNS) for part in ("q", "k", "v")
     ]
-    return numpy.stack(reshaped, axis=1).reshape(3 * HEADS * HEAD_ROWS, COLUMNS)
+    fused: Array = numpy.stack(reshaped, axis=1).reshape(3 * HEADS * HEAD_ROWS, COLUMNS)
+    return fused
 
 
 def _write_pair(directory: Path) -> tuple[Path, Path]:
@@ -208,7 +209,9 @@ def test_the_shipped_library_identifies_and_lists_removable_sets(
         dit,
     )
     assert registry.detect_file(dit) == "dit.blocks-fused-qkv@1"
-    assert registry.set_members(dit, "adaln_projections") == [
-        "blocks.0.adaLN_modulation.1.weight",
+    # Members come back in the file's own data order, which the writer
+    # chooses; membership is the claim, not the ordering.
+    assert sorted(registry.set_members(dit, "adaln_projections")) == [
         "blocks.0.adaLN_modulation.1.bias",
+        "blocks.0.adaLN_modulation.1.weight",
     ]
