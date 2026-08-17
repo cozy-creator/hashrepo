@@ -189,8 +189,8 @@ pub struct ScrubReport {
     pub trees_removed: Vec<SnapshotId>,
     pub refs_removed: Vec<String>,
     /// Dangling artifacts this pass judged garbage and could not take: on
-    /// Windows another handle inside one refuses the rename that removes it.
-    /// They are still garbage, and the next pass takes them.
+    /// Windows the `open` a rename needs is refused transiently. They are
+    /// still garbage, and the next pass takes them.
     pub trees_deferred: Vec<SnapshotId>,
     pub refs_deferred: Vec<String>,
     pub scratch: ScratchReap,
@@ -948,9 +948,9 @@ impl WorkspaceStore {
             }
         }
         // The row is the deletion; the tree and the refs are cache that
-        // follows it. A removal Windows defers — another handle is inside the
-        // artifact — leaves garbage the next scrub takes, exactly as a crash
-        // between these steps would, and is not a failure of this call.
+        // follows it. A removal Windows defers leaves garbage the next scrub
+        // takes, exactly as a crash between these steps would, and is not a
+        // failure of this call.
         let layout = self.layout();
         layout.remove_tree(id)?;
         for name in layout.refs_to(id)? {
