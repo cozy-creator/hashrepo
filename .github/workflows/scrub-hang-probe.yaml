@@ -1,0 +1,75 @@
+name: scrub-hang-probe
+
+# TEMPORARY rig for #109. Runs the racing scrub/deletion test many times on
+# windows-latest and reports how many runs hung. Deleted before merge.
+
+on:
+  push:
+    branches: ["109-scrub-hang"]
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: runs per shard
+        default: "10"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.0
+      - uses: Swatinem/rust-cache@v2
+      - name: build
+        shell: bash
+        run: |
+          set -uo pipefail
+          command -v timeout || { echo "no timeout(1) on this runner"; exit 1; }
+          cargo test -p tensorfs-core --all-features --test gc --no-run \
+            --message-format=json > build.json
+          python -c "import json,sys;\
+          print([j['executable'] for j in map(json.loads, open('build.json')) \
+          if j.get('executable') and 'gc-' in j['executable']][-1])" > bin.txt
+          cat bin.txt
+      - name: repeat
+        shell: bash
+        env:
+          RUNS: ${{ github.event.inputs.runs }}
+        run: |
+          set -uo pipefail
+          bin="$(cat bin.txt)"
+          runs="${RUNS:-10}"
+          hung=0
+          failed=0
+          passed=0
+          for i in $(seq 1 "${runs}"); do
+            echo "=== RUN ${i} START ==="
+            # A COST bound on the rig, not a verdict: a completed run of this
+            # test takes 10-15s on this runner, so 120s means wedged, and the
+            # shard goes on to the next run instead of losing the job.
+            timeout -k 5 120 "${bin}" \
+              a_scrub_racing_a_deletion_never_costs_a_live_root --exact --nocapture \
+              > "run-${i}.log" 2>&1
+            status=$?
+            if [ "${status}" -eq 124 ]; then
+              hung=$((hung + 1))
+              echo "=== RUN ${i} HUNG ==="
+              tail -n 60 "run-${i}.log"
+            elif [ "${status}" -ne 0 ]; then
+              failed=$((failed + 1))
+              echo "=== RUN ${i} FAILED (${status}) ==="
+              tail -n 60 "run-${i}.log"
+            else
+              passed=$((passed + 1))
+              echo "=== RUN ${i} PASSED ==="
+              tail -n 3 "run-${i}.log"
+            fi
+          done
+          echo "shard ${{ matrix.shard }}: ${passed} passed, ${failed} failed, ${hung} hung, of ${runs}"
