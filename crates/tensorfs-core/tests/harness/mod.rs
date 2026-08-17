@@ -96,6 +96,74 @@ pub fn iterations(fast: u32, heavy: u32) -> u32 {
 }
 
 // ---------------------------------------------------------------------------
+// Stopping a scoped race
+// ---------------------------------------------------------------------------
+
+/// The stop flag of a race: workers loop until it is raised, and the party
+/// that drives the race raises it by LEAVING, whether it returns or unwinds.
+///
+/// Written down because getting it wrong turns every failure into a hang, and
+/// did: `thread::scope` joins its threads before it propagates a panic, so a
+/// worker spinning on a flag the panicking driver never got to set spins
+/// forever and the process never exits. That is how a Windows racing-removal
+/// error in `a_scrub_racing_a_deletion_never_costs_a_live_root` cost a master
+/// job three hours with the panic message still sitting unflushed in libtest's
+/// capture buffer (#109). A worker's progress predicate must be advanceable by
+/// the party it is waiting on, on every exit that party has.
+///
+/// Drive the race with [`StopFlag::racing`] rather than a bare `raise` after
+/// the loop: the raise is then a `Drop`, and no early return, `?` or panic can
+/// skip it.
+pub struct StopFlag(std::sync::atomic::AtomicBool);
+
+impl StopFlag {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(std::sync::atomic::AtomicBool::new(false))
+    }
+
+    /// The worker's loop condition: `while !stop.raised()`.
+    #[must_use]
+    pub fn raised(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    pub fn raise(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// Runs the driving party, raising the flag on every exit from it.
+    ///
+    /// Call it INSIDE the `thread::scope` closure — the guard has to drop
+    /// before the scope joins, and the flag itself has to outlive the scope.
+    pub fn racing<R>(&self, body: impl FnOnce() -> R) -> R {
+        struct Raise<'flag>(&'flag StopFlag);
+        impl Drop for Raise<'_> {
+            fn drop(&mut self) {
+                self.0.raise();
+            }
+        }
+        let _raise = Raise(self);
+        body()
+    }
+}
+
+impl Default for StopFlag {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Joins one scoped worker, re-raising its panic with its own message rather
+/// than reporting the opaque `Any { .. }` a bare `expect` prints.
+pub fn join_worker<T>(handle: thread::ScopedJoinHandle<'_, T>) -> T {
+    match handle.join() {
+        Ok(value) => value,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Scratch roots
 // ---------------------------------------------------------------------------
 

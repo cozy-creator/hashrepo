@@ -20,7 +20,7 @@ use crate::workspace_db::{Connection, OptionalExtension, Param, TransactionBehav
 use thiserror::Error;
 
 use crate::contract::{Registry, Stamp};
-use crate::layout::{Layout, LayoutError, ScratchReap};
+use crate::layout::{Layout, LayoutError, Removal, ScratchReap};
 use crate::object::ObjectDigest;
 use crate::planner::{ByteSource as _, PlanError, PlannerId, inventory, plan_with};
 use crate::store::{ObjectStore, StoreError};
@@ -188,6 +188,11 @@ pub struct SnapshotUsage {
 pub struct ScrubReport {
     pub trees_removed: Vec<SnapshotId>,
     pub refs_removed: Vec<String>,
+    /// Dangling artifacts this pass judged garbage and could not take: on
+    /// Windows the `open` a rename needs is refused transiently. They are
+    /// still garbage, and the next pass takes them.
+    pub trees_deferred: Vec<SnapshotId>,
+    pub refs_deferred: Vec<String>,
     pub scratch: ScratchReap,
 }
 
@@ -942,6 +947,10 @@ impl WorkspaceStore {
                 return Err(WorkspaceError::UnknownSnapshot(*id));
             }
         }
+        // The row is the deletion; the tree and the refs are cache that
+        // follows it. A removal Windows defers leaves garbage the next scrub
+        // takes, exactly as a crash between these steps would, and is not a
+        // failure of this call.
         let layout = self.layout();
         layout.remove_tree(id)?;
         for name in layout.refs_to(id)? {
@@ -1301,8 +1310,13 @@ impl WorkspaceStore {
         let layout = self.layout();
         let mut report = ScrubReport::default();
         for id in layout.tree_ids()? {
-            if !rooted.contains(&id) && layout.remove_tree(&id)? {
-                report.trees_removed.push(id);
+            if rooted.contains(&id) {
+                continue;
+            }
+            match layout.remove_tree(&id)? {
+                Removal::Taken => report.trees_removed.push(id),
+                Removal::Absent => {}
+                Removal::Deferred => report.trees_deferred.push(id),
             }
         }
         for name in layout.ref_names()? {
@@ -1319,14 +1333,22 @@ impl WorkspaceStore {
                 // its ref for losing a race.
                 Err(_) => false,
             };
-            if dangling && layout.remove_ref(&name)? {
-                report.refs_removed.push(name);
+            if !dangling {
+                continue;
+            }
+            match layout.remove_ref(&name)? {
+                Removal::Taken => report.refs_removed.push(name),
+                Removal::Absent => {}
+                Removal::Deferred => report.refs_deferred.push(name),
             }
         }
         // Scratch belongs to a process, not to a root, so it is decided by its
-        // lease and not by the root set this transaction pins.
-        report.scratch = layout.reap_scratch()?;
+        // lease and not by the root set this transaction pins — which is why
+        // it runs AFTER the commit. A write transaction held across
+        // filesystem work is a peer's wait, and this is the part of the sweep
+        // that needs none of it.
         tx.commit()?;
+        report.scratch = layout.reap_scratch()?;
         Ok(report)
     }
 

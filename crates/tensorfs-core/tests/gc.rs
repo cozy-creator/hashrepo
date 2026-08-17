@@ -22,7 +22,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::PlannerId;
@@ -398,10 +397,13 @@ fn a_scrub_keeps_a_ref_it_could_not_open() {
 /// tree the next scrub takes. That is what guarantees the scrubber has
 /// something dangling to find while a live root sits beside it.
 ///
-/// No clock anywhere. The scrubber stops on a flag the main thread sets after
-/// a fixed number of rounds, and the gate on whether the race happened is a
-/// COUNT of dangling trees the scrubber actually removed — not an elapsed
-/// time, and not a sleep.
+/// No clock anywhere. The scrubber stops on a flag the rounds raise by
+/// LEAVING — panic included, which is the whole point (#109): a predicate only
+/// a healthy driver can advance turns that driver's failure into a hang, and
+/// `thread::scope` joins before it propagates a panic, so the message never
+/// even reaches the log. The gate on whether the race happened is a COUNT of
+/// dangling trees the scrubber actually removed — not an elapsed time, and not
+/// a sleep.
 #[test]
 fn a_scrub_racing_a_deletion_never_costs_a_live_root() {
     let scratch = Scratch::new("gc-scrub-race");
@@ -422,15 +424,20 @@ fn a_scrub_racing_a_deletion_never_costs_a_live_root() {
         .expect("ref writes");
 
     let rounds = harness::iterations(12, 100);
-    let done = AtomicBool::new(false);
-    let (scrubs, scrubbed_trees) = std::thread::scope(|scope| {
+    // Raised when the rounds below LEAVE, panic included: a scrubber whose
+    // stop flag only a healthy main thread sets turns any failure into a
+    // hang, which is what #109 was.
+    let stop = harness::StopFlag::new();
+    let (scrubs, scrubbed_trees, deferred) = std::thread::scope(|scope| {
         let handle = scope.spawn(|| {
             let mut passes = 0_u64;
             let mut trees = 0_u64;
-            while !done.load(Ordering::Acquire) {
+            let mut deferred = 0_u64;
+            while !stop.raised() {
                 let report = scrubber.scrub().expect("scrub runs");
                 passes += 1;
                 trees += report.trees_removed.len() as u64;
+                deferred += (report.trees_deferred.len() + report.refs_deferred.len()) as u64;
                 assert!(
                     !report.trees_removed.contains(&survivor),
                     "a scrub removed a LIVE root's tree"
@@ -440,51 +447,56 @@ fn a_scrub_racing_a_deletion_never_costs_a_live_root() {
                     "a scrub removed a LIVE root's ref"
                 );
             }
-            (passes, trees)
+            (passes, trees, deferred)
         });
 
-        for round in 0..rounds {
-            let doomed = sealed_only(
-                &store,
-                "doomed",
-                &[("round.bin", format!("round {round}").as_bytes())],
-            );
-            let manifest = store.load_snapshot(&doomed).expect("loads");
-            store.project_snapshot(&doomed).expect("projects");
-            store.layout().set_ref("doomed", &doomed).expect("ref");
-            store.delete_snapshot(&doomed).expect("deletes");
-            // The late projection: a tree for a root that no longer exists.
-            // It may also lose a rename race with the scrubber's own removal,
-            // which is a cache outcome and not a claim this test makes.
-            let _ = store.layout().project(&manifest);
-            let _ = store.layout().set_ref("doomed", &doomed);
+        stop.racing(|| {
+            for round in 0..rounds {
+                let doomed = sealed_only(
+                    &store,
+                    "doomed",
+                    &[("round.bin", format!("round {round}").as_bytes())],
+                );
+                let manifest = store.load_snapshot(&doomed).expect("loads");
+                store.project_snapshot(&doomed).expect("projects");
+                store.layout().set_ref("doomed", &doomed).expect("ref");
+                store.delete_snapshot(&doomed).expect("deletes");
+                // The late projection: a tree for a root that no longer exists.
+                // It may also lose a rename race with the scrubber's own removal,
+                // which is a cache outcome and not a claim this test makes.
+                let _ = store.layout().project(&manifest);
+                let _ = store.layout().set_ref("doomed", &doomed);
 
-            assert!(
-                survivor_tree.is_dir(),
-                "round {round}: the live root's tree was removed by a racing scrub"
-            );
-            assert_eq!(
-                store.layout().read_ref("survivor").unwrap(),
-                Some(survivor),
-                "round {round}: the live root's ref was removed by a racing scrub"
-            );
-            assert!(
-                resident(&store, &survivor_digest),
-                "round {round}: a scrub cost a live root its bytes"
-            );
-            store.collect().expect("collection completes");
-            assert_eq!(
-                store.load_snapshot(&survivor).expect("loads").snapshot_id(),
-                survivor,
-                "round {round}: the live root stopped loading"
-            );
-        }
-        done.store(true, Ordering::Release);
-        handle.join().expect("scrub thread joins")
+                assert!(
+                    survivor_tree.is_dir(),
+                    "round {round}: the live root's tree was removed by a racing scrub"
+                );
+                assert_eq!(
+                    store.layout().read_ref("survivor").unwrap(),
+                    Some(survivor),
+                    "round {round}: the live root's ref was removed by a racing scrub"
+                );
+                assert!(
+                    resident(&store, &survivor_digest),
+                    "round {round}: a scrub cost a live root its bytes"
+                );
+                store.collect().expect("collection completes");
+                assert_eq!(
+                    store.load_snapshot(&survivor).expect("loads").snapshot_id(),
+                    survivor,
+                    "round {round}: the live root stopped loading"
+                );
+            }
+        });
+        harness::join_worker(handle)
     });
 
+    // `deferred` is zero on POSIX by construction and non-zero on Windows
+    // whenever another handle was inside a doomed artifact — the outcome that
+    // used to be an error, and used to end the run.
     eprintln!(
-        "scrub race over {rounds} rounds: {scrubs} scrubs, {scrubbed_trees} dangling trees removed"
+        "scrub race over {rounds} rounds: {scrubs} scrubs, {scrubbed_trees} dangling trees \
+         removed, {deferred} removals deferred"
     );
     assert!(
         scrubbed_trees > 0,

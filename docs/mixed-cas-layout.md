@@ -100,9 +100,11 @@ is weaker, and this is the honest statement of it** (#103, measured).
   reads again.** `read_ref` reports the failure instead of retrying inside the
   library. A retry there can only wait on a peer's progress, and a peer can be
   waiting on the reader's caller: `scrub` holds the metadata transaction across
-  its ref reads, so a retry inside `read_ref` deadlocked a scrub against the
-  writer it was waiting for (it hung a Windows CI job for three hours). Nothing
-  that reads a ref may block on one being written.
+  its ref reads, so a retry inside `read_ref` could wait on a writer blocked on
+  the transaction the scrubber held. Nothing that reads a ref may block on one
+  being written. (The three-hour Windows CI job once attributed to that retry
+  was not it: it was #109's own wedge in the racing scrub test, which predates
+  the retry and outlived its removal.)
 - **A failed `open` is never evidence about a ref's CONTENT.** `scrub` deletes
   a ref only for an id that is not rooted or for genuinely unparseable bytes —
   never for an `open` that failed, which on Windows would cost a live root its
@@ -352,11 +354,34 @@ only writer. What each layer protects:
 - **Trees pin nothing.** GC reachability comes from manifests (DB roots →
   manifest blob → record digests + blob digests), exactly as today — never
   from walking `snapshots/`. A symlink tree is cache, not evidence.
-- **Snapshot deletion** = delete the DB root row, then `rm -rf
-  snapshots/<id>`, then drop any `refs/` entry naming it — in that
+- **Snapshot deletion** = delete the DB root row, then remove
+  `snapshots/<id>`, then drop any `refs/` entry naming it — in that
   order, because a tree without a root is inert garbage while a root without a
   tree is merely unprojected. A dangling tree or dangling ref left by a crash
   between steps is garbage the next scrub removes.
+- **A removal takes the NAME first and the bytes second** (#109). `rm -rf` of a
+  live name is the wrong primitive under concurrency and Windows says so out
+  loud: two removers of one tree — a scrub and a `delete_snapshot`, which is
+  the normal state of affairs here — both call `remove_dir_all` on it and the
+  loser gets `ERROR_ACCESS_DENIED`, not `NotFound`, so a scrub failed for doing
+  exactly what it exists to do. So `remove_tree` and `remove_ref`
+  rename the live name into a `.removed-…` scratch name nothing can reach and
+  delete only that: the rename is the claim, exactly one remover wins it, the
+  loser is told `NotFound` and reports `Absent`, and a delete that then fails
+  leaves unreachable scratch the next reap takes rather than a removal failure.
+- **And the removal contract is per-platform, because Windows cannot give the
+  POSIX one.** Taking a name means opening it, and §1's window refuses that
+  `open` transiently on the renamer's side exactly as it does on a reader's —
+  9 of 100 racing-test runs on `windows-latest` hit it once. (A held file is
+  NOT the cause: `std` opens with `FILE_SHARE_DELETE` and `remove_dir_all`
+  deletes with POSIX semantics, measured 5/5 on master's own removal path.) So
+  a removal reports one of three outcomes rather than a `bool`: `Taken`,
+  `Absent`, or `Deferred`. `Deferred` says nothing about the caller's rights
+  and nothing about the artifact: the identical call succeeds moments later,
+  the artifact is untouched and still garbage, and the next scrub takes it,
+  exactly like a tree left by a crash. POSIX never returns it, and there
+  every such error still propagates. `ScrubReport` carries what it deferred, so
+  a pass that could take nothing is visible rather than silent.
 - **Dangling links inside a tree** (target object GC'd) cannot occur for a
   rooted snapshot — its manifest pins its objects. Found anyway, they mean
   the tree's root is gone: the whole tree is garbage, removed as above.
@@ -366,10 +391,13 @@ inside ONE metadata write transaction — the same transaction `seal_snapshot`
 and `delete_snapshot` commit their row through — so no row can appear or
 vanish under it and a live root's tree can never be judged garbage. It removes
 no objects at all, which is what makes "a scrub racing a deletion costs a live
-root nothing" a structural fact rather than a timing argument.
+root nothing" a structural fact rather than a timing argument. Reaping scratch
+is the one part of the pass outside that transaction, deliberately: it is
+decided by leases rather than by the root set, and a write transaction held
+across filesystem work is a peer's wait.
 
-**Scratch reaping (#88).** `.building-…` and `.swap-…` were originally left
-alone, on the grounds that either may belong to an in-flight projection or
+**Scratch reaping (#88, #109).** `.building-…` and `.swap-…` were originally
+left alone, on the grounds that either may belong to an in-flight projection or
 `set_ref` in another process. True of a live one, and wrong for a crashed
 one — which nothing then removed, so a projector killed inside `fill` stranded
 its scratch forever (on a filesystem without symlinks, a whole copied tree).
@@ -382,6 +410,11 @@ token as its scratch, because a directory cannot portably carry an `flock`; a
 staged ref is a file and is its own lease. Reaping records the creator, the
 path and *why* it was reclaimable before removing anything, so the freed
 resource can still be accounted for afterwards.
+
+`.removed-…` is the third scratch name and the only one decided without a
+lease: a removal already took its name away, so nothing can reach it and no
+holder can make it live again. It goes on sight, and only a handle that refuses
+its deletion can defer it.
 
 No clock is involved, deliberately: a grace long enough to protect a 30 GB
 projection is long enough to strand one until the disk fills.

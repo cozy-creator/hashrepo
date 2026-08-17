@@ -11,13 +11,15 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use tensorfs_core::layout::{Layout, STUB_MAGIC, stub_bytes};
+use tensorfs_core::layout::{Layout, Removal, STUB_MAGIC, stub_bytes};
 use tensorfs_core::object::ObjectDigest;
 use tensorfs_core::planner::PlannerId;
 use tensorfs_core::tfm1::{Entry, FileRecord, SnapshotId};
 use tensorfs_core::workspace::{Mutation, WorkspaceError, WorkspaceStore};
+
+mod harness;
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -443,19 +445,21 @@ fn a_ref_swap_is_atomic_under_concurrent_readers() {
     layout.set_ref("main", &first).unwrap();
     let held = first_tree.join("config.json");
 
-    let done = AtomicBool::new(false);
+    // Raised when the swap loop LEAVES, panic included: readers spinning on a
+    // flag only a healthy writer sets turn any failure into a hang (#109).
+    let stop = harness::StopFlag::new();
     let (resolved, healed, resolve_failures, distinct, holds, hold_failures) =
         std::thread::scope(|scope| {
             let resolvers: Vec<_> = (0..READERS_PER_CLASS)
                 .map(|_| {
-                    let done = &done;
+                    let stop = &stop;
                     let layout = &layout;
                     scope.spawn(move || {
                         let mut good = 0_u64;
                         let mut healed = 0_u64;
                         let mut failures: Vec<String> = Vec::new();
                         let mut seen = std::collections::HashSet::new();
-                        while !done.load(Ordering::Acquire) {
+                        while !stop.raised() {
                             let what = match layout.read_ref("main") {
                                 Ok(Some(id)) => {
                                     seen.insert(id);
@@ -470,7 +474,7 @@ fn a_ref_swap_is_atomic_under_concurrent_readers() {
                             // that is the contract it gets (#103) — but only
                             // a miss that HEALS: reading again while the
                             // swaps run has to resolve the ref.
-                            if cfg!(windows) && resolves_again(layout, done) {
+                            if cfg!(windows) && resolves_again(layout, stop) {
                                 healed += 1;
                             } else {
                                 record(&mut failures, what);
@@ -482,13 +486,13 @@ fn a_ref_swap_is_atomic_under_concurrent_readers() {
                 .collect();
             let holders: Vec<_> = (0..READERS_PER_CLASS)
                 .map(|_| {
-                    let done = &done;
+                    let stop = &stop;
                     let held = held.clone();
                     let expected = &fixture.config;
                     scope.spawn(move || {
                         let mut good = 0_u64;
                         let mut failures: Vec<String> = Vec::new();
-                        while !done.load(Ordering::Acquire) {
+                        while !stop.raised() {
                             match fs::read(&held) {
                                 Ok(bytes) if bytes == *expected => good += 1,
                                 Ok(_) => {
@@ -502,11 +506,12 @@ fn a_ref_swap_is_atomic_under_concurrent_readers() {
                 })
                 .collect();
 
-            for index in 0..SWAPS {
-                let target = if index % 2 == 0 { second } else { first };
-                layout.set_ref("main", &target).unwrap();
-            }
-            done.store(true, Ordering::Release);
+            stop.racing(|| {
+                for index in 0..SWAPS {
+                    let target = if index % 2 == 0 { second } else { first };
+                    layout.set_ref("main", &target).unwrap();
+                }
+            });
 
             let mut resolved = 0_u64;
             let mut healed = 0_u64;
@@ -565,12 +570,12 @@ fn a_ref_swap_is_atomic_under_concurrent_readers() {
 /// The wait is on the swap loop's own state and never on a clock: once `done`
 /// is set the last `set_ref` has returned, so a read that still misses is
 /// missing for real.
-fn resolves_again(layout: &Layout<'_>, done: &AtomicBool) -> bool {
+fn resolves_again(layout: &Layout<'_>, stop: &harness::StopFlag) -> bool {
     loop {
         if let Ok(Some(_)) = layout.read_ref("main") {
             return true;
         }
-        if done.load(Ordering::Acquire) {
+        if stop.raised() {
             return false;
         }
     }
@@ -759,6 +764,89 @@ fn deleting_a_snapshot_removes_its_tree_and_only_its_tree() {
     ));
 }
 
+/// A removal never FAILS because someone is reading the artifact, and it
+/// never lies about what it did.
+///
+/// The deterministic half of #109, whose racing half is `gc.rs`. POSIX unlinks
+/// the name and keeps the bytes for the reader. Windows was measured doing the
+/// same on the runner — `std` opens with `FILE_SHARE_DELETE` and
+/// `remove_dir_all` deletes with POSIX semantics, so a held file is no
+/// obstacle, 5/5 — but it can still refuse the rename a removal needs
+/// transiently, which is `Removal::Deferred`, a report and not an error. So
+/// this holds each platform to its own contract and holds every outcome to
+/// what the filesystem says afterwards.
+#[test]
+fn a_removal_never_fails_because_a_reader_holds_the_bytes() {
+    let root = TempRoot::new("unlink-held");
+    let store = WorkspaceStore::open(&root.0).unwrap();
+    let fixture = Fixture::new();
+    let id = sealed(&store, &fixture);
+    let layout = store.layout();
+
+    let tree = store.project_snapshot(&id).unwrap();
+    layout.set_ref("held", &id).unwrap();
+    let ref_path = layout.refs_dir().join("held");
+    let held_file = fs::File::open(tree.join("config.json")).unwrap();
+    let held_ref = fs::File::open(&ref_path).unwrap();
+
+    // Neither removal may fail: an open handle is a normal state of the
+    // store, not an error in the caller.  A Windows refusal is `Deferred`.
+    let tree_outcome = layout.remove_tree(&id).unwrap();
+    let ref_outcome = layout.remove_ref("held").unwrap();
+    if cfg!(unix) {
+        assert_eq!(
+            (tree_outcome, ref_outcome),
+            (Removal::Taken, Removal::Taken),
+            "POSIX unlinks a held name and keeps the bytes for the reader"
+        );
+    }
+
+    // Whatever each said has to be true on disk: a name reported taken is
+    // gone, and a deferred one is untouched — never a claim that missed.
+    for (outcome, path) in [(tree_outcome, &tree), (ref_outcome, &ref_path)] {
+        match outcome {
+            Removal::Taken | Removal::Absent => {
+                assert!(
+                    !path.exists(),
+                    "{path:?} outlived a removal that claimed it"
+                )
+            }
+            Removal::Deferred => {
+                assert!(path.exists(), "a deferred removal took {path:?} anyway")
+            }
+        }
+    }
+    if tree_outcome.taken() {
+        assert!(!layout.tree_ids().unwrap().contains(&id));
+        // The name is free the instant it is given up: re-projecting works
+        // while the old bytes are still held open.
+        assert_eq!(store.project_snapshot(&id).unwrap(), tree);
+    }
+    if ref_outcome.taken() {
+        assert_eq!(layout.read_ref("held").unwrap(), None);
+        assert!(!layout.ref_names().unwrap().contains(&"held".to_owned()));
+    }
+
+    // Once the reader lets go, one retry finishes whatever was deferred — no
+    // waiting on a clock, and nothing left stranded once the reap runs.
+    drop(held_file);
+    drop(held_ref);
+    assert_ne!(layout.remove_tree(&id).unwrap(), Removal::Deferred);
+    assert_ne!(layout.remove_ref("held").unwrap(), Removal::Deferred);
+    assert!(!tree.exists());
+    assert_eq!(layout.read_ref("held").unwrap(), None);
+    layout.reap_scratch().unwrap();
+    for directory in [layout.snapshots_dir(), layout.refs_dir()] {
+        for entry in fs::read_dir(directory).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            assert!(
+                !name.starts_with(".removed-"),
+                "a reap left unreachable scratch behind: {name}"
+            );
+        }
+    }
+}
+
 /// Projection is idempotent and re-derivable: a deleted tree comes back byte
 /// for byte from the manifest alone, which is what makes it disposable.
 #[test]
@@ -770,7 +858,7 @@ fn a_deleted_tree_re_projects_identically_from_the_manifest() {
 
     let tree = store.project_snapshot(&id).unwrap();
     let before = fingerprint(&tree);
-    assert!(store.layout().remove_tree(&id).unwrap());
+    assert!(store.layout().remove_tree(&id).unwrap().taken());
     assert!(!tree.exists());
 
     let again = store.project_snapshot(&id).unwrap();
