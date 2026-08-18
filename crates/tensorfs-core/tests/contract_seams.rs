@@ -709,6 +709,10 @@ fn the_shipped_library_is_pinned_by_digest() {
             "sdxl.clip-g-split-qkv@1",
             "c1bbfc65a89a736154504f68296b2b8be3dc43364d4dc04a192c08a184bf64fa",
         ),
+        (
+            "sdxl.diffusers-bf16@1",
+            "f1455f56321d1f268772912c223170f015564ac164064d6d8f77007b03bd35df",
+        ),
     ]);
     let registry = Registry::builtin().expect("the shipped contracts parse");
     let actual: BTreeMap<String, String> = registry

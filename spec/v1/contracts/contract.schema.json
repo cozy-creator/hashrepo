@@ -17,6 +17,13 @@
     },
     "version": { "type": "integer", "minimum": 1 },
     "description": { "type": "string" },
+    "dtype": {
+      "description": "Optional serve-side load dtype, torch spelling (bfloat16, float8_e4m3fn, ...). ADDITIVE: absent from a document means absent from the canonical rendering, so pre-existing digests are unchanged. Nothing matches on it; per-tensor `dtypes` remain the matcher's constraint.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z0-9_]+$"
+    },
     "tensors": {
       "type": "array",
       "minItems": 1,
