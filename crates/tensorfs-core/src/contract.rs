@@ -72,6 +72,10 @@ pub const BUILTIN: &[(&str, &str)] = &[
         "sdxl.clip-g-split-qkv.v1.json",
         include_str!("../../../spec/v1/contracts/sdxl.clip-g-split-qkv.v1.json"),
     ),
+    (
+        "sdxl.diffusers-bf16.v1.json",
+        include_str!("../../../spec/v1/contracts/sdxl.diffusers-bf16.v1.json"),
+    ),
 ];
 
 #[derive(Debug, Error)]
@@ -88,6 +92,8 @@ pub enum ContractError {
     Identity,
     #[error("digest stamp {0:?} is not sha256:<64 lowercase hex>")]
     DigestStamp(String),
+    #[error("contract dtype {0:?} is not a lowercase torch-style dtype name")]
+    Dtype(String),
     #[error("contract declares no tensors")]
     NoTensors,
     #[error("contract pattern {0:?} is malformed")]
@@ -746,6 +752,10 @@ pub struct Contract {
     /// [`Contract::digest`]. Name and version travel together or not at all.
     handle: Option<Handle>,
     description: String,
+    /// The serve-side load dtype, torch spelling (`"bfloat16"`,
+    /// `"float8_e4m3fn"`, ...). Nothing MATCHES on it — per-tensor `dtypes`
+    /// stay the matcher's business; this is what `ctx.lane.dtype` reads.
+    dtype: Option<String>,
     tensors: Vec<TensorPattern>,
     sets: BTreeMap<String, Vec<Pattern>>,
 }
@@ -772,6 +782,13 @@ impl Contract {
     #[must_use]
     pub fn description(&self) -> &str {
         &self.description
+    }
+
+    /// The optional top-level load dtype: what serve-side code loads this
+    /// layout's tensors as. `None` when the document does not declare one.
+    #[must_use]
+    pub fn dtype(&self) -> Option<&str> {
+        self.dtype.as_deref()
     }
 
     #[must_use]
@@ -812,6 +829,11 @@ impl Contract {
                 &mut text,
                 format_args!("name={}\nversion={}\n", handle.name(), handle.version()),
             );
+        }
+        if let Some(dtype) = &self.dtype {
+            text.push_str("dtype=");
+            text.push_str(dtype);
+            text.push('\n');
         }
         for tensor in &self.tensors {
             text.push_str(&format!(
@@ -965,6 +987,13 @@ impl Contract {
             if entry.required && !seen[index] {
                 return None;
             }
+        }
+        // A contract that explains NOTHING about a file does not describe it.
+        // Without this, an all-optional contract — the per-component-file
+        // shape a multifolder lane document needs — would vacuously match
+        // every tensor container in existence.
+        if matched == 0 {
+            return None;
         }
         Some(Match {
             stamp: self.stamp(),
@@ -1142,6 +1171,11 @@ struct RawContract {
     version: Option<u32>,
     #[serde(default)]
     description: String,
+    /// Optional top-level load dtype, torch spelling. ADDITIVE: absent from
+    /// the document means absent from the canonical rendering, so documents
+    /// that predate the field keep their digests.
+    #[serde(default)]
+    dtype: Option<String>,
     tensors: Vec<RawTensor>,
     #[serde(default)]
     sets: BTreeMap<String, Vec<String>>,
@@ -1212,6 +1246,18 @@ impl RawContract {
             (Some(name), Some(version)) => Some(Handle::new(&name, version)?),
             _ => return Err(ContractError::Identity),
         };
+        if let Some(dtype) = &self.dtype {
+            // A spelling check, not an enum: new torch dtypes must not need a
+            // parser change. `getattr(torch, dtype)` is the consumer.
+            let usable = !dtype.is_empty()
+                && dtype.len() <= 32
+                && dtype.chars().all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+                });
+            if !usable {
+                return Err(ContractError::Dtype(dtype.clone()));
+            }
+        }
         if self.tensors.is_empty() {
             return Err(ContractError::NoTensors);
         }
@@ -1344,6 +1390,7 @@ impl RawContract {
         Ok(Contract {
             handle,
             description: self.description,
+            dtype: self.dtype,
             tensors,
             sets,
         })
@@ -1554,6 +1601,34 @@ mod tests {
         // A malformed digest spelling refuses, typed.
         assert!(Stamp::parse("sha256:abc").is_err());
         assert!(Stamp::parse(&spelled.to_uppercase()).is_err());
+    }
+
+    #[test]
+    fn the_top_level_dtype_is_additive_and_read_back() {
+        // Absent means absent: no field, no canonical line — the shipped
+        // library's digest pins prove the byte-level half of this.
+        assert_eq!(contract(FUSED).dtype(), None);
+
+        let with = FUSED.replace(
+            "\"version\": 2,",
+            "\"version\": 2, \"dtype\": \"bfloat16\",",
+        );
+        let carried = contract(&with);
+        assert_eq!(carried.dtype(), Some("bfloat16"));
+        // Declaring it is meaning: the digest moves.
+        assert_ne!(carried.digest(), contract(FUSED).digest());
+
+        // The spelling is torch's, checked as a shape rather than an enum.
+        let miscased = FUSED.replace("\"version\": 2,", "\"version\": 2, \"dtype\": \"BF16\",");
+        assert!(matches!(
+            Contract::parse(&miscased),
+            Err(ContractError::Dtype(_))
+        ));
+        let empty = FUSED.replace("\"version\": 2,", "\"version\": 2, \"dtype\": \"\",");
+        assert!(matches!(
+            Contract::parse(&empty),
+            Err(ContractError::Dtype(_))
+        ));
     }
 
     #[test]

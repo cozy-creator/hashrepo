@@ -55,6 +55,12 @@ quantization) has no adapter for a custom contract and refuses, typed.
 
 ## Fields
 
+- `dtype` (top-level, optional) — the serve-side LOAD dtype, torch spelling
+  (`"bfloat16"`, `"float8_e4m3fn"`, …): what `ctx.lane.dtype` /
+  `Contract.torch_dtype` read on a lane document. Nothing matches on it — the
+  per-tensor `dtypes` constraints below remain the matcher's business.
+  Additive: absent from a document ⇒ absent from the canonical rendering ⇒
+  pre-existing digests unchanged.
 - `tensors[].pattern` — the tensor's spelling in the file. Literal text with
   `{i}` holes, each matching one non-negative integer without leading zeros.
   No regex: matching is linear and unambiguous.
