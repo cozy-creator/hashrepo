@@ -1,0 +1,150 @@
+{
+  "format": "tensorfs-contract-vectors-v1",
+  "golden": [
+    {
+      "name": "dit.blocks-fused-qkv.v1",
+      "file": "contracts/dit.blocks-fused-qkv.v1.json",
+      "digest": "57f09073ca1a631bb173293c84e11f462089d0fa8cf9ce45e142fc33881a17a1",
+      "stamp": "dit.blocks-fused-qkv@1"
+    },
+    {
+      "name": "minimax.h3-dit-diffusers.v1",
+      "file": "contracts/minimax.h3-dit-diffusers.v1.json",
+      "digest": "b1a3e40a7f0a8088d2080b4c8a5dd8960a5ad576cef80d39f717ed0b8d5d6ae7",
+      "stamp": "minimax.h3-dit-diffusers@1"
+    },
+    {
+      "name": "minimax.h3-dit-native.v1",
+      "file": "contracts/minimax.h3-dit-native.v1.json",
+      "digest": "074afcc03b5a3d5e6a0c5d720dc5441d335b9def1688f726180906a364c91805",
+      "stamp": "minimax.h3-dit-native@1"
+    },
+    {
+      "name": "sdxl.clip-g-fused-qkv.v1",
+      "file": "contracts/sdxl.clip-g-fused-qkv.v1.json",
+      "digest": "364c0c537e54013eab72994a3e6bf0b913cfb76ab1627dc0822b95cf17b1b262",
+      "stamp": "sdxl.clip-g-fused-qkv@1"
+    },
+    {
+      "name": "sdxl.clip-g-split-qkv.v1",
+      "file": "contracts/sdxl.clip-g-split-qkv.v1.json",
+      "digest": "c1bbfc65a89a736154504f68296b2b8be3dc43364d4dc04a192c08a184bf64fa",
+      "stamp": "sdxl.clip-g-split-qkv@1"
+    },
+    {
+      "name": "sdxl.diffusers-bf16.v1",
+      "file": "contracts/sdxl.diffusers-bf16.v1.json",
+      "digest": "f1455f56321d1f268772912c223170f015564ac164064d6d8f77007b03bd35df",
+      "stamp": "sdxl.diffusers-bf16@1"
+    },
+    {
+      "name": "custom-rich",
+      "document": "{\n    \"format\": \"tensorfs-contract-v1\",\n    \"description\": \"vector fixture: every declaration branch\",\n    \"dtype\": \"bfloat16\",\n    \"tensors\": [\n        {\"role\": \"blocks.{i}.attn.qkv\", \"pattern\": \"blocks.{i}.attn.qkv_proj.weight\",\n         \"rank\": 2, \"dtypes\": [\"BF16\", \"F16\"],\n         \"fusion\": {\"axis\": 0, \"parts\": [{\"role\": \"q\", \"share\": 2}, {\"role\": \"k\", \"share\": 1},\n                                         {\"role\": \"v\", \"share\": 1}]}},\n        {\"role\": \"blocks.{i}.rope\", \"pattern\": \"blocks.{i}.rope.weight\", \"required\": false,\n         \"permute\": {\"view\": [4, \"shape[0]/2\", \"auto\", \"shape[1]\"], \"axes\": [0, 2, 1, 3]}}\n    ],\n    \"sets\": {\"adaln\": [\"blocks.{i}.adaln.weight\", \"norm_out.weight\"], \"rope\": [\"blocks.{i}.rope.weight\"]}\n}",
+      "digest": "840107df52fe82b735067c3649b14cde234235ac28792be6f915c357fc786a0f",
+      "stamp": "sha256:840107df52fe82b735067c3649b14cde234235ac28792be6f915c357fc786a0f"
+    },
+    {
+      "name": "custom-interleaved",
+      "document": "{\n    \"format\": \"tensorfs-contract-v1\",\n    \"tensors\": [\n        {\"role\": \"b.{i}.qkv\", \"pattern\": \"b.{i}.qkv.weight\", \"rank\": 2,\n         \"fusion\": {\"axis\": 0, \"groups\": 56,\n                    \"parts\": [{\"role\": \"q\", \"share\": 1}, {\"role\": \"k\", \"share\": 1},\n                              {\"role\": \"v\", \"share\": 1}]}},\n        {\"role\": \"b.{i}.qkv#q\", \"pattern\": \"b.{i}.q.weight\", \"rank\": 2, \"required\": false,\n         \"fusion\": {\"axis\": 0, \"groups\": 56, \"parts\": [{\"role\": \"\", \"share\": 1}]}}\n    ]\n}",
+      "digest": "d57b11915fe4e389472da10707d7307bf03636d522b12887f39c7efbf1abe9b1",
+      "stamp": "sha256:d57b11915fe4e389472da10707d7307bf03636d522b12887f39c7efbf1abe9b1"
+    }
+  ],
+  "refusals": [
+    {
+      "name": "not-json",
+      "document": "{",
+      "reason": "json"
+    },
+    {
+      "name": "unknown-field",
+      "document": "{\n        \"unknown\": 1, \"format\": \"tensorfs-contract-v1\",\n        \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\"}]\n    }",
+      "reason": "json"
+    },
+    {
+      "name": "wrong-format",
+      "document": "{\n        \"format\": \"tensorfs-contract-v2\",\n        \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\"}]\n    }",
+      "reason": "format"
+    },
+    {
+      "name": "uppercase-name",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"name\": \"Sdxl.Fused\", \"version\": 1, \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\"}]\n    }",
+      "reason": "name"
+    },
+    {
+      "name": "zero-version",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"name\": \"sdxl.fused\", \"version\": 0, \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\"}]\n    }",
+      "reason": "version"
+    },
+    {
+      "name": "name-without-version",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"name\": \"sdxl.fused\", \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\"}]\n    }",
+      "reason": "identity"
+    },
+    {
+      "name": "version-without-name",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"version\": 1, \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\"}]\n    }",
+      "reason": "identity"
+    },
+    {
+      "name": "uppercase-dtype",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"dtype\": \"BF16\", \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\"}]\n    }",
+      "reason": "dtype"
+    },
+    {
+      "name": "no-tensors",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"tensors\": []\n    }",
+      "reason": "no-tensors"
+    },
+    {
+      "name": "adjacent-holes",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"tensors\": [{\"role\": \"a.{i}{i}\", \"pattern\": \"a.{i}{i}\"}]\n    }",
+      "reason": "pattern"
+    },
+    {
+      "name": "role-hole-mismatch",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"tensors\": [{\"role\": \"a.{i}\", \"pattern\": \"a.b\"}]\n    }",
+      "reason": "role-holes"
+    },
+    {
+      "name": "duplicate-pattern",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\"}, {\"role\": \"a.c\", \"pattern\": \"a.b\"}]\n    }",
+      "reason": "duplicate"
+    },
+    {
+      "name": "inner-axis-fusion",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\", \"fusion\": {\"axis\": 1, \"parts\": [{\"role\": \"q\", \"share\": 1}, {\"role\": \"k\", \"share\": 1}]}}]\n    }",
+      "reason": "fusion"
+    },
+    {
+      "name": "one-part-fusion",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\", \"fusion\": {\"axis\": 0, \"parts\": [{\"role\": \"q\", \"share\": 1}]}}]\n    }",
+      "reason": "fusion"
+    },
+    {
+      "name": "zero-share",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\", \"fusion\": {\"axis\": 0, \"parts\": [{\"role\": \"q\", \"share\": 0}, {\"role\": \"k\", \"share\": 1}]}}]\n    }",
+      "reason": "fusion"
+    },
+    {
+      "name": "identity-permute",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\", \"permute\": {\"view\": [2, \"auto\"], \"axes\": [0, 1]}}]\n    }",
+      "reason": "permute"
+    },
+    {
+      "name": "axes-not-a-permutation",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\", \"permute\": {\"view\": [2, \"auto\"], \"axes\": [1, 1]}}]\n    }",
+      "reason": "permute"
+    },
+    {
+      "name": "permute-inside-fusion",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\", \"fusion\": {\"axis\": 0, \"parts\": [{\"role\": \"q\", \"share\": 1}, {\"role\": \"k\", \"share\": 1}]}, \"permute\": {\"view\": [2, \"auto\"], \"axes\": [1, 0]}}]\n    }",
+      "reason": "permute"
+    },
+    {
+      "name": "empty-set",
+      "document": "{\n        \"format\": \"tensorfs-contract-v1\",\n        \"tensors\": [{\"role\": \"a.b\", \"pattern\": \"a.b\"}], \"sets\": {\"adaln\": []}\n    }",
+      "reason": "set"
+    }
+  ]
+}

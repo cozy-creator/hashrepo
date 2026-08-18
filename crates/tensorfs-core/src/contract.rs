@@ -112,6 +112,32 @@ pub enum ContractError {
     DuplicateContract(String),
 }
 
+impl ContractError {
+    /// Stable kebab-case label shared with the language-neutral contract
+    /// vectors (`spec/v1/contract-vectors/`), so every implementation's
+    /// refusal vocabulary stays aligned by test rather than by discipline.
+    #[must_use]
+    pub const fn reason(&self) -> &'static str {
+        match self {
+            Self::Json(_) => "json",
+            Self::Format => "format",
+            Self::Name(_) => "name",
+            Self::Version => "version",
+            Self::Identity => "identity",
+            Self::DigestStamp(_) => "digest-stamp",
+            Self::Dtype(_) => "dtype",
+            Self::NoTensors => "no-tensors",
+            Self::Pattern(_) => "pattern",
+            Self::Duplicate(_) => "duplicate",
+            Self::RoleHoles(_) => "role-holes",
+            Self::Fusion(_) => "fusion",
+            Self::Permute(_) => "permute",
+            Self::Set(_) => "set",
+            Self::DuplicateContract(_) => "duplicate-contract",
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The stamp
 // ---------------------------------------------------------------------------

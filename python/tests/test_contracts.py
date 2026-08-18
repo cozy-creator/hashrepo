@@ -114,6 +114,37 @@ def test_torch_dtype_resolves_lazily_against_torch(
         _ = contracts.SDXL_CLIP_G_FUSED_QKV.torch_dtype
 
 
+def test_the_shared_corpus_agrees_with_the_python_surface() -> None:
+    """The tensorfs#114 conformance corpus, from the third language: every
+    golden document parses here with the Rust-pinned digest and stamp — the
+    same file Go's contract_test.go runs."""
+
+    corpus_path = (
+        Path(__file__).resolve().parents[2]
+        / "spec"
+        / "v1"
+        / "contract-vectors"
+        / "contract-vectors.json"
+    )
+    corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
+    nameless = 0
+    for case in corpus["golden"]:
+        if "file" in case:
+            document = (corpus_path.parents[1] / case["file"]).read_text(encoding="utf-8")
+        else:
+            document = case["document"]
+        parsed = Contract.from_document(document)
+        assert parsed.digest == case["digest"], case["name"]
+        assert parsed.stamp == case["stamp"], case["name"]
+        nameless += parsed.name is None
+    assert nameless >= 1, "the corpus holds a custom the constructor shape produces"
+    for case in corpus["refusals"]:
+        if case["reason"] == "json":
+            continue  # not JSON at all, or shapes json.loads accepts differently
+        with pytest.raises(ValueError):
+            Contract.from_document(case["document"])
+
+
 # ---------------------------------------------------------------------------
 # anonymous construction
 # ---------------------------------------------------------------------------
