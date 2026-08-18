@@ -695,11 +695,11 @@ fn the_shipped_library_is_pinned_by_digest() {
         ),
         (
             "minimax.h3-dit-diffusers@1",
-            "b1a3e40a7f0a8088d2080b4c8a5dd8960a5ad576cef80d39f717ed0b8d5d6ae7",
+            "22bbb607d3e4351c18ac55e8d86c8a8a3d03296309b80e4419d4bc5153481f28",
         ),
         (
             "minimax.h3-dit-native@1",
-            "074afcc03b5a3d5e6a0c5d720dc5441d335b9def1688f726180906a364c91805",
+            "5f6b7b4a8cd070653607840b922c213a846838e35379737727111c4b0a8de56c",
         ),
         (
             "sdxl.clip-g-fused-qkv@1",

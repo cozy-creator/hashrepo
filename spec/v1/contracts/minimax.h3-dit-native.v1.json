@@ -2,6 +2,7 @@
   "format": "tensorfs-contract-v1",
   "name": "minimax.h3-dit-native",
   "version": 1,
+  "dtype": "bfloat16",
   "description": "MiniMax-H3 DiT, native/DiffSynth spelling (535 keys, 66.28 GB). Attention is one fused qkv_proj per block, HEAD-INTERLEAVED: 56 head-major triples (q,k,v adjacent within each head), not three stacked blocks. 11.56 GB of the DiT -- 17.4% -- sits behind those seams.",
   "tensors": [
     {
