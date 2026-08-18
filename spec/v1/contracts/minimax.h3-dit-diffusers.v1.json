@@ -2,6 +2,7 @@
   "format": "tensorfs-contract-v1",
   "name": "minimax.h3-dit-diffusers",
   "version": 1,
+  "dtype": "bfloat16",
   "description": "MiniMax-H3 DiT, diffusers repackaging (638 keys, 66.28 GB) -- what the hub actually ships. Attention is split to_q/to_k/to_v. Each is declared as 56 head slices so its runs are exactly the native contract's interleaved seam runs: the two packagings share every attention byte despite reading them in different orders. Exactly one key is spelled the same in both layouts.",
   "tensors": [
     {

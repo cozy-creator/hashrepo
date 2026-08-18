@@ -694,12 +694,24 @@ fn the_shipped_library_is_pinned_by_digest() {
             "57f09073ca1a631bb173293c84e11f462089d0fa8cf9ce45e142fc33881a17a1",
         ),
         (
+            "hidream-o1.diffusers-bf16@1",
+            "69003d11e2cb3b52628cb05e02c275916db74e318eabbce2f6e89be625c7e01f",
+        ),
+        (
             "minimax.h3-dit-diffusers@1",
-            "b1a3e40a7f0a8088d2080b4c8a5dd8960a5ad576cef80d39f717ed0b8d5d6ae7",
+            "22bbb607d3e4351c18ac55e8d86c8a8a3d03296309b80e4419d4bc5153481f28",
         ),
         (
             "minimax.h3-dit-native@1",
-            "074afcc03b5a3d5e6a0c5d720dc5441d335b9def1688f726180906a364c91805",
+            "5f6b7b4a8cd070653607840b922c213a846838e35379737727111c4b0a8de56c",
+        ),
+        (
+            "sd15.diffusers-bf16@1",
+            "0bc98e52edac1a4b3a8f063162d3785350413b60701ba49d9701e46d69f304d3",
+        ),
+        (
+            "sd2.diffusers-bf16@1",
+            "136b158fb5f96cd05f2a8b3accc0b3d36ea7b07b988a338ee4f7934d54a312e6",
         ),
         (
             "sdxl.clip-g-fused-qkv@1",
@@ -711,7 +723,11 @@ fn the_shipped_library_is_pinned_by_digest() {
         ),
         (
             "sdxl.diffusers-bf16@1",
-            "f1455f56321d1f268772912c223170f015564ac164064d6d8f77007b03bd35df",
+            "ef01dd65f57bd95ae05d70f5a9893e9abab6b4f0831b05c4edf68ae9ebb148e8",
+        ),
+        (
+            "wan22.diffusers-bf16@1",
+            "91036beea9878c462311d97a878a5dc94128283182fbf0948b30118852d97bd5",
         ),
     ]);
     let registry = Registry::builtin().expect("the shipped contracts parse");
