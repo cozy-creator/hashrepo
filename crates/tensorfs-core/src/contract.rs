@@ -11,11 +11,15 @@
 //! - Boundaries are a pure function of `(file bytes, contract)`. The store's
 //!   contents never enter, so the same file under the same contract chunks
 //!   identically on every store, at every time, before and after a GC.
-//! - A contract is identified by `name@version` and that stamp is recorded in
-//!   the snapshot. Identity is therefore self-describing: reading a snapshot
-//!   tells you which layout directed it without consulting whatever registry
-//!   happens to be installed. Bumping `version` is the ONLY way to change a
-//!   contract's meaning; `Contract::digest` exists so a test can pin that.
+//! - A contract is identified by its stamp and that stamp is recorded in the
+//!   snapshot: `name@version` for a library document (`spec/v1/contracts/`,
+//!   digest-pinned by CI so the name is a real promise), `sha256:<hex>` — the
+//!   digest of the canonical rendering — for an author-constructed custom,
+//!   which carries no name at all. Reading a snapshot tells you which layout
+//!   directed it without consulting whatever registry happens to be
+//!   installed. Bumping `version` is the ONLY way to change a library
+//!   contract's meaning; a custom's meaning cannot change without changing
+//!   its identity, by construction.
 //!
 //! Seams never move bytes. They only add cut points inside a fused tensor's
 //! own extent, before the 64 MiB grid — so a fused file's objects become the
@@ -80,6 +84,10 @@ pub enum ContractError {
     Name(String),
     #[error("contract version must be at least 1")]
     Version,
+    #[error("contract name and version are declared together or not at all")]
+    Identity,
+    #[error("digest stamp {0:?} is not sha256:<64 lowercase hex>")]
+    DigestStamp(String),
     #[error("contract declares no tensors")]
     NoTensors,
     #[error("contract pattern {0:?} is malformed")]
@@ -139,12 +147,22 @@ impl Handle {
 /// Which contract directed one file's chunking. Recorded in the manifest, so
 /// a snapshot answers "what layout is this?" without probing and without the
 /// registry that produced it.
+///
+/// Identity has two spellings, deliberately: a contract shipped in the curated
+/// library (`spec/v1/contracts/`, digest-pinned by CI) is identified
+/// `name@version`, because the library is what makes that name a promise.
+/// Every other contract — an author-constructed custom — is identified by the
+/// SHA-256 of its canonical rendering, spelled `sha256:<hex>`. A free-text
+/// name on an inline document validates nothing and can lie or collide, so a
+/// custom carries no name at all.
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Stamp {
     /// No contract matched: the plain per-tensor grid directed the chunking.
     #[default]
     None,
     Named(Handle),
+    /// A custom contract: [`Contract::digest`] of its nameless document.
+    Digest([u8; 32]),
 }
 
 impl Stamp {
@@ -153,10 +171,26 @@ impl Stamp {
         Ok(Self::Named(Handle::new(name, version)?))
     }
 
-    /// Parses the `name@version` display form; `"none"` is the absent stamp.
+    /// Parses the display form: `name@version`, `sha256:<64 hex>`, or `"none"`
+    /// for the absent stamp.
     pub fn parse(text: &str) -> Result<Self, ContractError> {
         if text == "none" {
             return Ok(Self::None);
+        }
+        if let Some(digits) = text.strip_prefix("sha256:") {
+            let malformed = || ContractError::DigestStamp(text.to_owned());
+            if digits.len() != 64 {
+                return Err(malformed());
+            }
+            let mut digest = [0_u8; 32];
+            for (index, pair) in digits.as_bytes().chunks_exact(2).enumerate() {
+                let pair = std::str::from_utf8(pair).map_err(|_| malformed())?;
+                if pair.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                    return Err(malformed());
+                }
+                digest[index] = u8::from_str_radix(pair, 16).map_err(|_| malformed())?;
+            }
+            return Ok(Self::Digest(digest));
         }
         let (name, version) = text
             .rsplit_once('@')
@@ -173,7 +207,7 @@ impl Stamp {
     #[must_use]
     pub fn name(&self) -> Option<&str> {
         match self {
-            Self::None => None,
+            Self::None | Self::Digest(_) => None,
             Self::Named(handle) => Some(handle.name()),
         }
     }
@@ -181,8 +215,17 @@ impl Stamp {
     #[must_use]
     pub const fn version(&self) -> u32 {
         match self {
-            Self::None => 0,
+            Self::None | Self::Digest(_) => 0,
             Self::Named(handle) => handle.version(),
+        }
+    }
+
+    /// The digest of a custom contract's stamp; `None` for the other arms.
+    #[must_use]
+    pub const fn digest(&self) -> Option<&[u8; 32]> {
+        match self {
+            Self::Digest(digest) => Some(digest),
+            _ => None,
         }
     }
 }
@@ -193,6 +236,13 @@ impl fmt::Display for Stamp {
             Self::None => formatter.write_str("none"),
             Self::Named(handle) => {
                 write!(formatter, "{}@{}", handle.name(), handle.version())
+            }
+            Self::Digest(digest) => {
+                formatter.write_str("sha256:")?;
+                for byte in digest {
+                    write!(formatter, "{byte:02x}")?;
+                }
+                Ok(())
             }
         }
     }
@@ -687,11 +737,14 @@ impl TensorPattern {
     }
 }
 
-/// A versioned layout contract.
+/// A layout contract: versioned and named when it ships in the curated
+/// library, anonymous — identified by digest alone — when an author
+/// constructs it inline.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Contract {
-    name: String,
-    version: u32,
+    /// `Some` for library documents; `None` for customs, whose identity is
+    /// [`Contract::digest`]. Name and version travel together or not at all.
+    handle: Option<Handle>,
     description: String,
     tensors: Vec<TensorPattern>,
     sets: BTreeMap<String, Vec<Pattern>>,
@@ -704,14 +757,16 @@ impl Contract {
         raw.validate()
     }
 
+    /// The library name, or `None` for an anonymous custom.
     #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn name(&self) -> Option<&str> {
+        self.handle.as_ref().map(Handle::name)
     }
 
+    /// The library version; 0 for an anonymous custom, which has none.
     #[must_use]
-    pub const fn version(&self) -> u32 {
-        self.version
+    pub fn version(&self) -> u32 {
+        self.handle.as_ref().map_or(0, Handle::version)
     }
 
     #[must_use]
@@ -724,20 +779,22 @@ impl Contract {
         &self.tensors
     }
 
+    /// `name@version` for a library document, `sha256:<digest>` for a custom.
     #[must_use]
     pub fn stamp(&self) -> Stamp {
-        Stamp::Named(Handle {
-            name: self.name.clone(),
-            version: self.version,
-        })
+        match &self.handle {
+            Some(handle) => Stamp::Named(handle.clone()),
+            None => Stamp::Digest(self.digest()),
+        }
     }
 
     /// SHA-256 over this contract's canonical rendering.
     ///
-    /// A contract's MEANING is addressed by `name@version` alone, because that
-    /// is what a snapshot records. This digest is how a repository proves the
-    /// promise behind that: an edit to a published `name@version` changes the
-    /// digest, and the pinned-digest test fails until the version is bumped.
+    /// For a LIBRARY document this is the proof behind the `name@version`
+    /// promise: an edit to a published document changes the digest and the
+    /// pinned-digest test fails until the version is bumped. For a CUSTOM
+    /// (nameless) document this digest IS the identity — the stamp a snapshot
+    /// records, whitespace-invariant and reproducible on every store.
     #[must_use]
     pub fn digest(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
@@ -745,11 +802,17 @@ impl Contract {
         hasher.finalize().into()
     }
 
+    /// The canonical rendering is OMISSION-PRESERVING: an absent field emits
+    /// no line at all, so the digests of the pre-existing named library are
+    /// byte-identical to what they were when `name`/`version` were mandatory.
     fn canonical(&self) -> String {
-        let mut text = format!(
-            "{CONTRACT_FORMAT}\nname={}\nversion={}\n",
-            self.name, self.version
-        );
+        let mut text = format!("{CONTRACT_FORMAT}\n");
+        if let Some(handle) = &self.handle {
+            let _ = std::fmt::Write::write_fmt(
+                &mut text,
+                format_args!("name={}\nversion={}\n", handle.name(), handle.version()),
+            );
+        }
         for tensor in &self.tensors {
             text.push_str(&format!(
                 "tensor role={} pattern={} rank={} required={} dtypes={}",
@@ -958,12 +1021,15 @@ impl Registry {
         Ok(registry)
     }
 
+    /// Inserts a contract, library or custom. A named duplicate refuses by
+    /// `name@version`; ANY content duplicate refuses by digest, which is what
+    /// dedups a custom inserted twice — two spellings of one document are one
+    /// contract, so a second insert is a caller error, not a second entry.
     pub fn insert(&mut self, contract: Contract) -> Result<(), ContractError> {
-        if self
-            .contracts
-            .iter()
-            .any(|held| held.name == contract.name && held.version == contract.version)
-        {
+        let digest = contract.digest();
+        if self.contracts.iter().any(|held| {
+            (held.handle.is_some() && held.handle == contract.handle) || held.digest() == digest
+        }) {
             return Err(ContractError::DuplicateContract(
                 contract.stamp().to_string(),
             ));
@@ -977,14 +1043,22 @@ impl Registry {
         &self.contracts
     }
 
+    /// Resolves a stamp to the contract it names. A digest stamp resolves to
+    /// an inserted custom with that exact canonical digest; an unknown digest
+    /// is a typed miss (`None`), never a fallback.
     #[must_use]
     pub fn get(&self, stamp: &Stamp) -> Option<&Contract> {
-        let Stamp::Named(handle) = stamp else {
-            return None;
-        };
-        self.contracts
-            .iter()
-            .find(|contract| contract.name == handle.name && contract.version == handle.version)
+        match stamp {
+            Stamp::None => None,
+            Stamp::Named(handle) => self
+                .contracts
+                .iter()
+                .find(|contract| contract.handle.as_ref() == Some(handle)),
+            Stamp::Digest(digest) => self
+                .contracts
+                .iter()
+                .find(|contract| contract.digest() == *digest),
+        }
     }
 
     /// Identifies the contract a file implements from its header inventory —
@@ -1007,6 +1081,9 @@ impl Registry {
                 .cmp(&left.matched)
                 .then_with(|| right.stamp.version().cmp(&left.stamp.version()))
                 .then_with(|| left.stamp.name().cmp(&right.stamp.name()))
+                // Two nameless customs still order deterministically: their
+                // stamps ARE their digests, and distinct contracts differ.
+                .then_with(|| left.stamp.to_string().cmp(&right.stamp.to_string()))
         });
         let stamp = candidates
             .first()
@@ -1057,8 +1134,12 @@ impl Detection {
 #[serde(deny_unknown_fields)]
 struct RawContract {
     format: String,
-    name: String,
-    version: u32,
+    /// Present on library documents; ABSENT on author-constructed customs,
+    /// whose identity is the content digest. The two travel together.
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    version: Option<u32>,
     #[serde(default)]
     description: String,
     tensors: Vec<RawTensor>,
@@ -1126,12 +1207,11 @@ impl RawContract {
         if self.format != CONTRACT_FORMAT {
             return Err(ContractError::Format);
         }
-        if !is_contract_name(&self.name) {
-            return Err(ContractError::Name(self.name));
-        }
-        if self.version == 0 {
-            return Err(ContractError::Version);
-        }
+        let handle = match (self.name, self.version) {
+            (None, None) => None,
+            (Some(name), Some(version)) => Some(Handle::new(&name, version)?),
+            _ => return Err(ContractError::Identity),
+        };
         if self.tensors.is_empty() {
             return Err(ContractError::NoTensors);
         }
@@ -1262,8 +1342,7 @@ impl RawContract {
         }
 
         Ok(Contract {
-            name: self.name,
-            version: self.version,
+            handle,
             description: self.description,
             tensors,
             sets,
@@ -1435,6 +1514,83 @@ mod tests {
         assert_ne!(first.digest(), edited.digest());
     }
 
+    const NAMELESS: &str = r#"{
+        "format": "tensorfs-contract-v1",
+        "tensors": [
+            {"role": "layers.{i}.attn.qkv", "pattern": "layers.{i}.qkv.weight", "rank": 2,
+             "fusion": {"axis": 0, "parts": [{"role": "q", "share": 2}, {"role": "k", "share": 1},
+                                             {"role": "v", "share": 1}]}},
+            {"role": "layers.{i}.mlp", "pattern": "layers.{i}.mlp.weight", "required": false}
+        ],
+        "sets": {"adaln": ["layers.{i}.adaln.weight"]}
+    }"#;
+
+    #[test]
+    fn a_nameless_contract_is_identified_by_its_digest_alone() {
+        let custom = contract(NAMELESS);
+        assert_eq!(custom.name(), None);
+        assert_eq!(custom.version(), 0);
+
+        // The stamp IS the canonical digest, spelled sha256:<hex>, and it
+        // round-trips through parse/display like every other stamp.
+        let stamp = custom.stamp();
+        assert_eq!(stamp, Stamp::Digest(custom.digest()));
+        let spelled = stamp.to_string();
+        assert!(
+            spelled.starts_with("sha256:") && spelled.len() == 71,
+            "{spelled}"
+        );
+        assert_eq!(Stamp::parse(&spelled).unwrap(), stamp);
+
+        // Whitespace is not meaning for customs either.
+        let reformatted = contract(&NAMELESS.replace("        ", " ").replace('\n', ""));
+        assert_eq!(custom.digest(), reformatted.digest());
+
+        // The same declarations UNDER A NAME are a different contract: the
+        // canonical rendering carries the name lines, so adoption into the
+        // library is a new document with a new identity.
+        assert_ne!(custom.digest(), contract(FUSED).digest());
+
+        // A malformed digest spelling refuses, typed.
+        assert!(Stamp::parse("sha256:abc").is_err());
+        assert!(Stamp::parse(&spelled.to_uppercase()).is_err());
+    }
+
+    #[test]
+    fn name_and_version_are_declared_together_or_not_at_all() {
+        let with_name_only =
+            NAMELESS.replace("\"tensors\"", "\"name\": \"test.custom\", \"tensors\"");
+        let with_version_only = NAMELESS.replace("\"tensors\"", "\"version\": 1, \"tensors\"");
+        assert!(matches!(
+            Contract::parse(&with_name_only),
+            Err(ContractError::Identity)
+        ));
+        assert!(matches!(
+            Contract::parse(&with_version_only),
+            Err(ContractError::Identity)
+        ));
+    }
+
+    #[test]
+    fn the_registry_resolves_digest_stamps_and_dedups_customs() {
+        let custom = contract(NAMELESS);
+        let mut registry = Registry::builtin().unwrap();
+        registry.insert(custom.clone()).unwrap();
+
+        // A digest stamp resolves to the inserted custom; an unknown digest
+        // is a typed miss, never a fallback.
+        let found = registry.get(&custom.stamp()).expect("resolves");
+        assert_eq!(found.stamp(), custom.stamp());
+        assert!(registry.get(&Stamp::Digest([0x5A; 32])).is_none());
+
+        // A second spelling of the same document is the same contract.
+        let respelled = contract(&NAMELESS.replace('\n', " "));
+        assert!(matches!(
+            registry.insert(respelled),
+            Err(ContractError::DuplicateContract(_))
+        ));
+    }
+
     #[test]
     fn malformed_documents_refuse() {
         let cases = [
@@ -1468,6 +1624,15 @@ mod tests {
     fn the_builtin_library_parses_and_holds_distinct_stamps() {
         let registry = Registry::builtin().unwrap();
         assert!(registry.contracts().len() >= 3);
+        // The name guarantee lives in the curated library, not the parser: a
+        // nameless document is valid everywhere a document travels, but every
+        // SHIPPED document must carry a real name@version.
+        for held in registry.contracts() {
+            assert!(
+                held.name().is_some() && held.version() >= 1,
+                "a shipped contract is nameless"
+            );
+        }
         let mut stamps: Vec<String> = registry
             .contracts()
             .iter()

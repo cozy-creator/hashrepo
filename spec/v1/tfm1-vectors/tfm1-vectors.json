@@ -82,6 +82,12 @@
       "fixture": "fixtures/gguf-provenance.hex",
       "snapshot_id": "cac63d48aa0fd5d8c2c75321fe0e664ed5f2aa8a7c46789631b55d85cf65dbd8",
       "description": "a gguf-v1 planned file pinning the remaining tensor planner tag"
+    },
+    {
+      "name": "contract-digest-stamped",
+      "fixture": "fixtures/contract-digest-stamped.hex",
+      "snapshot_id": "0ad80825738258437064f4ca691e82a0c10987da64d68f23f95f7d11cde7fe82",
+      "description": "a tensor body stamped with a custom contract's canonical digest (0xFF marker + 32 bytes)"
     }
   ],
   "refusals": [
@@ -209,6 +215,11 @@
       "name": "contract-name-too-long",
       "fixture": "fixtures/refusal-contract-name-too-long.hex",
       "reason": "contract-name"
+    },
+    {
+      "name": "contract-digest-truncated",
+      "fixture": "fixtures/refusal-contract-digest-truncated.hex",
+      "reason": "truncated"
     },
     {
       "name": "retired-raw-planner",

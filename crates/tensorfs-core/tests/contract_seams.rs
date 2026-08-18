@@ -552,6 +552,62 @@ fn a_snapshot_id_follows_its_stamp_and_not_the_registry() {
     assert_eq!(contract.to_string(), "test.h3-fused@1");
 }
 
+/// The FUSED declarations with the name and version stripped: an
+/// author-constructed custom, identified by digest alone.
+fn nameless_fused() -> Contract {
+    let document = FUSED
+        .replace("\"name\": \"test.h3-fused\",\n", "")
+        .replace("\"version\": 1,\n", "");
+    assert!(!document.contains("\"name\""), "the fixture edit missed");
+    contract(&document)
+}
+
+#[test]
+fn a_custom_contract_chunks_reproducibly_and_stamps_its_digest() {
+    // Dedup-invariance holds for customs: boundaries are a pure function of
+    // (file bytes, document), so the identical file under the identical
+    // nameless document reproduces the identical snapshot on a SECOND store
+    // that has never seen the first.
+    let bytes = fused_file();
+    let custom = nameless_fused();
+    assert!(custom.stamp().to_string().starts_with("sha256:"));
+
+    let commit = |name: &str| {
+        let root = TempRoot::new(name);
+        let store = ObjectStore::open(root.path()).expect("store opens");
+        let plan =
+            tensorfs_core::planner::plan_with(bytes.as_slice(), Some(&custom)).expect("plans");
+        let admitted = store
+            .admit_regions(bytes.as_slice(), plan.regions())
+            .expect("admits");
+        let mut builder = SnapshotBuilder::new(None);
+        builder.file_under(
+            "model.safetensors",
+            false,
+            PlannerId::SafetensorsV1,
+            plan.contract().clone(),
+            admitted
+                .iter()
+                .map(|object| FileRecord::Data {
+                    digest: object.digest(),
+                    length: object.length(),
+                })
+                .collect(),
+        );
+        builder.finish().expect("valid").snapshot_id()
+    };
+
+    let first = commit("custom-first");
+    let second = commit("custom-second");
+    assert_eq!(first, second, "custom chunking is store-independent");
+
+    // And the recorded stamp is the digest form, which cuts the same seams
+    // as the named twin — the objects are shared across the two identities.
+    let named = tensor_digests(&bytes, Some(&contract(FUSED)));
+    let custom_objects = tensor_digests(&bytes, Some(&custom));
+    assert_eq!(named, custom_objects);
+}
+
 // ---------------------------------------------------------------------------
 // the upgrade path
 // ---------------------------------------------------------------------------

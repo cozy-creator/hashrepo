@@ -70,12 +70,13 @@ type TFM1Record struct {
 // tensor-planned file carries Records; a blob-v1 file carries Digest — the
 // whole-file SHA-256 — and never Records.
 type TFM1Entry struct {
-	Path        string
-	Kind        TFM1EntryKind
-	Executable  bool
-	Planner     string
-	// Contract is the layout contract that directed this file's chunking,
-	// spelled name@version, or "" for the plain per-tensor grid.
+	Path       string
+	Kind       TFM1EntryKind
+	Executable bool
+	Planner    string
+	// Contract is the layout contract that directed this file's chunking:
+	// name@version for a library document, sha256:<hex> for a custom
+	// (nameless) contract, or "" for the plain per-tensor grid.
 	Contract    string
 	LogicalSize uint64
 	Records     []TFM1Record
@@ -165,13 +166,23 @@ func (r *tfm1Reader) remaining() uint64 {
 }
 
 // takeContract reads a tensor body's layout-contract stamp: a bounded name and
-// its version, or the canonical absent stamp (empty name, version zero). Every
-// other combination refuses -- a nameless version and a version-less name are
-// both unreadable claims about which layout produced these boundaries.
+// its version, the canonical absent stamp (empty name, version zero), or --
+// behind the 0xFF marker no name length can reach -- a custom contract's
+// 32-byte canonical digest, spelled sha256:<hex>. Every other combination
+// refuses: a nameless version, a version-less name, and a length between 65
+// and 254 are all unreadable claims about which layout produced these
+// boundaries.
 func (r *tfm1Reader) takeContract() (string, error) {
 	length, err := r.takeU8()
 	if err != nil {
 		return "", err
+	}
+	if length == 0xFF {
+		digestBytes, err := r.take(32)
+		if err != nil {
+			return "", err
+		}
+		return "sha256:" + hex.EncodeToString(digestBytes), nil
 	}
 	if int(length) > TFM1MaxContractNameBytes {
 		return "", tfm1Refuse("contract-name")
