@@ -27,6 +27,10 @@ pub mod source;
 /// the embedded metadata engine.
 #[cfg(all(feature = "store", any(unix, windows)))]
 pub mod store;
+/// The streamed store→memory read engine (buffered or O_DIRECT) behind the
+/// no-fill serving path. Needs the store, so it shares its gate.
+#[cfg(all(feature = "store", any(unix, windows)))]
+pub mod stream;
 /// Snapshot sync moves objects between the local store and a remote grant
 /// service, so it shares the real-filesystem platform gate.
 #[cfg(all(feature = "sync", any(unix, windows)))]

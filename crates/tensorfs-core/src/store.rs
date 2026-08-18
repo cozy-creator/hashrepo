@@ -379,6 +379,33 @@ impl ObjectStore {
         Ok(file)
     }
 
+    /// Opens a resident object with `O_DIRECT`: page cache bypassed, reads
+    /// land straight in the caller's aligned buffers. Linux only — the one
+    /// deployment platform of the streamed serving path. A filesystem that
+    /// cannot honor the flag refuses at open; there is no silent fallback.
+    #[cfg(target_os = "linux")]
+    pub fn open_object_direct(&self, digest: &ObjectDigest) -> Result<File, StoreError> {
+        let path = self.object_path(digest);
+        let opened = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_DIRECT)
+            .open(&path);
+        let file = match opened {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(StoreError::Missing { digest: *digest });
+            }
+            Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+                return Err(StoreError::NotARegularFile { digest: *digest });
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if !file.metadata()?.is_file() {
+            return Err(StoreError::NotARegularFile { digest: *digest });
+        }
+        Ok(file)
+    }
+
     /// Rehashes a resident object and reports corruption without deleting it;
     /// repair belongs to a newly verified admission, never to the reader.
     pub fn verify(&self, digest: &ObjectDigest) -> Result<u64, StoreError> {

@@ -1156,6 +1156,216 @@ impl PyRecordsReader {
 }
 
 // ---------------------------------------------------------------------------
+// The streamed store→VRAM read path (#115)
+// ---------------------------------------------------------------------------
+
+/// One tensor of a streamed container: name and geometry, no bytes.
+#[pyclass(frozen, get_all, module = "tensorfs._tensorfs", name = "StreamTensor")]
+pub struct PyStreamTensor {
+    name: String,
+    /// The container's own dtype spelling: safetensors' (`"BF16"`) or the
+    /// ggml type name for GGUF.
+    dtype: String,
+    /// Logical shape, outermost axis first.
+    shape: Vec<u64>,
+    /// Offset of the tensor's first byte within the logical file.
+    offset: u64,
+    /// The tensor's own extent in bytes.
+    nbytes: u64,
+}
+
+#[pymethods]
+impl PyStreamTensor {
+    fn __repr__(&self) -> String {
+        format!(
+            "StreamTensor(name='{}', dtype='{}', offset={}, nbytes={})",
+            self.name, self.dtype, self.offset, self.nbytes
+        )
+    }
+}
+
+/// A committed tensor container's streamed read surface: FILE-ORDER tensor
+/// iteration and GIL-released bulk `readinto` into caller-owned buffers.
+///
+/// `tensors` is ordered by ascending file offset — an API CONTRACT, not an
+/// accident of the header. For canonically packaged snapshots record order is
+/// contract memory order, so walking `tensors` and reading each one is the
+/// sequential access pattern the load-order ruling measured at ~10x.
+///
+/// The caller's buffer is typically CUDA-pinned host memory; this class sees
+/// a writable buffer-protocol object and nothing more (the torch boundary
+/// holds: no torch, no CUDA in this crate).
+///
+/// `direct=True` opens every object `O_DIRECT` (Linux): page cache bypassed,
+/// whole aligned blocks landing straight in the caller's aligned buffer,
+/// tails via an aligned over-read. The DEFAULT stays buffered — the page
+/// cache is what makes warm loads and cross-checkpoint chunk sharing nearly
+/// free, and the extra memcpy pipelines behind disk DMA.
+#[pyclass(frozen, module = "tensorfs._tensorfs", name = "TensorStreamReader")]
+pub struct PyTensorStreamReader {
+    reader: tensorfs_core::stream::StreamReader<Arc<ObjectStore>>,
+    format: String,
+    tensors: Vec<Py<PyStreamTensor>>,
+}
+
+#[pymethods]
+impl PyTensorStreamReader {
+    #[new]
+    #[pyo3(signature = (store, records, direct = false))]
+    fn new(
+        py: Python<'_>,
+        store: &PyObjectStore,
+        records: Vec<PyFileRecord>,
+        direct: bool,
+    ) -> PyResult<Self> {
+        let records = records
+            .iter()
+            .map(PyFileRecord::to_core)
+            .collect::<PyResult<Vec<_>>>()?;
+        let mode = if direct {
+            tensorfs_core::stream::ReadMode::Direct
+        } else {
+            tensorfs_core::stream::ReadMode::Buffered
+        };
+        let reader =
+            tensorfs_core::stream::StreamReader::new(Arc::clone(&store.inner), &records, mode)
+                .map_err(io_error)?;
+        let inventory = py
+            .detach(|| planner::inventory(&reader))
+            .map_err(plan_error)?
+            .ok_or_else(|| TensorfsError::new_err("these records are not a tensor container"))?;
+        // ASCENDING FILE OFFSET, whatever order the header spelled them in:
+        // the ordered iteration is the API contract.
+        let mut tensors: Vec<&planner::InventoryTensor> = inventory.tensors().iter().collect();
+        tensors.sort_by_key(|tensor| tensor.offset());
+        let tensors = tensors
+            .into_iter()
+            .map(|tensor| {
+                Py::new(
+                    py,
+                    PyStreamTensor {
+                        name: tensor.name().to_owned(),
+                        dtype: tensor.dtype().to_owned(),
+                        shape: tensor.shape().to_vec(),
+                        offset: tensor.offset(),
+                        nbytes: tensor.length(),
+                    },
+                )
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(Self {
+            reader,
+            format: match inventory.format() {
+                planner::TensorFormat::SafetensorsV1 => "safetensors-v1".to_owned(),
+                planner::TensorFormat::GgufV1 => "gguf-v1".to_owned(),
+            },
+            tensors,
+        })
+    }
+
+    /// Every tensor, in ASCENDING FILE-OFFSET order (= record order =
+    /// contract memory order for canonical packagings). This ordering is the
+    /// contract; safetensors header key order is not offset order in general.
+    #[getter]
+    fn tensors(&self, py: Python<'_>) -> Vec<Py<PyStreamTensor>> {
+        self.tensors.iter().map(|item| item.clone_ref(py)).collect()
+    }
+
+    /// `"safetensors-v1"` or `"gguf-v1"`.
+    #[getter]
+    fn format(&self) -> &str {
+        &self.format
+    }
+
+    /// The committed logical length of the container, holes included.
+    #[getter]
+    fn length(&self) -> u64 {
+        self.reader.length()
+    }
+
+    #[getter]
+    fn direct(&self) -> bool {
+        self.reader.mode() == tensorfs_core::stream::ReadMode::Direct
+    }
+
+    /// Copies `[offset, offset + length)` into `buffer`, which must be a
+    /// writable C-contiguous buffer of at least `length` bytes. The copy runs
+    /// in Rust WITH THE GIL RELEASED, so a second Python thread — the
+    /// caller's H2D pipeline — makes progress underneath it. Holes read as
+    /// zeros. Returns the byte count written.
+    fn readinto(
+        &self,
+        py: Python<'_>,
+        offset: u64,
+        length: u64,
+        buffer: pyo3::buffer::PyBuffer<u8>,
+    ) -> PyResult<u64> {
+        let destination = writable_span(&buffer, length)?;
+        py.detach(move || {
+            // SAFETY: `buffer` holds a live Py_buffer for the duration of
+            // this call, so the exporter keeps the memory valid and unmoved;
+            // `writable_span` checked writability, contiguity and capacity.
+            let slice =
+                unsafe { std::slice::from_raw_parts_mut(destination as *mut u8, length as usize) };
+            self.reader.read_exact_at(offset, slice)
+        })
+        .map_err(io_error)?;
+        Ok(length)
+    }
+
+    /// `readinto` addressed by tensor name: exactly that tensor's bytes,
+    /// into the front of `buffer`. Returns the tensor's `nbytes`.
+    fn read_tensor_into(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        buffer: pyo3::buffer::PyBuffer<u8>,
+    ) -> PyResult<u64> {
+        let found = self
+            .tensors
+            .iter()
+            .map(|tensor| tensor.get())
+            .find(|tensor| tensor.name == name)
+            .ok_or_else(|| {
+                TensorfsError::new_err(format!("this container holds no tensor named {name:?}"))
+            })?;
+        self.readinto(py, found.offset, found.nbytes, buffer)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TensorStreamReader(format='{}', tensors={}, length={}, direct={})",
+            self.format,
+            self.tensors.len(),
+            self.reader.length(),
+            if self.direct() { "True" } else { "False" }
+        )
+    }
+}
+
+/// Checks a destination buffer and returns its base address: writable,
+/// C-contiguous, and at least `length` bytes.
+fn writable_span(buffer: &pyo3::buffer::PyBuffer<u8>, length: u64) -> PyResult<usize> {
+    if buffer.readonly() {
+        return Err(TensorfsError::new_err(
+            "the destination buffer is read-only",
+        ));
+    }
+    if !buffer.is_c_contiguous() {
+        return Err(TensorfsError::new_err(
+            "the destination buffer must be C-contiguous",
+        ));
+    }
+    let capacity = buffer.len_bytes() as u64;
+    if capacity < length {
+        return Err(TensorfsError::new_err(format!(
+            "the destination holds {capacity} bytes, the read needs {length}"
+        )));
+    }
+    Ok(buffer.buf_ptr() as usize)
+}
+
+// ---------------------------------------------------------------------------
 // Module-level functions
 // ---------------------------------------------------------------------------
 
@@ -1735,6 +1945,8 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyRecordsReader>()?;
     module.add_class::<PyRegistry>()?;
     module.add_class::<PyContractInfo>()?;
+    module.add_class::<PyStreamTensor>()?;
+    module.add_class::<PyTensorStreamReader>()?;
 
     module.add_function(wrap_pyfunction!(decode_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(stub_bytes, module)?)?;

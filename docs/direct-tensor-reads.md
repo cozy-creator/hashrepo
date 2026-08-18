@@ -367,6 +367,40 @@ It was also the only thing buildable: this box sat at load 48–78 for the entir
 session and the workspace resource rules put cargo off limits. Both reasons are
 real; the first would still hold on an idle box.
 
+## The stream surface (#115): file-order iteration + GIL-released readinto
+
+The no-fill serving ruling (2026-08-19) made the loader shape explicit, and
+`_tensorfs.TensorStreamReader` is its storage half:
+
+- **`tensors` is ascending file-offset order BY CONTRACT** (= record order =
+  contract memory order for canonical packagings). Safetensors header key
+  order is not offset order in general; the reader sorts, and a fixture whose
+  orders differ pins it. Walking `tensors` and reading each one is the
+  sequential pattern the load-order ruling measured at ~10x.
+- **`readinto(offset, length, buffer)` copies in Rust with the GIL released**
+  into any writable C-contiguous buffer — typically CUDA-pinned host memory,
+  which this crate neither knows nor cares about (the torch boundary holds).
+  Holes zero-fill, never skip. `read_tensor_into(name, buffer)` addresses by
+  tensor.
+- **`direct=True`** opens objects `O_DIRECT` (Linux): whole aligned blocks
+  land straight in an aligned caller buffer, tails via aligned over-read,
+  unaligned destinations through a bounded aligned bounce. The DEFAULT stays
+  buffered: the page cache is what makes warm loads and cross-checkpoint
+  dedup sharing nearly free. An unsupported filesystem surfaces the kernel's
+  refusal — no silent fallback.
+
+Local CPU-side numbers (`python/benchmarks/stream_readinto.py`, 2 GiB, warm
+cache, shared box): stream readinto buffered **6.4 GiB/s** vs
+`RecordsReader.read_at`+copy **0.59 GiB/s** (~10.8x — the GIL-held,
+bytes-allocating path this replaces) vs plain `file.readinto` floor
+5.7 GiB/s; O_DIRECT 2.0 GiB/s (true disk-path bandwidth, cache bypassed).
+The store→VRAM proof rides e2e#1906 on a rented pod.
+
+GPUDirect Storage is honestly absent on RunPod: cuFile needs the `nvidia-fs`
+kernel module, containers cannot load modules, and cuFile compat mode is a
+POSIX read into a bounce buffer — exactly the pinned-staging design. Recorded
+as an upgrade rung for GDS-capable hosts, not designed for.
+
 ## The torch boundary
 
 `torch` must not become a dependency of `tensorfs`, and does not.
