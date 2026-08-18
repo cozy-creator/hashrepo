@@ -226,6 +226,20 @@ fn golden_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
         builder.finish().expect("valid").to_bytes()
     };
 
+    // A custom (nameless) contract's stamp: the 0xFF marker followed by the
+    // 32-byte canonical digest, in place of name and version.
+    let digest_stamped = {
+        let mut builder = SnapshotBuilder::new(None);
+        builder.file_under(
+            "custom.safetensors",
+            false,
+            PlannerId::SafetensorsV1,
+            Stamp::Digest([0xAB; 32]),
+            vec![data(0x31, 96), data(0x32, 512)],
+        );
+        builder.finish().expect("valid").to_bytes()
+    };
+
     vec![
         (
             "empty-snapshot",
@@ -291,6 +305,11 @@ fn golden_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
             "gguf-provenance",
             "a gguf-v1 planned file pinning the remaining tensor planner tag",
             gguf_provenance,
+        ),
+        (
+            "contract-digest-stamped",
+            "a tensor body stamped with a custom contract's canonical digest (0xFF marker + 32 bytes)",
+            digest_stamped,
         ),
     ]
 }
@@ -525,6 +544,14 @@ fn refusal_bytes() -> Vec<(&'static str, &'static str, Vec<u8>)> {
             )
             .0,
     ));
+    // The 0xFF digest marker promises 32 digest bytes; a stamp that ends the
+    // manifest before delivering them is truncated, not a shorter digest.
+    cases.push(("contract-digest-truncated", "truncated", {
+        let raw = Raw::manifest().entry_count(1).path("f.safetensors");
+        let mut bytes = raw.bytes(&[2, 0, 1]).u64(4).bytes(&[0xFF]).0;
+        bytes.extend_from_slice(&[0xAB; 16]);
+        bytes
+    }));
 
     // Planner byte 3 was `raw-fixed-64m-v1`, the retired 64 MiB grid for
     // non-tensor files. It is retired, not aliased: the tag refuses exactly

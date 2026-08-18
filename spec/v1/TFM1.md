@@ -37,10 +37,13 @@ tensor body (planner 1, 2) :=
   record * record_count
 
 stamp :=
-  name_len      u8 (0..=64)
+  name_len      u8 (0..=64, or the 0xFF digest marker)
   name          ASCII <producer>.<format>, lowercase alphanumeric producer,
                             format of lowercase alphanumerics and `.` `-` `_`
   version       u32          >= 1 iff name_len > 0, else exactly 0
+  -- name_len 0xFF instead means a custom contract, and exactly 32 digest
+  -- bytes follow in place of name and version: the SHA-256 of the contract's
+  -- canonical rendering, displayed `sha256:<hex>`. 65..=254 refuses.
 
 blob body (planner 4) :=
   logical_size  u64
@@ -66,7 +69,11 @@ refuses). Zero lengths and adjacent holes refuse. A data record never exceeds
 records; holes are unbounded. An empty tensor file has zero records.
 
 The contract stamp records WHICH tensor-layout contract directed this file's
-chunking (`spec/v1/contracts/`). An empty name with version 0 is
+chunking. A `name@version` stamp names a document in the curated library
+(`spec/v1/contracts/`); a digest stamp identifies a custom (nameless)
+contract by content — it identifies exactly but describes nothing, and the
+document is recovered out of band (the release derive document, the org's
+extracted-contract set). An empty name with version 0 is
 `contract:none` — the plain per-tensor grid; a name without a version, or a
 version without a name, refuses (`contract-name`, `contract-version`). The
 stamp is part of the canonical bytes, so it is part of the snapshot id:

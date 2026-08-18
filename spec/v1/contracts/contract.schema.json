@@ -5,11 +5,12 @@
   "description": "A tensor layout contract: the declarative, versioned input that identifies a file's layout and directs its chunking seams.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format", "name", "version", "tensors"],
+  "required": ["format", "tensors"],
+  "dependentRequired": { "name": ["version"], "version": ["name"] },
   "properties": {
     "format": { "const": "tensorfs-contract-v1" },
     "name": {
-      "description": "The handle: <producer>.<format>, as gen-worker spells layout contracts.",
+      "description": "The handle: <producer>.<format>, as gen-worker spells layout contracts. Present with `version` on curated-library documents; ABSENT on author-constructed customs, whose identity is the SHA-256 of the canonical rendering (stamp `sha256:<hex>`).",
       "type": "string",
       "maxLength": 64,
       "pattern": "^[a-z0-9]+\\.[a-z0-9][a-z0-9._-]*$"

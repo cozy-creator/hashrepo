@@ -16,10 +16,42 @@ tensor-layout-contract handles, so the stamp a snapshot carries reads the same
 on both sides of the serving boundary.
 
 **A published `name@version` is immutable.** Changing what a contract means
-requires a new `version`; `crates/tensorfs-core/tests/contract_registry.rs`
-pins each document's digest so an in-place edit fails CI. This is what makes a
-stamped snapshot reproducible: same file + same `contract@version` ⇒ same
-snapshot id, on every store, forever.
+requires a new `version`; `crates/tensorfs-core/tests/contract_seams.rs`
+(`the_shipped_library_is_pinned_by_digest`) pins each document's digest so an
+in-place edit fails CI. This is what makes a stamped snapshot reproducible:
+same file + same `contract@version` ⇒ same snapshot id, on every store,
+forever.
+
+## Custom contracts: digest identity
+
+`name@version` is a promise only this curated, CI-pinned library can keep, so
+it is reserved for documents shipped here. Every OTHER contract — an
+author-constructed custom — carries **no name at all**: `name` and `version`
+are absent from the document, and its identity is the SHA-256 of its
+canonical rendering, stamped `sha256:<64 hex>`. A free-text name on an inline
+object validates nothing and can lie or collide; the author's variable name
+is their label, and platform surfaces derive a display label from the digest
+prefix. Equality everywhere is by digest. A custom document later adopted
+into the library gains a name in a NEW document — new digest, new stamp
+spelling — while chunk identity stays answerable, because boundaries are a
+pure function of (file bytes, document).
+
+A digest stamp IDENTIFIES exactly but DESCRIBES nothing: reading a snapshot
+stamped `sha256:…` tells you the layout's identity, not its declarations.
+Document recovery is out of band — the release derive document (hub-stored)
+and the org's extracted-contract set.
+
+**Matcher scoping is org-scoped.** The builtin library joins every ingest
+matcher set, globally. A custom contract joins the ingest matcher set only
+for the org whose release declared it — an org's BYOM upload must be able to
+stamp the org's own custom at ingest, before any deployment binds it, and
+cross-org custom matching never happens. (Deploy-scoped-only was rejected for
+exactly the BYOM-before-deploy case.)
+
+Run-preserving conversions (rekey, outer-axis fuse/split, declared permutes)
+work for customs with no prior platform knowledge — `compose::derive`
+computes them from the two documents' role sets. Anything needing math (cast,
+quantization) has no adapter for a custom contract and refuses, typed.
 
 ## Fields
 

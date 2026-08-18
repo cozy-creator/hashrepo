@@ -373,6 +373,42 @@ fn a_run_preserving_derivation_admits_one_header_and_no_data() {
 }
 
 #[test]
+fn a_derivation_into_a_nameless_custom_moves_no_data_and_stamps_the_digest() {
+    // A custom contract needs NO prior platform knowledge for run-preserving
+    // conversions: derive computes them from the two documents' role sets,
+    // and the derived body is stamped with the custom's canonical digest.
+    let root = TempRoot::new("derive-custom");
+    let store = ObjectStore::open(root.path()).expect("store opens");
+    let bytes = native_file();
+    let body = admit(&store, &bytes);
+    let before = data_digests(&body);
+
+    let custom_document = DIFFUSERS
+        .replace("\"name\": \"test.diffusers\",\n", "")
+        .replace("\"version\": 1,\n", "");
+    let custom = contract(&custom_document);
+    assert_eq!(custom.name(), None);
+
+    let derived = derive(&store, &body, &contract(NATIVE), &custom).expect("derives");
+    let after = data_digests(&derived);
+    let fresh: Vec<&ObjectDigest> = after.difference(&before).collect();
+    assert_eq!(
+        fresh.len(),
+        1,
+        "one new header object and ZERO data objects"
+    );
+
+    let FileBody::Tensor {
+        contract: stamp, ..
+    } = &derived
+    else {
+        panic!("still a tensor container");
+    };
+    assert_eq!(*stamp, custom.stamp());
+    assert!(stamp.to_string().starts_with("sha256:"), "{stamp}");
+}
+
+#[test]
 fn a_re_arranged_tensor_is_materialized_once_and_is_exactly_invertible() {
     let root = TempRoot::new("permute");
     let store = ObjectStore::open(root.path()).expect("store opens");

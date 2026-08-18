@@ -43,6 +43,10 @@ const KIND_SYMLINK: u8 = 3;
 const KIND_HARDLINK: u8 = 4;
 const RECORD_DATA: u8 = 1;
 const RECORD_HOLE: u8 = 2;
+/// The stamp's name-length position carries this marker when the stamp is a
+/// custom contract's 32-byte digest. Unreachable as a real length: names are
+/// bounded to [`MAX_CONTRACT_NAME_BYTES`].
+const STAMP_DIGEST_MARKER: u8 = 0xFF;
 const PLANNER_SAFETENSORS: u8 = 1;
 const PLANNER_GGUF: u8 = 2;
 const PLANNER_BLOB: u8 = 4;
@@ -535,10 +539,21 @@ fn emit_body(bytes: &mut Vec<u8>, body: &FileBody) {
             ..
         } => {
             bytes.extend_from_slice(&logical_size.to_le_bytes());
-            let name = contract.name().unwrap_or_default();
-            bytes.push(name.len() as u8);
-            bytes.extend_from_slice(name.as_bytes());
-            bytes.extend_from_slice(&contract.version().to_le_bytes());
+            match contract {
+                // A custom contract's stamp is its canonical digest. The
+                // marker byte cannot collide with a name length: names are
+                // bounded to 64 bytes.
+                Stamp::Digest(digest) => {
+                    bytes.push(STAMP_DIGEST_MARKER);
+                    bytes.extend_from_slice(digest);
+                }
+                named_or_none => {
+                    let name = named_or_none.name().unwrap_or_default();
+                    bytes.push(name.len() as u8);
+                    bytes.extend_from_slice(name.as_bytes());
+                    bytes.extend_from_slice(&named_or_none.version().to_le_bytes());
+                }
+            }
             bytes.extend_from_slice(&(records.len() as u64).to_le_bytes());
             for record in records {
                 match record {
@@ -1099,11 +1114,18 @@ fn decode_tensor_body(
     })
 }
 
-/// The contract stamp: a bounded name and its version, or the canonical
-/// absent stamp (empty name, version zero). Every other combination refuses —
-/// a nameless version and a version-less name are both unreadable claims.
+/// The contract stamp: a bounded name and its version, the canonical absent
+/// stamp (empty name, version zero), or — behind the `0xFF` marker no name
+/// length can reach — a custom contract's 32-byte canonical digest. Every
+/// other combination refuses: a nameless version, a version-less name, and a
+/// length between 65 and 254 are all unreadable claims.
 fn decode_stamp(reader: &mut Reader<'_>) -> Result<Stamp, Tfm1Error> {
     let length = usize::from(reader.take_u8()?);
+    if length == usize::from(STAMP_DIGEST_MARKER) {
+        let mut digest = [0_u8; 32];
+        digest.copy_from_slice(reader.take(32)?);
+        return Ok(Stamp::Digest(digest));
+    }
     if length > MAX_CONTRACT_NAME_BYTES {
         return Err(Tfm1Error::ContractName);
     }
