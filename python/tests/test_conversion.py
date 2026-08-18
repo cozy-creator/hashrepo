@@ -31,10 +31,10 @@ from pathlib import Path
 import pytest
 from tensorfs import LocalCAS, RepositoryManifest, TensorWriter, open_tensors, read_entry
 from tensorfs import contracts as library
-from tensorfs.convert import _declaration_for  # the ported claim rule under test
 from tensorfs.convert import (
     FP8_E4M3,
     ConversionRefused,
+    _declaration_for,  # the ported claim rule the Go fence re-counts
     convert,
     recipe_for,
 )
