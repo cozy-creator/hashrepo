@@ -57,6 +57,10 @@ pub const BUILTIN: &[(&str, &str)] = &[
         include_str!("../../../spec/v1/contracts/dit.blocks-fused-qkv.v1.json"),
     ),
     (
+        "flux2-klein.diffusers-bf16.v1.json",
+        include_str!("../../../spec/v1/contracts/flux2-klein.diffusers-bf16.v1.json"),
+    ),
+    (
         "hidream-o1.diffusers-bf16.v1.json",
         include_str!("../../../spec/v1/contracts/hidream-o1.diffusers-bf16.v1.json"),
     ),

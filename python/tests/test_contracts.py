@@ -31,6 +31,9 @@ RUST_PINNED = {
     "dit.blocks-fused-qkv@1": (
         "57f09073ca1a631bb173293c84e11f462089d0fa8cf9ce45e142fc33881a17a1"
     ),
+    "flux2-klein.diffusers-bf16@1": (
+        "4d9fada187e6e086a1c4c496d81b785ce9419fc089e64d0141f6427b88e9d40d"
+    ),
     "hidream-o1.diffusers-bf16@1": (
         "69003d11e2cb3b52628cb05e02c275916db74e318eabbce2f6e89be625c7e01f"
     ),
