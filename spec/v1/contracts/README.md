@@ -159,8 +159,18 @@ conjunct the format cannot carry is 16-alignment, because contracts are
 shapeless on purpose; that stays the producer's refusal, and each document
 records why omitting it is sound for its family.
 
-`tensorfs.convert` reads the recipe back out of the target document
-(`recipe_for`), and `Contract.Recipe()` is the same rule in Go, so a gate that
-answers `DerivableVia` names the job the producer will actually run. Proven end
-to end by `scripts/prove-conversion.sh`: real trees in, real conversion, and
-the verdict taken by the real matcher.
+**The recipe is DERIVED from the declarations, and there is no `recipe` field.**
+`tensorfs.convert.recipe_for` (Python) and `Contract.Recipe()` (Go) are one
+rule: fp8 element types present **and** `.weight_scale` twins present ⇒
+`fp8-rowwise`, else `dtype-cast`. Note what it does **not** read — the name. A
+document called `…-fp8-rowwise` that failed to declare scales answers
+`dtype-cast`, and a differently-named one declaring both answers
+`fp8-rowwise`, because a name is a label and the declarations are the
+falsifiable part. Storing the recipe instead would be a second assertion about
+the same fact, able only to agree with the declarations or contradict them —
+and the contradiction is the bug tcg#53 exists to remove. Anything downstream
+reading a `recipe` key is a defect, not a missing field.
+
+So a gate that answers `DerivableVia` names the job the producer will actually
+run. Proven end to end by `scripts/prove-conversion.sh`: real trees in, real
+conversion, and the verdict taken by the real matcher.
