@@ -130,3 +130,37 @@ tensor bytes). Among all contracts that match, the winner is:
 Key 3 exists so the answer never depends on registry insertion order. The
 winner is recorded in the snapshot as `contract@version`; no match is recorded
 as `none` and chunks on the plain per-tensor grid.
+
+## Quantized lanes, and where the recipe lives
+
+A lane document's declarations state what its bytes ARE, so they also state how
+they are MADE. `cozy.sdxl-*`-era vocabulary put a quant recipe on the endpoint
+and cast at serve time; the recipe is a property of the LANE (torchcg tcg#53),
+and the two fp8 documents here are that fact written down:
+
+| lane | derived from | converts |
+|---|---|---|
+| `sdxl.diffusers-fp8-rowwise@1` | `sdxl.diffusers-bf16@1` | 36 of 221 declarations, UNET only |
+| `minimax.h3-dit-fp8-rowwise@1` | `minimax.h3-dit-diffusers@1` | 7 of 10 declarations |
+
+The fp8-rowwise packaging is a PAIR: a quantized Linear's `X.weight` is
+`F8_E4M3` `[out, in]` and a sibling `X.weight_scale` is `F32` `[out]`, a
+per-row DEQUANT multiplier. Modules the recipe skips keep their source dtype
+and carry **no** scale leaf, so a reader tells converted from kept per tensor
+rather than from a name list. Each scale declaration mirrors its weight's
+`required` flag, which is where a document says "an fp8 weight without its
+scale is not this layout".
+
+Neither document was hand-written. Both are the bf16 sibling with gen-worker's
+own eligibility rule applied — rank-2 float `.weight`, 16-aligned, under a
+repeated-block path segment, module path missing every skip pattern — so the
+document and the producer cannot disagree about which tensors are fp8. The one
+conjunct the format cannot carry is 16-alignment, because contracts are
+shapeless on purpose; that stays the producer's refusal, and each document
+records why omitting it is sound for its family.
+
+`tensorfs.convert` reads the recipe back out of the target document
+(`recipe_for`), and `Contract.Recipe()` is the same rule in Go, so a gate that
+answers `DerivableVia` names the job the producer will actually run. Proven end
+to end by `scripts/prove-conversion.sh`: real trees in, real conversion, and
+the verdict taken by the real matcher.

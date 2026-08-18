@@ -69,6 +69,10 @@ pub const BUILTIN: &[(&str, &str)] = &[
         include_str!("../../../spec/v1/contracts/minimax.h3-dit-diffusers.v1.json"),
     ),
     (
+        "minimax.h3-dit-fp8-rowwise.v1.json",
+        include_str!("../../../spec/v1/contracts/minimax.h3-dit-fp8-rowwise.v1.json"),
+    ),
+    (
         "minimax.h3-dit-native.v1.json",
         include_str!("../../../spec/v1/contracts/minimax.h3-dit-native.v1.json"),
     ),
@@ -91,6 +95,10 @@ pub const BUILTIN: &[(&str, &str)] = &[
     (
         "sdxl.diffusers-bf16.v1.json",
         include_str!("../../../spec/v1/contracts/sdxl.diffusers-bf16.v1.json"),
+    ),
+    (
+        "sdxl.diffusers-fp8-rowwise.v1.json",
+        include_str!("../../../spec/v1/contracts/sdxl.diffusers-fp8-rowwise.v1.json"),
     ),
     (
         "wan22.diffusers-bf16.v1.json",

@@ -49,6 +49,9 @@ RUST_PINNED = {
     "sd2.diffusers-bf16@1": (
         "136b158fb5f96cd05f2a8b3accc0b3d36ea7b07b988a338ee4f7934d54a312e6"
     ),
+    "minimax.h3-dit-fp8-rowwise@1": (
+        "69a2cc8f338ba925d4415f67719f1ed1643e9d31f43e4af04d9b2ff1dc035d1f"
+    ),
     "sdxl.clip-g-fused-qkv@1": (
         "364c0c537e54013eab72994a3e6bf0b913cfb76ab1627dc0822b95cf17b1b262"
     ),
@@ -57,6 +60,9 @@ RUST_PINNED = {
     ),
     "sdxl.diffusers-bf16@1": (
         "ef01dd65f57bd95ae05d70f5a9893e9abab6b4f0831b05c4edf68ae9ebb148e8"
+    ),
+    "sdxl.diffusers-fp8-rowwise@1": (
+        "7b78f2e44382dc5a3fe413e0f8f0a62ba63efefc810123304151c2ded931ee37"
     ),
     "wan22.diffusers-bf16@1": (
         "91036beea9878c462311d97a878a5dc94128283182fbf0948b30118852d97bd5"

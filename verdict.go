@@ -51,9 +51,53 @@ const (
 	VerdictIncompatible VerdictKind = "incompatible"
 )
 
+// Recipe names the conversion this contract's bytes are made by, read out of
+// the DOCUMENT and nowhere else (torchcg tcg#53: a quant recipe is a lane
+// contract's property, not a caller's argument or an endpoint's serve-time
+// cast). It is the same rule the producer applies — `tensorfs.convert`'s
+// `recipe_for` — so the job a gate offers is the job the producer will run.
+//
+// Two recipes ship:
+//
+//   - RecipeDtypeCast — every claimed tensor keeps its identity and changes
+//     element type. The output has exactly the input's tensor set.
+//   - RecipeFp8Rowwise — claimed weights become fp8 AND the conversion EMITS
+//     NEW TENSORS: one per-row `weight_scale` per quantized weight. This is why
+//     it cannot be reported as a cast. A caller that enqueued a cast job for an
+//     fp8 lane would get fp8 bytes with no dequant multipliers — the
+//     half-quantized artifact, which loads, runs, and serves wrong numbers.
+func (c *Contract) Recipe() string {
+	fp8 := false
+	scales := false
+	for _, decl := range c.tensors {
+		for _, dtype := range decl.dtypes {
+			if dtype == "F8_E4M3" || dtype == "F8_E5M2" {
+				fp8 = true
+			}
+		}
+		if strings.HasSuffix(decl.pattern.text, ".weight_scale") {
+			scales = true
+		}
+	}
+	if fp8 && scales {
+		return RecipeFp8Rowwise
+	}
+	return RecipeDtypeCast
+}
+
+const (
+	// RecipeDtypeCast changes element types and nothing else.
+	RecipeDtypeCast = "dtype-cast"
+	// RecipeFp8Rowwise quantizes to fp8 and emits a per-row scale per weight.
+	RecipeFp8Rowwise = "fp8-rowwise"
+)
+
 // Conversion names the work that would make a Derivable artifact satisfy.
 type Conversion struct {
-	// Kind is a stable token a caller may switch on. Today: "dtype-cast".
+	// Kind is a stable token a caller may switch on, and it is the RECIPE, not
+	// the observation. It comes from the target contract (see Contract.Recipe),
+	// because the remedy for "these bytes are the wrong element type" depends
+	// on what the target lane's bytes ARE, not on what the source's were.
 	Kind string
 	// From are the dtypes observed, To the dtypes declared.
 	From []string
@@ -172,7 +216,7 @@ func (c *Contract) Verdict(files []ArtifactFile) Verdict {
 	case dtypeFirst != nil:
 		verdict.Kind, verdict.Mismatch, verdict.File = VerdictDerivable, dtypeFirst, dtypeFile
 		verdict.Conversion = &Conversion{
-			Kind: "dtype-cast", From: sortedKeys(fromSet), To: sortedKeys(toSet), Files: castFiles,
+			Kind: c.Recipe(), From: sortedKeys(fromSet), To: sortedKeys(toSet), Files: castFiles,
 		}
 	case verdict.Explained > 0:
 		verdict.Kind = VerdictSatisfies
