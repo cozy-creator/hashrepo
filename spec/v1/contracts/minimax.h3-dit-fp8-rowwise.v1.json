@@ -1,0 +1,186 @@
+{
+  "format": "tensorfs-contract-v1",
+  "name": "minimax.h3-dit-fp8-rowwise",
+  "version": 1,
+  "dtype": "float8_e4m3fn",
+  "description": "MiniMax-H3 DiT served from fp8-rowwise bytes: the minimax.h3-dit-diffusers packaging with every repeated-block Linear stored as F8_E4M3 [out, in] beside a per-row F32 [out] `weight_scale` DEQUANT multiplier. Derived from minimax.h3-dit-diffusers@1 by applying gen-worker's `w8a8_cast_eligible` rule verbatim (rank-2 float `.weight`, both dims 16-aligned, under a `.<int>.` path segment, module path missing every skip pattern): 7 of the 10 declarations convert -- the three that do not are `norm_q`/`norm_k`, caught by the `norm` skip pattern and not rank-2 anyway. The attention weights keep their 56-group fusion, because quantization is elementwise: an fp8 [out, in] weight has the same outer axis, the same 56 head slices and therefore the same seam runs as its bf16 source, so the two packagings still share every attention byte with the native contract. The `weight_scale` twins deliberately do NOT declare that fusion. A per-row scale is rank-1 [out] and divides by 56 the same way, so declaring it would not be wrong -- it would be unfalsifiable decoration: at 56 * 4 bytes per block the run is five orders of magnitude below the 1 MiB seam floor, so it produces no cut points and the declaration could never be contradicted by a header. Declarations that cannot fail are how a contract stops being falsifiable. `input_scale` is absent by design (dynamic activation scales at serve). Each scale mirrors its weight's `required` flag, so the qkv triple's scales are REQUIRED -- an fp8 qkv weight with no scale is a half-quantized artifact and this document refuses it, which is the refusal tcg#53 names as the reason the empty-plan and nothing-matched refusals exist at all. WHAT IS AND IS NOT CONFIRMED, stated because the difference matters to whoever imports this: the STRUCTURE is derived from the producer that writes these bytes (gen_worker/convert/writer.py `streaming_w8a8_cast`) and is proven end to end -- that producer's output, run over an H3-shaped tree, satisfies this document through the real matcher. It has NOT been confirmed against the bytes of the live `tensorhub/minimax-h3 @ serve-narrowed-fp8` artifact (checkpoint sha256:0601b889...), which this author could not reach; if that artifact was produced by a different path (torchao's serve-time per-row cast rather than the streaming producer) its scale leaf could differ, and the failure mode is a LOUD bind refusal naming the tensor, never a silent mismatch. That confirmation is owed and named in tensorfs#128.",
+  "tensors": [
+    {
+      "role": "blocks.{i}.attn.qkv#q",
+      "pattern": "transformer_blocks.{i}.attn.to_q.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2,
+      "fusion": {
+        "axis": 0,
+        "groups": 56,
+        "parts": [
+          {
+            "role": "",
+            "share": 1
+          }
+        ]
+      }
+    },
+    {
+      "role": "blocks.{i}.attn.qkv.scale#q",
+      "pattern": "transformer_blocks.{i}.attn.to_q.weight_scale",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1,
+      "required": true
+    },
+    {
+      "role": "blocks.{i}.attn.qkv#k",
+      "pattern": "transformer_blocks.{i}.attn.to_k.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2,
+      "fusion": {
+        "axis": 0,
+        "groups": 56,
+        "parts": [
+          {
+            "role": "",
+            "share": 1
+          }
+        ]
+      }
+    },
+    {
+      "role": "blocks.{i}.attn.qkv.scale#k",
+      "pattern": "transformer_blocks.{i}.attn.to_k.weight_scale",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1,
+      "required": true
+    },
+    {
+      "role": "blocks.{i}.attn.qkv#v",
+      "pattern": "transformer_blocks.{i}.attn.to_v.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2,
+      "fusion": {
+        "axis": 0,
+        "groups": 56,
+        "parts": [
+          {
+            "role": "",
+            "share": 1
+          }
+        ]
+      }
+    },
+    {
+      "role": "blocks.{i}.attn.qkv.scale#v",
+      "pattern": "transformer_blocks.{i}.attn.to_v.weight_scale",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1,
+      "required": true
+    },
+    {
+      "role": "blocks.{i}.attn.out",
+      "pattern": "transformer_blocks.{i}.attn.to_out.0.weight",
+      "rank": 2,
+      "required": false,
+      "dtypes": [
+        "F8_E4M3"
+      ]
+    },
+    {
+      "role": "blocks.{i}.attn.out.scale",
+      "pattern": "transformer_blocks.{i}.attn.to_out.0.weight_scale",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.attn.q_norm",
+      "pattern": "transformer_blocks.{i}.attn.norm_q.weight",
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.attn.k_norm",
+      "pattern": "transformer_blocks.{i}.attn.norm_k.weight",
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.mlp.fc1",
+      "pattern": "transformer_blocks.{i}.ff.net.0.proj.weight",
+      "rank": 2,
+      "required": false,
+      "dtypes": [
+        "F8_E4M3"
+      ]
+    },
+    {
+      "role": "blocks.{i}.mlp.fc1.scale",
+      "pattern": "transformer_blocks.{i}.ff.net.0.proj.weight_scale",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.mlp.fc2",
+      "pattern": "transformer_blocks.{i}.ff.net.2.weight",
+      "rank": 2,
+      "required": false,
+      "dtypes": [
+        "F8_E4M3"
+      ]
+    },
+    {
+      "role": "blocks.{i}.mlp.fc2.scale",
+      "pattern": "transformer_blocks.{i}.ff.net.2.weight_scale",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.adaln.weight",
+      "pattern": "transformer_blocks.{i}.adaln_proj.linear.weight",
+      "rank": 2,
+      "required": false,
+      "dtypes": [
+        "F8_E4M3"
+      ]
+    },
+    {
+      "role": "blocks.{i}.adaln.weight.scale",
+      "pattern": "transformer_blocks.{i}.adaln_proj.linear.weight_scale",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.adaln.bias",
+      "pattern": "transformer_blocks.{i}.adaln_proj.linear.bias",
+      "rank": 1,
+      "required": false
+    }
+  ],
+  "sets": {
+    "adaln_projections": [
+      "transformer_blocks.{i}.adaln_proj.linear.weight",
+      "transformer_blocks.{i}.adaln_proj.linear.bias",
+      "norm_out.linear.weight",
+      "norm_out.linear.bias"
+    ]
+  }
+}

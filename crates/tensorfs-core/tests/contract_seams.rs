@@ -706,6 +706,10 @@ fn the_shipped_library_is_pinned_by_digest() {
             "22bbb607d3e4351c18ac55e8d86c8a8a3d03296309b80e4419d4bc5153481f28",
         ),
         (
+            "minimax.h3-dit-fp8-rowwise@1",
+            "69a2cc8f338ba925d4415f67719f1ed1643e9d31f43e4af04d9b2ff1dc035d1f",
+        ),
+        (
             "minimax.h3-dit-native@1",
             "5f6b7b4a8cd070653607840b922c213a846838e35379737727111c4b0a8de56c",
         ),
@@ -728,6 +732,10 @@ fn the_shipped_library_is_pinned_by_digest() {
         (
             "sdxl.diffusers-bf16@1",
             "ef01dd65f57bd95ae05d70f5a9893e9abab6b4f0831b05c4edf68ae9ebb148e8",
+        ),
+        (
+            "sdxl.diffusers-fp8-rowwise@1",
+            "7b78f2e44382dc5a3fe413e0f8f0a62ba63efefc810123304151c2ded931ee37",
         ),
         (
             "wan22.diffusers-bf16@1",
