@@ -1359,6 +1359,56 @@ fn plan_under<S: planner::ByteSource + ?Sized>(
     planner::plan_with(source, registry.get(&stamp)).map_err(plan_error)
 }
 
+/// One validated contract document's identity and read-side fields, exactly
+/// as the Rust parser sees them. This is the validation gate behind
+/// `tensorfs.Contract`: construction serializes to a v1 document and runs THE
+/// validator, so a malformed contract refuses at author-module import time
+/// with the Rust message, never at deploy.
+#[pyclass(frozen, get_all, module = "tensorfs._tensorfs", name = "ContractInfo")]
+pub struct PyContractInfo {
+    /// The library name, or `None` for an anonymous custom.
+    name: Option<String>,
+    version: Option<u32>,
+    description: String,
+    /// The optional top-level load dtype, torch spelling.
+    dtype: Option<String>,
+    /// Bare lowercase hex SHA-256 of the canonical rendering.
+    digest: String,
+    /// `name@version` for library documents, `sha256:<hex>` for customs.
+    stamp: String,
+}
+
+#[pymethods]
+impl PyContractInfo {
+    fn __repr__(&self) -> String {
+        format!("ContractInfo(stamp='{}')", self.stamp)
+    }
+}
+
+/// Parses and validates one contract document, returning its identity.
+#[pyfunction]
+fn contract_info(document: &str) -> PyResult<PyContractInfo> {
+    let parsed = contract::Contract::parse(document).map_err(contract_error)?;
+    Ok(PyContractInfo {
+        name: parsed.name().map(str::to_owned),
+        version: (parsed.version() > 0).then_some(parsed.version()),
+        description: parsed.description().to_owned(),
+        dtype: parsed.dtype().map(str::to_owned),
+        digest: hex_of(&parsed.digest()),
+        stamp: parsed.stamp().to_string(),
+    })
+}
+
+/// A contract argument: a plain string, or a `tensorfs.Contract`-shaped
+/// object carrying the wanted text as an attribute (`document` where a full
+/// document travels, `stamp` where only the identity does).
+fn text_or_attr(any: &Bound<'_, PyAny>, attribute: &str) -> PyResult<String> {
+    if let Ok(text) = any.extract::<String>() {
+        return Ok(text);
+    }
+    any.getattr(attribute)?.extract::<String>()
+}
+
 /// A set of layout contracts a file may be identified against.
 ///
 /// Contracts are DATA: JSON documents (`spec/v1/contracts/`), not code. The
@@ -1371,14 +1421,16 @@ pub struct PyRegistry {
 
 #[pymethods]
 impl PyRegistry {
-    /// Builds a registry from contract documents.
+    /// Builds a registry from contract documents: JSON strings or
+    /// `tensorfs.Contract` objects (anything carrying `.document`).
     #[new]
     #[pyo3(signature = (documents = Vec::new()))]
-    fn new(documents: Vec<String>) -> PyResult<Self> {
+    fn new(documents: Vec<Bound<'_, PyAny>>) -> PyResult<Self> {
         let mut inner = contract::Registry::new();
-        for document in &documents {
+        for entry in &documents {
+            let document = text_or_attr(entry, "document")?;
             inner
-                .insert(contract::Contract::parse(document).map_err(contract_error)?)
+                .insert(contract::Contract::parse(&document).map_err(contract_error)?)
                 .map_err(contract_error)?;
         }
         Ok(Self { inner })
@@ -1462,7 +1514,7 @@ fn rekey(
     planner: &str,
     records: Vec<PyFileRecord>,
     names: BTreeMap<String, String>,
-    contract: Option<&str>,
+    contract: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Vec<PyFileRecord>> {
     compose_records(
         py,
@@ -1488,7 +1540,7 @@ fn subset(
     planner: &str,
     records: Vec<PyFileRecord>,
     names: BTreeMap<String, String>,
-    contract: Option<&str>,
+    contract: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Vec<PyFileRecord>> {
     compose_records(
         py,
@@ -1513,8 +1565,8 @@ fn derive(
     store: &PyObjectStore,
     planner: &str,
     records: Vec<PyFileRecord>,
-    source_contract: &str,
-    target_contract: &str,
+    source_contract: &Bound<'_, PyAny>,
+    target_contract: &Bound<'_, PyAny>,
 ) -> PyResult<(Vec<PyFileRecord>, String)> {
     let format = parse_planner(planner)?
         .tensor_format()
@@ -1523,8 +1575,10 @@ fn derive(
         .iter()
         .map(PyFileRecord::to_core)
         .collect::<PyResult<Vec<_>>>()?;
-    let source = contract::Contract::parse(source_contract).map_err(contract_error)?;
-    let target = contract::Contract::parse(target_contract).map_err(contract_error)?;
+    let source_document = text_or_attr(source_contract, "document")?;
+    let target_document = text_or_attr(target_contract, "document")?;
+    let source = contract::Contract::parse(&source_document).map_err(contract_error)?;
+    let target = contract::Contract::parse(&target_document).map_err(contract_error)?;
     let body = tfm1::FileBody::Tensor {
         format,
         contract: source.stamp(),
@@ -1617,7 +1671,7 @@ fn compose_records(
     planner: &str,
     records: Vec<PyFileRecord>,
     names: &BTreeMap<String, String>,
-    contract: Option<&str>,
+    contract: Option<&Bound<'_, PyAny>>,
     composition: Composition,
 ) -> PyResult<Vec<PyFileRecord>> {
     let format = parse_planner(planner)?
@@ -1629,7 +1683,11 @@ fn compose_records(
         .collect::<PyResult<Vec<_>>>()?;
     let contract = match contract {
         None => contract::Stamp::None,
-        Some(text) => contract::Stamp::parse(text).map_err(contract_error)?,
+        // A stamp string, or a Contract object whose `.stamp` spells one.
+        Some(any) => {
+            let text = text_or_attr(any, "stamp")?;
+            contract::Stamp::parse(&text).map_err(contract_error)?
+        }
     };
     let body = tfm1::FileBody::Tensor {
         format,
@@ -1676,6 +1734,7 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyObjectStore>()?;
     module.add_class::<PyRecordsReader>()?;
     module.add_class::<PyRegistry>()?;
+    module.add_class::<PyContractInfo>()?;
 
     module.add_function(wrap_pyfunction!(decode_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(stub_bytes, module)?)?;
@@ -1688,6 +1747,7 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(plan_file, module)?)?;
     module.add_function(wrap_pyfunction!(plan_and_hash_file, module)?)?;
     module.add_function(wrap_pyfunction!(ingest_concurrency, module)?)?;
+    module.add_function(wrap_pyfunction!(contract_info, module)?)?;
     module.add_function(wrap_pyfunction!(rekey, module)?)?;
     module.add_function(wrap_pyfunction!(subset, module)?)?;
     module.add_function(wrap_pyfunction!(adopt, module)?)?;

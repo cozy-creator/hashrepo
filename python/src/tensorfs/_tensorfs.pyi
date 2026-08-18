@@ -13,7 +13,19 @@ wherever a digest is taken and is never returned.
 from collections.abc import Mapping, Sequence
 from os import PathLike
 from pathlib import Path
-from typing import Final
+from typing import Final, Protocol
+
+class _CarriesDocument(Protocol):
+    """Anything carrying a full contract document -- `tensorfs.Contract`."""
+
+    @property
+    def document(self) -> str: ...
+
+class _CarriesStamp(Protocol):
+    """Anything carrying a contract stamp -- `tensorfs.Contract`."""
+
+    @property
+    def stamp(self) -> str: ...
 
 __version__: Final[str]
 
@@ -177,8 +189,22 @@ class ObjectStore:
     def read_ref(self, name: str) -> str | None: ...
     def remove_ref(self, name: str) -> bool: ...
 
+class ContractInfo:
+    @property
+    def name(self) -> str | None: ...
+    @property
+    def version(self) -> int | None: ...
+    @property
+    def description(self) -> str: ...
+    @property
+    def dtype(self) -> str | None: ...
+    @property
+    def digest(self) -> str: ...
+    @property
+    def stamp(self) -> str: ...
+
 class ContractRegistry:
-    def __init__(self, documents: Sequence[str] = ()) -> None: ...
+    def __init__(self, documents: Sequence[str | _CarriesDocument] = ()) -> None: ...
     @staticmethod
     def builtin() -> ContractRegistry: ...
     def stamps(self) -> list[str]: ...
@@ -198,14 +224,14 @@ def rekey(
     planner: str,
     records: Sequence[FileRecord],
     names: Mapping[str, str],
-    contract: str | None = None,
+    contract: str | _CarriesStamp | None = None,
 ) -> list[FileRecord]: ...
 def subset(
     store: ObjectStore,
     planner: str,
     records: Sequence[FileRecord],
     names: Mapping[str, str],
-    contract: str | None = None,
+    contract: str | _CarriesStamp | None = None,
 ) -> list[FileRecord]: ...
 def adopt(
     store: ObjectStore,
@@ -217,8 +243,8 @@ def derive(
     store: ObjectStore,
     planner: str,
     records: Sequence[FileRecord],
-    source_contract: str,
-    target_contract: str,
+    source_contract: str | _CarriesDocument,
+    target_contract: str | _CarriesDocument,
 ) -> tuple[list[FileRecord], str]: ...
 def stub_bytes(body_sha256: str, size: int) -> bytes: ...
 def parse_stub(data: bytes) -> tuple[str, int] | None: ...
@@ -234,3 +260,4 @@ def plan_and_hash_file(
     path: str | PathLike[str], registry: ContractRegistry | None = None
 ) -> HashedPlan: ...
 def ingest_concurrency() -> int: ...
+def contract_info(document: str) -> ContractInfo: ...
