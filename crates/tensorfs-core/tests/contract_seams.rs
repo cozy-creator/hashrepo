@@ -723,7 +723,7 @@ fn the_shipped_library_is_pinned_by_digest() {
         ),
         (
             "sdxl.diffusers-bf16@1",
-            "f1455f56321d1f268772912c223170f015564ac164064d6d8f77007b03bd35df",
+            "ef01dd65f57bd95ae05d70f5a9893e9abab6b4f0831b05c4edf68ae9ebb148e8",
         ),
         (
             "wan22.diffusers-bf16@1",

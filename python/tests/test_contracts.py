@@ -53,7 +53,7 @@ RUST_PINNED = {
         "c1bbfc65a89a736154504f68296b2b8be3dc43364d4dc04a192c08a184bf64fa"
     ),
     "sdxl.diffusers-bf16@1": (
-        "f1455f56321d1f268772912c223170f015564ac164064d6d8f77007b03bd35df"
+        "ef01dd65f57bd95ae05d70f5a9893e9abab6b4f0831b05c4edf68ae9ebb148e8"
     ),
     "wan22.diffusers-bf16@1": (
         "91036beea9878c462311d97a878a5dc94128283182fbf0948b30118852d97bd5"
