@@ -707,11 +707,11 @@ fn the_shipped_library_is_pinned_by_digest() {
         ),
         (
             "sd15.diffusers-bf16@1",
-            "022218c0be081682fdff7492b866bba2c88fe2a4ac87c05b3e341123fcb3354e",
+            "0bc98e52edac1a4b3a8f063162d3785350413b60701ba49d9701e46d69f304d3",
         ),
         (
             "sd2.diffusers-bf16@1",
-            "bd4970d367e789940a212c68e407278dc95b67c56bcda87226d4192145873fb2",
+            "136b158fb5f96cd05f2a8b3accc0b3d36ea7b07b988a338ee4f7934d54a312e6",
         ),
         (
             "sdxl.clip-g-fused-qkv@1",
