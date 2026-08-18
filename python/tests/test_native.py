@@ -91,7 +91,11 @@ def test_stub_matches_the_extension() -> None:
         for line in stub.read_text(encoding="utf-8").splitlines()
         if line and not line.startswith((" ", "\t", "#", '"')) and ": Final" in line
     }
-    missing = sorted(name for name in promised if not hasattr(_tensorfs, name))
+    # Underscore-prefixed names are stub-local typing helpers (Protocols for
+    # the `str | Contract` unions), deliberately absent from the module.
+    missing = sorted(
+        name for name in promised if not name.startswith("_") and not hasattr(_tensorfs, name)
+    )
     assert not missing, f"the stub promises names the extension does not have: {missing}"
 
 

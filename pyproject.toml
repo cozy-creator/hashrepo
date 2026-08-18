@@ -66,6 +66,7 @@ strip = true
 # The daemon is shelved on the `shelf/tensorfsd` branch (tag
 # `shelf/tensorfsd-split`).
 include = [
+    { path = "python/src/tensorfs/_contracts/*.json", format = "wheel" },
     { path = "Cargo.toml", format = "sdist" },
     { path = "Cargo.lock", format = "sdist" },
     { path = "crates/**/*", format = "sdist" },
