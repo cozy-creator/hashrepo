@@ -8,6 +8,12 @@
       "stamp": "dit.blocks-fused-qkv@1"
     },
     {
+      "name": "hidream-o1.diffusers-bf16.v1",
+      "file": "contracts/hidream-o1.diffusers-bf16.v1.json",
+      "digest": "69003d11e2cb3b52628cb05e02c275916db74e318eabbce2f6e89be625c7e01f",
+      "stamp": "hidream-o1.diffusers-bf16@1"
+    },
+    {
       "name": "minimax.h3-dit-diffusers.v1",
       "file": "contracts/minimax.h3-dit-diffusers.v1.json",
       "digest": "22bbb607d3e4351c18ac55e8d86c8a8a3d03296309b80e4419d4bc5153481f28",
@@ -18,6 +24,18 @@
       "file": "contracts/minimax.h3-dit-native.v1.json",
       "digest": "5f6b7b4a8cd070653607840b922c213a846838e35379737727111c4b0a8de56c",
       "stamp": "minimax.h3-dit-native@1"
+    },
+    {
+      "name": "sd15.diffusers-bf16.v1",
+      "file": "contracts/sd15.diffusers-bf16.v1.json",
+      "digest": "022218c0be081682fdff7492b866bba2c88fe2a4ac87c05b3e341123fcb3354e",
+      "stamp": "sd15.diffusers-bf16@1"
+    },
+    {
+      "name": "sd2.diffusers-bf16.v1",
+      "file": "contracts/sd2.diffusers-bf16.v1.json",
+      "digest": "bd4970d367e789940a212c68e407278dc95b67c56bcda87226d4192145873fb2",
+      "stamp": "sd2.diffusers-bf16@1"
     },
     {
       "name": "sdxl.clip-g-fused-qkv.v1",
@@ -38,16 +56,22 @@
       "stamp": "sdxl.diffusers-bf16@1"
     },
     {
-      "name": "custom-rich",
-      "document": "{\n    \"format\": \"tensorfs-contract-v1\",\n    \"description\": \"vector fixture: every declaration branch\",\n    \"dtype\": \"bfloat16\",\n    \"tensors\": [\n        {\"role\": \"blocks.{i}.attn.qkv\", \"pattern\": \"blocks.{i}.attn.qkv_proj.weight\",\n         \"rank\": 2, \"dtypes\": [\"BF16\", \"F16\"],\n         \"fusion\": {\"axis\": 0, \"parts\": [{\"role\": \"q\", \"share\": 2}, {\"role\": \"k\", \"share\": 1},\n                                         {\"role\": \"v\", \"share\": 1}]}},\n        {\"role\": \"blocks.{i}.rope\", \"pattern\": \"blocks.{i}.rope.weight\", \"required\": false,\n         \"permute\": {\"view\": [4, \"shape[0]/2\", \"auto\", \"shape[1]\"], \"axes\": [0, 2, 1, 3]}}\n    ],\n    \"sets\": {\"adaln\": [\"blocks.{i}.adaln.weight\", \"norm_out.weight\"], \"rope\": [\"blocks.{i}.rope.weight\"]}\n}",
-      "digest": "840107df52fe82b735067c3649b14cde234235ac28792be6f915c357fc786a0f",
-      "stamp": "sha256:840107df52fe82b735067c3649b14cde234235ac28792be6f915c357fc786a0f"
+      "name": "wan22.diffusers-bf16.v1",
+      "file": "contracts/wan22.diffusers-bf16.v1.json",
+      "digest": "91036beea9878c462311d97a878a5dc94128283182fbf0948b30118852d97bd5",
+      "stamp": "wan22.diffusers-bf16@1"
     },
     {
       "name": "custom-interleaved",
       "document": "{\n    \"format\": \"tensorfs-contract-v1\",\n    \"tensors\": [\n        {\"role\": \"b.{i}.qkv\", \"pattern\": \"b.{i}.qkv.weight\", \"rank\": 2,\n         \"fusion\": {\"axis\": 0, \"groups\": 56,\n                    \"parts\": [{\"role\": \"q\", \"share\": 1}, {\"role\": \"k\", \"share\": 1},\n                              {\"role\": \"v\", \"share\": 1}]}},\n        {\"role\": \"b.{i}.qkv#q\", \"pattern\": \"b.{i}.q.weight\", \"rank\": 2, \"required\": false,\n         \"fusion\": {\"axis\": 0, \"groups\": 56, \"parts\": [{\"role\": \"\", \"share\": 1}]}}\n    ]\n}",
       "digest": "d57b11915fe4e389472da10707d7307bf03636d522b12887f39c7efbf1abe9b1",
       "stamp": "sha256:d57b11915fe4e389472da10707d7307bf03636d522b12887f39c7efbf1abe9b1"
+    },
+    {
+      "name": "custom-rich",
+      "document": "{\n    \"format\": \"tensorfs-contract-v1\",\n    \"description\": \"vector fixture: every declaration branch\",\n    \"dtype\": \"bfloat16\",\n    \"tensors\": [\n        {\"role\": \"blocks.{i}.attn.qkv\", \"pattern\": \"blocks.{i}.attn.qkv_proj.weight\",\n         \"rank\": 2, \"dtypes\": [\"BF16\", \"F16\"],\n         \"fusion\": {\"axis\": 0, \"parts\": [{\"role\": \"q\", \"share\": 2}, {\"role\": \"k\", \"share\": 1},\n                                         {\"role\": \"v\", \"share\": 1}]}},\n        {\"role\": \"blocks.{i}.rope\", \"pattern\": \"blocks.{i}.rope.weight\", \"required\": false,\n         \"permute\": {\"view\": [4, \"shape[0]/2\", \"auto\", \"shape[1]\"], \"axes\": [0, 2, 1, 3]}}\n    ],\n    \"sets\": {\"adaln\": [\"blocks.{i}.adaln.weight\", \"norm_out.weight\"], \"rope\": [\"blocks.{i}.rope.weight\"]}\n}",
+      "digest": "840107df52fe82b735067c3649b14cde234235ac28792be6f915c357fc786a0f",
+      "stamp": "sha256:840107df52fe82b735067c3649b14cde234235ac28792be6f915c357fc786a0f"
     }
   ],
   "refusals": [

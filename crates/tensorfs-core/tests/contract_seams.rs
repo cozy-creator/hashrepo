@@ -694,12 +694,24 @@ fn the_shipped_library_is_pinned_by_digest() {
             "57f09073ca1a631bb173293c84e11f462089d0fa8cf9ce45e142fc33881a17a1",
         ),
         (
+            "hidream-o1.diffusers-bf16@1",
+            "69003d11e2cb3b52628cb05e02c275916db74e318eabbce2f6e89be625c7e01f",
+        ),
+        (
             "minimax.h3-dit-diffusers@1",
             "22bbb607d3e4351c18ac55e8d86c8a8a3d03296309b80e4419d4bc5153481f28",
         ),
         (
             "minimax.h3-dit-native@1",
             "5f6b7b4a8cd070653607840b922c213a846838e35379737727111c4b0a8de56c",
+        ),
+        (
+            "sd15.diffusers-bf16@1",
+            "022218c0be081682fdff7492b866bba2c88fe2a4ac87c05b3e341123fcb3354e",
+        ),
+        (
+            "sd2.diffusers-bf16@1",
+            "bd4970d367e789940a212c68e407278dc95b67c56bcda87226d4192145873fb2",
         ),
         (
             "sdxl.clip-g-fused-qkv@1",
@@ -712,6 +724,10 @@ fn the_shipped_library_is_pinned_by_digest() {
         (
             "sdxl.diffusers-bf16@1",
             "f1455f56321d1f268772912c223170f015564ac164064d6d8f77007b03bd35df",
+        ),
+        (
+            "wan22.diffusers-bf16@1",
+            "91036beea9878c462311d97a878a5dc94128283182fbf0948b30118852d97bd5",
         ),
     ]);
     let registry = Registry::builtin().expect("the shipped contracts parse");

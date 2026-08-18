@@ -57,12 +57,24 @@ pub const BUILTIN: &[(&str, &str)] = &[
         include_str!("../../../spec/v1/contracts/dit.blocks-fused-qkv.v1.json"),
     ),
     (
+        "hidream-o1.diffusers-bf16.v1.json",
+        include_str!("../../../spec/v1/contracts/hidream-o1.diffusers-bf16.v1.json"),
+    ),
+    (
         "minimax.h3-dit-diffusers.v1.json",
         include_str!("../../../spec/v1/contracts/minimax.h3-dit-diffusers.v1.json"),
     ),
     (
         "minimax.h3-dit-native.v1.json",
         include_str!("../../../spec/v1/contracts/minimax.h3-dit-native.v1.json"),
+    ),
+    (
+        "sd15.diffusers-bf16.v1.json",
+        include_str!("../../../spec/v1/contracts/sd15.diffusers-bf16.v1.json"),
+    ),
+    (
+        "sd2.diffusers-bf16.v1.json",
+        include_str!("../../../spec/v1/contracts/sd2.diffusers-bf16.v1.json"),
     ),
     (
         "sdxl.clip-g-fused-qkv.v1.json",
@@ -75,6 +87,10 @@ pub const BUILTIN: &[(&str, &str)] = &[
     (
         "sdxl.diffusers-bf16.v1.json",
         include_str!("../../../spec/v1/contracts/sdxl.diffusers-bf16.v1.json"),
+    ),
+    (
+        "wan22.diffusers-bf16.v1.json",
+        include_str!("../../../spec/v1/contracts/wan22.diffusers-bf16.v1.json"),
     ),
 ];
 
@@ -293,10 +309,17 @@ pub fn is_contract_name(name: &str) -> bool {
     let Some((producer, format)) = name.split_once('.') else {
         return false;
     };
+    // The producer segment carries a hyphen because gen-worker's model-type
+    // vocabulary does: `hidream-o1`, `flux-2`, `wan-2`. A grammar that cannot
+    // spell the producer names the platform already uses is the grammar that
+    // is wrong. Leading hyphen still refuses.
     if producer.is_empty()
-        || !producer
-            .chars()
-            .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+        || !producer.starts_with(|character: char| {
+            character.is_ascii_lowercase() || character.is_ascii_digit()
+        })
+        || !producer.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
     {
         return false;
     }

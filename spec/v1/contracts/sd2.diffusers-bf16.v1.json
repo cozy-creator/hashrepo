@@ -1,0 +1,1872 @@
+{
+  "format": "tensorfs-contract-v1",
+  "name": "sd2.diffusers-bf16",
+  "version": 1,
+  "dtype": "bfloat16",
+  "description": "The canonical Stable Diffusion 2.x / SD-Turbo serve layout: the diffusers multifolder packaging (unet / vae / text_encoder), all-bf16. Derived from the real safetensors headers of stabilityai/sd-turbo, which is what the sd15 endpoint's generate_turbo actually serves. SD2.x is its OWN document, not a spelling of sd15.diffusers-bf16: the diffusers unet key SET is identical (686 keys, zero either side only) and cross_attention_dim 1024-vs-768 is invisible to a contract, but use_linear_projection=true makes every unet.*.attentions.{i}.proj_{in,out}.weight a Linear (rank 2) where SD1.x has a 1x1 Conv2d (rank 4), and a claimed tensor whose rank disagrees is a refusal. The VAE mid-block attention uses the modern to_q/to_k/to_v/to_out.0 spelling. The text encoder is OpenCLIP ViT-H/14 exported in the CLIPTextModel spelling, so its patterns are byte-identical to SD1.x's - 23 layers rather than 12, same names - which is why the text encoder is NOT the discriminator. Top-level dtype is the serve-side load dtype (ctx.lane.dtype); the per-tensor dtypes are the matcher's constraint that this really is the bf16 packaging.",
+  "tensors": [
+    {
+      "role": "unet.conv_in.bias",
+      "pattern": "conv_in.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.conv_in.weight",
+      "pattern": "conv_in.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "unet.conv_norm_out.bias",
+      "pattern": "conv_norm_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.conv_norm_out.weight",
+      "pattern": "conv_norm_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.conv_out.bias",
+      "pattern": "conv_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.conv_out.weight",
+      "pattern": "conv_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.norm.bias",
+      "pattern": "down_blocks.{i}.attentions.{i}.norm.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.norm.weight",
+      "pattern": "down_blocks.{i}.attentions.{i}.norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.proj_in.bias",
+      "pattern": "down_blocks.{i}.attentions.{i}.proj_in.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.proj_in.weight",
+      "pattern": "down_blocks.{i}.attentions.{i}.proj_in.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.proj_out.bias",
+      "pattern": "down_blocks.{i}.attentions.{i}.proj_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.proj_out.weight",
+      "pattern": "down_blocks.{i}.attentions.{i}.proj_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.a{i}.k.weight",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.attn{i}.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.a{i}.out.{i}.bias",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.attn{i}.to_out.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.a{i}.out.{i}.weight",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.attn{i}.to_out.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.a{i}.q.weight",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.attn{i}.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.a{i}.v.weight",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.attn{i}.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.ff{i}.bias",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.ff.net.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.ff{i}.proj.bias",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.ff.net.{i}.proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.ff{i}.proj.weight",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.ff.net.{i}.proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.ff{i}.weight",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.ff.net.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.norm1.bias",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.norm1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.norm1.weight",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.norm1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.norm2.bias",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.norm2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.norm2.weight",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.norm2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.norm3.bias",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.norm3.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.attn.{i}.tb.{i}.norm3.weight",
+      "pattern": "down_blocks.{i}.attentions.{i}.transformer_blocks.{i}.norm3.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.ds.{i}.conv.bias",
+      "pattern": "down_blocks.{i}.downsamplers.{i}.conv.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.ds.{i}.conv.weight",
+      "pattern": "down_blocks.{i}.downsamplers.{i}.conv.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.res.{i}.conv1.bias",
+      "pattern": "down_blocks.{i}.resnets.{i}.conv1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.res.{i}.conv1.weight",
+      "pattern": "down_blocks.{i}.resnets.{i}.conv1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.res.{i}.conv2.bias",
+      "pattern": "down_blocks.{i}.resnets.{i}.conv2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.res.{i}.conv2.weight",
+      "pattern": "down_blocks.{i}.resnets.{i}.conv2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.res.{i}.conv_shortcut.bias",
+      "pattern": "down_blocks.{i}.resnets.{i}.conv_shortcut.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.res.{i}.conv_shortcut.weight",
+      "pattern": "down_blocks.{i}.resnets.{i}.conv_shortcut.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.res.{i}.norm1.bias",
+      "pattern": "down_blocks.{i}.resnets.{i}.norm1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.res.{i}.norm1.weight",
+      "pattern": "down_blocks.{i}.resnets.{i}.norm1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.res.{i}.norm2.bias",
+      "pattern": "down_blocks.{i}.resnets.{i}.norm2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.res.{i}.norm2.weight",
+      "pattern": "down_blocks.{i}.resnets.{i}.norm2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.res.{i}.temb.bias",
+      "pattern": "down_blocks.{i}.resnets.{i}.time_emb_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.down.{i}.res.{i}.temb.weight",
+      "pattern": "down_blocks.{i}.resnets.{i}.time_emb_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.norm.bias",
+      "pattern": "mid_block.attentions.{i}.norm.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.norm.weight",
+      "pattern": "mid_block.attentions.{i}.norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.proj_in.bias",
+      "pattern": "mid_block.attentions.{i}.proj_in.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.proj_in.weight",
+      "pattern": "mid_block.attentions.{i}.proj_in.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.proj_out.bias",
+      "pattern": "mid_block.attentions.{i}.proj_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.proj_out.weight",
+      "pattern": "mid_block.attentions.{i}.proj_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.a{i}.k.weight",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.attn{i}.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.a{i}.out.{i}.bias",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.attn{i}.to_out.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.a{i}.out.{i}.weight",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.attn{i}.to_out.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.a{i}.q.weight",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.attn{i}.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.a{i}.v.weight",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.attn{i}.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.ff{i}.bias",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.ff.net.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.ff{i}.proj.bias",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.ff.net.{i}.proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.ff{i}.proj.weight",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.ff.net.{i}.proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.ff{i}.weight",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.ff.net.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.norm1.bias",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.norm1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.norm1.weight",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.norm1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.norm2.bias",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.norm2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.norm2.weight",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.norm2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.norm3.bias",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.norm3.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.attn.{i}.tb.{i}.norm3.weight",
+      "pattern": "mid_block.attentions.{i}.transformer_blocks.{i}.norm3.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.res.{i}.conv1.bias",
+      "pattern": "mid_block.resnets.{i}.conv1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.res.{i}.conv1.weight",
+      "pattern": "mid_block.resnets.{i}.conv1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "unet.mid.res.{i}.conv2.bias",
+      "pattern": "mid_block.resnets.{i}.conv2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.res.{i}.conv2.weight",
+      "pattern": "mid_block.resnets.{i}.conv2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "unet.mid.res.{i}.norm1.bias",
+      "pattern": "mid_block.resnets.{i}.norm1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.res.{i}.norm1.weight",
+      "pattern": "mid_block.resnets.{i}.norm1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.res.{i}.norm2.bias",
+      "pattern": "mid_block.resnets.{i}.norm2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.res.{i}.norm2.weight",
+      "pattern": "mid_block.resnets.{i}.norm2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.res.{i}.temb.bias",
+      "pattern": "mid_block.resnets.{i}.time_emb_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.mid.res.{i}.temb.weight",
+      "pattern": "mid_block.resnets.{i}.time_emb_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.time_embedding.fc1.bias",
+      "pattern": "time_embedding.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.time_embedding.fc1.weight",
+      "pattern": "time_embedding.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.time_embedding.fc2.bias",
+      "pattern": "time_embedding.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.time_embedding.fc2.weight",
+      "pattern": "time_embedding.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.norm.bias",
+      "pattern": "up_blocks.{i}.attentions.{i}.norm.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.norm.weight",
+      "pattern": "up_blocks.{i}.attentions.{i}.norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.proj_in.bias",
+      "pattern": "up_blocks.{i}.attentions.{i}.proj_in.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.proj_in.weight",
+      "pattern": "up_blocks.{i}.attentions.{i}.proj_in.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.proj_out.bias",
+      "pattern": "up_blocks.{i}.attentions.{i}.proj_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.proj_out.weight",
+      "pattern": "up_blocks.{i}.attentions.{i}.proj_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.a{i}.k.weight",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.attn{i}.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.a{i}.out.{i}.bias",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.attn{i}.to_out.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.a{i}.out.{i}.weight",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.attn{i}.to_out.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.a{i}.q.weight",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.attn{i}.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.a{i}.v.weight",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.attn{i}.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.ff{i}.bias",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.ff.net.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.ff{i}.proj.bias",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.ff.net.{i}.proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.ff{i}.proj.weight",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.ff.net.{i}.proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.ff{i}.weight",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.ff.net.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.norm1.bias",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.norm1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.norm1.weight",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.norm1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.norm2.bias",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.norm2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.norm2.weight",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.norm2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.norm3.bias",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.norm3.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.attn.{i}.tb.{i}.norm3.weight",
+      "pattern": "up_blocks.{i}.attentions.{i}.transformer_blocks.{i}.norm3.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.res.{i}.conv1.bias",
+      "pattern": "up_blocks.{i}.resnets.{i}.conv1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.res.{i}.conv1.weight",
+      "pattern": "up_blocks.{i}.resnets.{i}.conv1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.res.{i}.conv2.bias",
+      "pattern": "up_blocks.{i}.resnets.{i}.conv2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.res.{i}.conv2.weight",
+      "pattern": "up_blocks.{i}.resnets.{i}.conv2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.res.{i}.conv_shortcut.bias",
+      "pattern": "up_blocks.{i}.resnets.{i}.conv_shortcut.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.res.{i}.conv_shortcut.weight",
+      "pattern": "up_blocks.{i}.resnets.{i}.conv_shortcut.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.res.{i}.norm1.bias",
+      "pattern": "up_blocks.{i}.resnets.{i}.norm1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.res.{i}.norm1.weight",
+      "pattern": "up_blocks.{i}.resnets.{i}.norm1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.res.{i}.norm2.bias",
+      "pattern": "up_blocks.{i}.resnets.{i}.norm2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.res.{i}.norm2.weight",
+      "pattern": "up_blocks.{i}.resnets.{i}.norm2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.res.{i}.temb.bias",
+      "pattern": "up_blocks.{i}.resnets.{i}.time_emb_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.res.{i}.temb.weight",
+      "pattern": "up_blocks.{i}.resnets.{i}.time_emb_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.us.{i}.conv.bias",
+      "pattern": "up_blocks.{i}.upsamplers.{i}.conv.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "unet.up.{i}.us.{i}.conv.weight",
+      "pattern": "up_blocks.{i}.upsamplers.{i}.conv.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.conv_in.bias",
+      "pattern": "decoder.conv_in.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.conv_in.weight",
+      "pattern": "decoder.conv_in.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.conv_norm_out.bias",
+      "pattern": "decoder.conv_norm_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.conv_norm_out.weight",
+      "pattern": "decoder.conv_norm_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.conv_out.bias",
+      "pattern": "decoder.conv_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.conv_out.weight",
+      "pattern": "decoder.conv_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.attn.{i}.group_norm.bias",
+      "pattern": "decoder.mid_block.attentions.{i}.group_norm.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.attn.{i}.group_norm.weight",
+      "pattern": "decoder.mid_block.attentions.{i}.group_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.attn.{i}.k.bias",
+      "pattern": "decoder.mid_block.attentions.{i}.to_k.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.attn.{i}.k.weight",
+      "pattern": "decoder.mid_block.attentions.{i}.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.attn.{i}.out.{i}.bias",
+      "pattern": "decoder.mid_block.attentions.{i}.to_out.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.attn.{i}.out.{i}.weight",
+      "pattern": "decoder.mid_block.attentions.{i}.to_out.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.attn.{i}.q.bias",
+      "pattern": "decoder.mid_block.attentions.{i}.to_q.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.attn.{i}.q.weight",
+      "pattern": "decoder.mid_block.attentions.{i}.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.attn.{i}.v.bias",
+      "pattern": "decoder.mid_block.attentions.{i}.to_v.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.attn.{i}.v.weight",
+      "pattern": "decoder.mid_block.attentions.{i}.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.res.{i}.conv1.bias",
+      "pattern": "decoder.mid_block.resnets.{i}.conv1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.res.{i}.conv1.weight",
+      "pattern": "decoder.mid_block.resnets.{i}.conv1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.res.{i}.conv2.bias",
+      "pattern": "decoder.mid_block.resnets.{i}.conv2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.res.{i}.conv2.weight",
+      "pattern": "decoder.mid_block.resnets.{i}.conv2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.res.{i}.norm1.bias",
+      "pattern": "decoder.mid_block.resnets.{i}.norm1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.res.{i}.norm1.weight",
+      "pattern": "decoder.mid_block.resnets.{i}.norm1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.res.{i}.norm2.bias",
+      "pattern": "decoder.mid_block.resnets.{i}.norm2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.mid.res.{i}.norm2.weight",
+      "pattern": "decoder.mid_block.resnets.{i}.norm2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.up.{i}.res.{i}.conv1.bias",
+      "pattern": "decoder.up_blocks.{i}.resnets.{i}.conv1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.up.{i}.res.{i}.conv1.weight",
+      "pattern": "decoder.up_blocks.{i}.resnets.{i}.conv1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.up.{i}.res.{i}.conv2.bias",
+      "pattern": "decoder.up_blocks.{i}.resnets.{i}.conv2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.up.{i}.res.{i}.conv2.weight",
+      "pattern": "decoder.up_blocks.{i}.resnets.{i}.conv2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.up.{i}.res.{i}.conv_shortcut.bias",
+      "pattern": "decoder.up_blocks.{i}.resnets.{i}.conv_shortcut.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.up.{i}.res.{i}.conv_shortcut.weight",
+      "pattern": "decoder.up_blocks.{i}.resnets.{i}.conv_shortcut.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.up.{i}.res.{i}.norm1.bias",
+      "pattern": "decoder.up_blocks.{i}.resnets.{i}.norm1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.up.{i}.res.{i}.norm1.weight",
+      "pattern": "decoder.up_blocks.{i}.resnets.{i}.norm1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.up.{i}.res.{i}.norm2.bias",
+      "pattern": "decoder.up_blocks.{i}.resnets.{i}.norm2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.up.{i}.res.{i}.norm2.weight",
+      "pattern": "decoder.up_blocks.{i}.resnets.{i}.norm2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.up.{i}.us.{i}.conv.bias",
+      "pattern": "decoder.up_blocks.{i}.upsamplers.{i}.conv.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.decoder.up.{i}.us.{i}.conv.weight",
+      "pattern": "decoder.up_blocks.{i}.upsamplers.{i}.conv.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.conv_in.bias",
+      "pattern": "encoder.conv_in.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.conv_in.weight",
+      "pattern": "encoder.conv_in.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.conv_norm_out.bias",
+      "pattern": "encoder.conv_norm_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.conv_norm_out.weight",
+      "pattern": "encoder.conv_norm_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.conv_out.bias",
+      "pattern": "encoder.conv_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.conv_out.weight",
+      "pattern": "encoder.conv_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.down.{i}.ds.{i}.conv.bias",
+      "pattern": "encoder.down_blocks.{i}.downsamplers.{i}.conv.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.down.{i}.ds.{i}.conv.weight",
+      "pattern": "encoder.down_blocks.{i}.downsamplers.{i}.conv.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.down.{i}.res.{i}.conv1.bias",
+      "pattern": "encoder.down_blocks.{i}.resnets.{i}.conv1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.down.{i}.res.{i}.conv1.weight",
+      "pattern": "encoder.down_blocks.{i}.resnets.{i}.conv1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.down.{i}.res.{i}.conv2.bias",
+      "pattern": "encoder.down_blocks.{i}.resnets.{i}.conv2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.down.{i}.res.{i}.conv2.weight",
+      "pattern": "encoder.down_blocks.{i}.resnets.{i}.conv2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.down.{i}.res.{i}.conv_shortcut.bias",
+      "pattern": "encoder.down_blocks.{i}.resnets.{i}.conv_shortcut.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.down.{i}.res.{i}.conv_shortcut.weight",
+      "pattern": "encoder.down_blocks.{i}.resnets.{i}.conv_shortcut.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.down.{i}.res.{i}.norm1.bias",
+      "pattern": "encoder.down_blocks.{i}.resnets.{i}.norm1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.down.{i}.res.{i}.norm1.weight",
+      "pattern": "encoder.down_blocks.{i}.resnets.{i}.norm1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.down.{i}.res.{i}.norm2.bias",
+      "pattern": "encoder.down_blocks.{i}.resnets.{i}.norm2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.down.{i}.res.{i}.norm2.weight",
+      "pattern": "encoder.down_blocks.{i}.resnets.{i}.norm2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.attn.{i}.group_norm.bias",
+      "pattern": "encoder.mid_block.attentions.{i}.group_norm.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.attn.{i}.group_norm.weight",
+      "pattern": "encoder.mid_block.attentions.{i}.group_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.attn.{i}.k.bias",
+      "pattern": "encoder.mid_block.attentions.{i}.to_k.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.attn.{i}.k.weight",
+      "pattern": "encoder.mid_block.attentions.{i}.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.attn.{i}.out.{i}.bias",
+      "pattern": "encoder.mid_block.attentions.{i}.to_out.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.attn.{i}.out.{i}.weight",
+      "pattern": "encoder.mid_block.attentions.{i}.to_out.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.attn.{i}.q.bias",
+      "pattern": "encoder.mid_block.attentions.{i}.to_q.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.attn.{i}.q.weight",
+      "pattern": "encoder.mid_block.attentions.{i}.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.attn.{i}.v.bias",
+      "pattern": "encoder.mid_block.attentions.{i}.to_v.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.attn.{i}.v.weight",
+      "pattern": "encoder.mid_block.attentions.{i}.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.res.{i}.conv1.bias",
+      "pattern": "encoder.mid_block.resnets.{i}.conv1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.res.{i}.conv1.weight",
+      "pattern": "encoder.mid_block.resnets.{i}.conv1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.res.{i}.conv2.bias",
+      "pattern": "encoder.mid_block.resnets.{i}.conv2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.res.{i}.conv2.weight",
+      "pattern": "encoder.mid_block.resnets.{i}.conv2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.res.{i}.norm1.bias",
+      "pattern": "encoder.mid_block.resnets.{i}.norm1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.res.{i}.norm1.weight",
+      "pattern": "encoder.mid_block.resnets.{i}.norm1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.res.{i}.norm2.bias",
+      "pattern": "encoder.mid_block.resnets.{i}.norm2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.encoder.mid.res.{i}.norm2.weight",
+      "pattern": "encoder.mid_block.resnets.{i}.norm2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.post_quant_conv.bias",
+      "pattern": "post_quant_conv.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.post_quant_conv.weight",
+      "pattern": "post_quant_conv.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "vae.quant_conv.bias",
+      "pattern": "quant_conv.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vae.quant_conv.weight",
+      "pattern": "quant_conv.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    },
+    {
+      "role": "clip_h.embeddings.position_embedding.weight",
+      "pattern": "text_model.embeddings.position_embedding.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "clip_h.embeddings.token_embedding.weight",
+      "pattern": "text_model.embeddings.token_embedding.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.layer_norm1.bias",
+      "pattern": "text_model.encoder.layers.{i}.layer_norm1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.layer_norm1.weight",
+      "pattern": "text_model.encoder.layers.{i}.layer_norm1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.layer_norm2.bias",
+      "pattern": "text_model.encoder.layers.{i}.layer_norm2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.layer_norm2.weight",
+      "pattern": "text_model.encoder.layers.{i}.layer_norm2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.mlp.fc1.bias",
+      "pattern": "text_model.encoder.layers.{i}.mlp.fc1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.mlp.fc1.weight",
+      "pattern": "text_model.encoder.layers.{i}.mlp.fc1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.mlp.fc2.bias",
+      "pattern": "text_model.encoder.layers.{i}.mlp.fc2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.mlp.fc2.weight",
+      "pattern": "text_model.encoder.layers.{i}.mlp.fc2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.attn.qkv#k.bias",
+      "pattern": "text_model.encoder.layers.{i}.self_attn.k_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.attn.qkv#k.weight",
+      "pattern": "text_model.encoder.layers.{i}.self_attn.k_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.attn.out.bias",
+      "pattern": "text_model.encoder.layers.{i}.self_attn.out_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.attn.out.weight",
+      "pattern": "text_model.encoder.layers.{i}.self_attn.out_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.attn.qkv#q.bias",
+      "pattern": "text_model.encoder.layers.{i}.self_attn.q_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.attn.qkv#q.weight",
+      "pattern": "text_model.encoder.layers.{i}.self_attn.q_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.attn.qkv#v.bias",
+      "pattern": "text_model.encoder.layers.{i}.self_attn.v_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "clip_h.layers.{i}.attn.qkv#v.weight",
+      "pattern": "text_model.encoder.layers.{i}.self_attn.v_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "clip_h.final_layer_norm.bias",
+      "pattern": "text_model.final_layer_norm.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "clip_h.final_layer_norm.weight",
+      "pattern": "text_model.final_layer_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    }
+  ]
+}

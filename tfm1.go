@@ -219,8 +219,13 @@ func isTFM1ContractName(name string) bool {
 	if !found || producer == "" || format == "" {
 		return false
 	}
+	// The producer segment admits a hyphen (gen-worker spells model types
+	// `hidream-o1`, `flux-2`, `wan-2`), but never leads with one.
+	if !isTFM1Lower(producer[0]) {
+		return false
+	}
 	for _, character := range []byte(producer) {
-		if !isTFM1Lower(character) {
+		if !isTFM1Lower(character) && character != '-' {
 			return false
 		}
 	}
