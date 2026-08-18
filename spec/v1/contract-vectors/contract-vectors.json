@@ -8,6 +8,12 @@
       "stamp": "dit.blocks-fused-qkv@1"
     },
     {
+      "name": "flux2-klein.diffusers-bf16.v1",
+      "file": "contracts/flux2-klein.diffusers-bf16.v1.json",
+      "digest": "4d9fada187e6e086a1c4c496d81b785ce9419fc089e64d0141f6427b88e9d40d",
+      "stamp": "flux2-klein.diffusers-bf16@1"
+    },
+    {
       "name": "hidream-o1.diffusers-bf16.v1",
       "file": "contracts/hidream-o1.diffusers-bf16.v1.json",
       "digest": "69003d11e2cb3b52628cb05e02c275916db74e318eabbce2f6e89be625c7e01f",
