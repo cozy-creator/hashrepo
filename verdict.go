@@ -86,6 +86,14 @@ type Verdict struct {
 	// Mismatch is set iff Kind is VerdictIncompatible or VerdictDerivable: the
 	// first disagreement, NAMING the tensor and the pattern.
 	Mismatch *Mismatch
+	// File is the MEMBER the mismatch came from. Load-bearing, not decoration:
+	// a checkpoint's verdict is the aggregation over its component files, and
+	// the same contract routinely matches some members and refuses others — an
+	// SD1.5 tree's vae and text_encoder genuinely satisfy the SDXL contract
+	// (they are literally the same files SDXL ships) while its unet refuses on
+	// rank. A refusal that names only the tensor leaves the operator guessing
+	// which component to fix.
+	File string
 }
 
 func (v Verdict) String() string {
@@ -93,9 +101,12 @@ func (v Verdict) String() string {
 	case VerdictSatisfies:
 		return fmt.Sprintf("satisfies %s (%d tensors across %d file(s))", v.Stamp, v.Matched, v.Explained)
 	case VerdictDerivable:
-		return fmt.Sprintf("derivable to %s via %s — %s", v.Stamp, v.Conversion, v.Mismatch)
+		return fmt.Sprintf("derivable to %s via %s — in %s, %s", v.Stamp, v.Conversion, v.File, v.Mismatch)
 	default:
-		return fmt.Sprintf("incompatible with %s — %s", v.Stamp, v.Mismatch)
+		if v.File == "" {
+			return fmt.Sprintf("incompatible with %s — %s", v.Stamp, v.Mismatch)
+		}
+		return fmt.Sprintf("incompatible with %s — in %s, %s", v.Stamp, v.File, v.Mismatch)
 	}
 }
 
@@ -125,8 +136,8 @@ func (c *Contract) Verdict(files []ArtifactFile) Verdict {
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Path < ordered[j].Path })
 
 	verdict := Verdict{Stamp: c.Stamp()}
-	var structural *Mismatch
-	var dtypeFirst *Mismatch
+	var structural, dtypeFirst *Mismatch
+	var structuralFile, dtypeFile string
 	fromSet := map[string]struct{}{}
 	toSet := map[string]struct{}{}
 	var castFiles []string
@@ -141,7 +152,7 @@ func (c *Contract) Verdict(files []ArtifactFile) Verdict {
 			verdict.Unexplained = append(verdict.Unexplained, file.Path)
 		case mismatch.Kind == MismatchDtype:
 			if dtypeFirst == nil {
-				dtypeFirst = mismatch
+				dtypeFirst, dtypeFile = mismatch, file.Path
 			}
 			fromSet[mismatch.Observed] = struct{}{}
 			for _, declared := range strings.Split(mismatch.Declared, "|") {
@@ -150,16 +161,16 @@ func (c *Contract) Verdict(files []ArtifactFile) Verdict {
 			castFiles = append(castFiles, file.Path)
 		default:
 			if structural == nil {
-				structural = mismatch
+				structural, structuralFile = mismatch, file.Path
 			}
 		}
 	}
 
 	switch {
 	case structural != nil:
-		verdict.Kind, verdict.Mismatch = VerdictIncompatible, structural
+		verdict.Kind, verdict.Mismatch, verdict.File = VerdictIncompatible, structural, structuralFile
 	case dtypeFirst != nil:
-		verdict.Kind, verdict.Mismatch = VerdictDerivable, dtypeFirst
+		verdict.Kind, verdict.Mismatch, verdict.File = VerdictDerivable, dtypeFirst, dtypeFile
 		verdict.Conversion = &Conversion{
 			Kind: "dtype-cast", From: sortedKeys(fromSet), To: sortedKeys(toSet), Files: castFiles,
 		}

@@ -115,30 +115,94 @@ func TestVerdictOffersAConversionForAMixedDtypeTree(t *testing.T) {
 	t.Logf("%s", verdict)
 }
 
-// DIRECTION 2 of the audit — UNDER-constraint, and the honest limit of the
-// LAYOUT half. An SD1.5 tree packaged diffusers-multifolder in bf16 uses key
-// spellings IDENTICAL to SDXL's, so the layout half CANNOT refuse it and must
-// not pretend to: closing this is the config-only dry-load's job (th#2160
-// half 2). This test pins that the layout half admits, so that a later "fix"
-// which refuses here — re-breaking direction 1 — is caught.
-func TestVerdictAdmitsSd15BecauseTheLayoutHalfCannotSeeTheDifference(t *testing.T) {
+// DIRECTION 2 of the audit — UNDER-constraint, CORRECTED 2026-08-18 against
+// real HF headers by the tensorfs#121 lane-documents lane.
+//
+// The tensorfs#122 investigation cited SD1.5 as a whole-checkpoint false-admit
+// and named the wrong mechanism (a missing `text_encoder_2`, which refuses
+// nothing — every declaration is `required:false`). Measured, the real story is
+// PER COMPONENT, and it is the reason Verdict carries File:
+//
+//   - SD1.5's UNET is a HARD REFUSAL: its `proj_in`/`proj_out` are 1x1 Conv2d,
+//     rank 4, where SDXL's linear-projection spelling declares rank 2. Same key
+//     spelling, different rank — 32 disagreements.
+//   - SD1.5's VAE and TEXT_ENCODER genuinely SATISFY, because they are
+//     literally the same files SDXL ships.
+//
+// So the layout half DOES close the SD1.5 case, on the unet, and the verdict
+// must name that member — "incompatible" over a checkpoint whose vae and text
+// encoder are perfect is unactionable without it.
+func TestVerdictRefusesSd15OnTheUnetAndNamesTheMember(t *testing.T) {
 	contract := loadLibraryContract(t, "sdxl.diffusers-bf16.v1.json")
 	sd15 := []ArtifactFile{
 		{Path: "unet/diffusion_pytorch_model.safetensors", Tensors: []InventoryTensor{
 			{Name: "time_embedding.linear_1.weight", Dtype: "BF16", Shape: []uint64{1280, 320}},
-			{Name: "down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_q.weight", Dtype: "BF16", Shape: []uint64{640, 640}},
+			// The discriminator: rank 4 where SDXL declares rank 2.
+			{Name: "down_blocks.1.attentions.0.proj_in.weight", Dtype: "BF16", Shape: []uint64{640, 640, 1, 1}},
 		}},
-		// SD1.5 has ONE text encoder, and its keys are the same diffusers CLIP
-		// spelling the contract declares.
 		{Path: "text_encoder/model.safetensors", Tensors: []InventoryTensor{
 			{Name: "text_model.encoder.layers.0.self_attn.q_proj.weight", Dtype: "BF16", Shape: []uint64{768, 768}},
 		}},
 	}
 	verdict := contract.Verdict(sd15)
-	if verdict.Kind != VerdictSatisfies {
-		t.Fatalf("the layout half cannot tell SD1.5 from SDXL and must not claim to; got %s", verdict)
+	if verdict.Kind != VerdictIncompatible {
+		t.Fatalf("SD1.5's unet disagrees on rank and must refuse; got %s", verdict)
 	}
-	t.Logf("layout-half verdict (the dry-load closes this): %s", verdict)
+	if verdict.File != "unet/diffusion_pytorch_model.safetensors" {
+		t.Fatalf("the refusal must name the member that failed, got %q", verdict.File)
+	}
+	if verdict.Mismatch.Kind != MismatchRank || verdict.Mismatch.Tensor != "down_blocks.1.attentions.0.proj_in.weight" {
+		t.Fatalf("want a named rank refusal on proj_in, got %+v", verdict.Mismatch)
+	}
+	t.Logf("%s", verdict)
+}
+
+// The other half of the same correction: SD1.5's vae/text_encoder ALONE do
+// satisfy the SDXL contract. A per-component verdict is therefore not a
+// checkpoint verdict, and anything that aggregates them must aggregate — never
+// sample one member and generalize.
+func TestVerdictSatisfiesOnSd15ComponentsThatAreLiterallySdxlFiles(t *testing.T) {
+	contract := loadLibraryContract(t, "sdxl.diffusers-bf16.v1.json")
+	verdict := contract.Verdict([]ArtifactFile{
+		{Path: "text_encoder/model.safetensors", Tensors: []InventoryTensor{
+			{Name: "text_model.encoder.layers.0.self_attn.q_proj.weight", Dtype: "BF16", Shape: []uint64{768, 768}},
+			{Name: "text_model.encoder.layers.0.mlp.fc1.weight", Dtype: "BF16", Shape: []uint64{3072, 768}},
+		}},
+	})
+	if verdict.Kind != VerdictSatisfies {
+		t.Fatalf("the shared CLIP-L member satisfies on its own; got %s", verdict)
+	}
+	t.Logf("per-component satisfy (NOT a checkpoint verdict): %s", verdict)
+}
+
+// The sharpest discrimination the library documents contain: sd15 and sd2
+// declare IDENTICAL pattern sets and differ on exactly six ranks (proj_in /
+// proj_out, 1x1 Conv2d at rank 4 vs a linear projection at rank 2). A matcher
+// that skipped rank would admit either checkpoint to either lane and nothing
+// downstream would notice until the pod loaded.
+func TestVerdictSeparatesSd15FromSd2OnRankAlone(t *testing.T) {
+	sd15 := loadLibraryContract(t, "sd15.diffusers-bf16.v1.json")
+	sd2 := loadLibraryContract(t, "sd2.diffusers-bf16.v1.json")
+	conv2d := []ArtifactFile{{Path: "unet/diffusion_pytorch_model.safetensors", Tensors: []InventoryTensor{
+		{Name: "mid_block.attentions.0.proj_in.weight", Dtype: "BF16", Shape: []uint64{1280, 1280, 1, 1}},
+	}}}
+	linear := []ArtifactFile{{Path: "unet/diffusion_pytorch_model.safetensors", Tensors: []InventoryTensor{
+		{Name: "mid_block.attentions.0.proj_in.weight", Dtype: "BF16", Shape: []uint64{1280, 1280}},
+	}}}
+
+	if v := sd15.Verdict(conv2d); v.Kind != VerdictSatisfies {
+		t.Fatalf("the rank-4 projection is sd15's own: %s", v)
+	}
+	if v := sd2.Verdict(conv2d); v.Kind != VerdictIncompatible || v.Mismatch.Kind != MismatchRank {
+		t.Fatalf("sd2 declares rank 2 and must refuse the conv2d spelling: %s", v)
+	}
+	if v := sd2.Verdict(linear); v.Kind != VerdictSatisfies {
+		t.Fatalf("the rank-2 projection is sd2's own: %s", v)
+	}
+	if v := sd15.Verdict(linear); v.Kind != VerdictIncompatible || v.Mismatch.Kind != MismatchRank {
+		t.Fatalf("sd15 declares rank 4 and must refuse the linear spelling: %s", v)
+	}
+	t.Logf("sd2 vs a sd15-shaped unet: %s", sd2.Verdict(conv2d))
 }
 
 // A genuinely different model: no declaration claims anything.
