@@ -40,6 +40,9 @@ RUST_PINNED = {
     "hidream-o1.diffusers-bf16@1": (
         "69003d11e2cb3b52628cb05e02c275916db74e318eabbce2f6e89be625c7e01f"
     ),
+    "internvl-u.diffusers-bf16@1": (
+        "9ee028aea999f92c4d93609f59ba476f0c6aad8dee3269cee1a22abec97d199d"
+    ),
     "ltx-2.diffusers-bf16@1": (
         "71038ae11883111d367077eec59a457b97c8746439c3b7bc0885555e26b7aa12"
     ),
@@ -533,6 +536,20 @@ def test_a_flux1_tree_is_flux1_and_was_flux2_klein_without_it(
 
     The without-flux1 arm is the point: it names the baseline, so this assertion
     is known to be able to fail rather than merely never having failed.
+
+    THE BASELINE ASSERTS THE PROPERTY, NOT THE RUNNER-UP'S NAME. It used to pin
+    ``flux2-klein.diffusers-bf16@1`` as the family that wins without this
+    document, and that went stale the moment another lane added a document that
+    explains a FLUX.1 tree better: qwen-image landed and the runner-up became
+    ``qwen-image.diffusers-bf16@1``, turning master red for every lane through no
+    fault of either document. Neither was wrong — a hardcoded second place is
+    simply not a property of this family, it is a property of the registry's
+    current contents, and it would go stale again on the next document anyone
+    adds. What this test actually cares about survives the change: SOMETHING
+    still matches (so the arm is live rather than vacuously passing on a refusal)
+    and what it matches is the WRONG FAMILY (so flux1's document is doing real
+    work). Recorded for history: the runner-up was flux2-klein at tensorfs#124
+    and qwen-image at tensorfs#131.
     """
 
     axes, measured = FLUX1_ARMS[arm]
@@ -545,7 +562,15 @@ def test_a_flux1_tree_is_flux1_and_was_flux2_klein_without_it(
 
     without_flux1 = [item for item in library if item.name != "flux1.diffusers-bf16"]
     assert len(without_flux1) == len(library) - 1
-    assert (
-        ContractRegistry(without_flux1).detect_file(path)
-        == "flux2-klein.diffusers-bf16@1"
-    ), "the wrong-family win this document closes"
+    runner_up = ContractRegistry(without_flux1).detect_file(path)
+    # NOT `assert runner_up`: a no-match renders as the STRING "none", which is
+    # truthy, so the obvious spelling of this guard can never fire. Absent must
+    # never render as present.
+    assert runner_up != "none", (
+        "the baseline arm went vacuous: with flux1 removed NOTHING matches a "
+        "flux1 tree, so this test no longer proves the document closes anything"
+    )
+    assert runner_up != "flux1.diffusers-bf16@1", "flux1 was supposed to be removed"
+    assert not runner_up.startswith("flux1."), (
+        f"the wrong-family win this document closes; got {runner_up}"
+    )

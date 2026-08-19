@@ -706,6 +706,10 @@ fn the_shipped_library_is_pinned_by_digest() {
             "69003d11e2cb3b52628cb05e02c275916db74e318eabbce2f6e89be625c7e01f",
         ),
         (
+            "internvl-u.diffusers-bf16@1",
+            "9ee028aea999f92c4d93609f59ba476f0c6aad8dee3269cee1a22abec97d199d",
+        ),
+        (
             "ltx-2.diffusers-bf16@1",
             "71038ae11883111d367077eec59a457b97c8746439c3b7bc0885555e26b7aa12",
         ),
