@@ -92,6 +92,12 @@
       "stamp": "sdxl.diffusers-fp8-rowwise@1"
     },
     {
+      "name": "stable-audio.diffusers-fp16.v1",
+      "file": "contracts/stable-audio.diffusers-fp16.v1.json",
+      "digest": "c580a73fda845048b99b3d3f2093be9c282da4166e1e5521fea139957b454ed3",
+      "stamp": "stable-audio.diffusers-fp16@1"
+    },
+    {
       "name": "trellis2.dit-bf16.v1",
       "file": "contracts/trellis2.dit-bf16.v1.json",
       "digest": "f9763a5aa4b82d552c7b582d7b540cd0fdf576cc5bd234bb9e73ec617738ab52",
