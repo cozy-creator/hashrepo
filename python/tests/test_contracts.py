@@ -329,3 +329,136 @@ def test_compositions_accept_contract_objects_end_to_end(tmp_path: Path) -> None
         contract=fused,
     )
     assert len(trimmed) == len(records)
+
+
+# ---------------------------------------------------------------------------
+# tensorfs#124: flux1 is not flux2-klein
+# ---------------------------------------------------------------------------
+
+
+def _flux1_transformer_names(
+    *, layers: int = 19, single_layers: int = 38, guidance_embeds: bool = True
+) -> dict[str, int]:
+    """The diffusers ``FluxTransformer2DModel`` state dict, name -> rank.
+
+    The spellings are the real ones, read off the safetensors headers of the
+    two checkpoints the fleet serves (tensorhub/flux1-dev and
+    tensorhub/flux1-schnell, revision-pinned clones of the gated BFL repos).
+    ``layers``/``single_layers``/``guidance_embeds`` are the three axes
+    ``transformer/config.json`` actually varies across the served arms.
+    """
+
+    names: dict[str, int] = {
+        "x_embedder.weight": 2,
+        "x_embedder.bias": 1,
+        "context_embedder.weight": 2,
+        "context_embedder.bias": 1,
+        "proj_out.weight": 2,
+        "proj_out.bias": 1,
+        "norm_out.linear.weight": 2,
+        "norm_out.linear.bias": 1,
+    }
+    embedders = ["timestep_embedder", "text_embedder"]
+    if guidance_embeds:
+        embedders.append("guidance_embedder")
+    for embedder in embedders:
+        for index in (1, 2):
+            stem = f"time_text_embed.{embedder}.linear_{index}"
+            names[f"{stem}.weight"] = 2
+            names[f"{stem}.bias"] = 1
+    for block in range(layers):
+        stem = f"transformer_blocks.{block}"
+        for leaf in (
+            "attn.to_q", "attn.to_k", "attn.to_v",
+            "attn.add_q_proj", "attn.add_k_proj", "attn.add_v_proj",
+            "attn.to_out.0", "attn.to_add_out",
+            "ff.net.0.proj", "ff.net.2",
+            "ff_context.net.0.proj", "ff_context.net.2",
+            "norm1.linear", "norm1_context.linear",
+        ):
+            names[f"{stem}.{leaf}.weight"] = 2
+            names[f"{stem}.{leaf}.bias"] = 1
+        for norm in ("norm_q", "norm_k", "norm_added_q", "norm_added_k"):
+            names[f"{stem}.attn.{norm}.weight"] = 1
+    for block in range(single_layers):
+        stem = f"single_transformer_blocks.{block}"
+        for leaf in ("attn.to_q", "attn.to_k", "attn.to_v",
+                     "proj_mlp", "proj_out", "norm.linear"):
+            names[f"{stem}.{leaf}.weight"] = 2
+            names[f"{stem}.{leaf}.bias"] = 1
+        for norm in ("norm_q", "norm_k"):
+            names[f"{stem}.attn.{norm}.weight"] = 1
+    return names
+
+
+def _bf16_file(path: Path, names: dict[str, int]) -> Path:
+    """A real safetensors file carrying those names at those RANKS.
+
+    Dims are 2 everywhere on purpose: these declarations constrain rank and
+    dtype and never shape, which is what lets ONE document span a 12B BFL
+    checkpoint and an 8-block derivative whose ``x_embedder`` is 196 channels
+    wide instead of 64.
+    """
+
+    header: dict[str, object] = {}
+    offset = 0
+    for name, rank in names.items():
+        span = 2 ** rank * 2  # dims of 2, two bytes per BF16 element
+        header[name] = {
+            "dtype": "BF16",
+            "shape": [2] * rank,
+            "data_offsets": [offset, offset + span],
+        }
+        offset += span
+    blob = json.dumps(header).encode()
+    path.write_bytes(struct.pack("<Q", len(blob)) + blob + bytes(offset))
+    return path
+
+
+#: arm -> (config axes, the MEASURED transformer tensor count). The count is
+#: what ties this synthetic header to the real ones: it is what the shard
+#: headers actually add up to, so a drift in the spellings above stops being
+#: invisible.
+FLUX1_ARMS = {
+    # FLUX.1-dev: guidance-distilled.
+    "dev": (dict(layers=19, single_layers=38, guidance_embeds=True), 1160),
+    # FLUX.1-schnell: no guidance embedder — the four-tensor delta.
+    "schnell": (dict(layers=19, single_layers=38, guidance_embeds=False), 1156),
+    # ostris/Flex.2-preview: a FLUX.1-architecture redistill the flux.1-schnell
+    # endpoint serves, 8 double blocks.
+    "flex2": (dict(layers=8, single_layers=38, guidance_embeds=True), 808),
+}
+
+
+@pytest.mark.parametrize("arm", sorted(FLUX1_ARMS))
+def test_a_flux1_tree_is_flux1_and_was_flux2_klein_without_it(
+    arm: str, tmp_path: Path
+) -> None:
+    """tensorfs#124: the near miss this document exists to end.
+
+    ``dit.blocks-fused-qkv@1`` fails LOUDLY on a flux tree — it is the timm
+    ``blocks.{i}`` spelling and explains nothing. ``flux2-klein.diffusers-bf16@1``
+    is the dangerous one: FLUX.1 and FLUX.2 Klein wear the same diffusers
+    vocabulary over different architectures (19+38 blocks against 5+20, split
+    to_q/to_k/to_v against a fused to_qkv_mlp_proj, an ungated 1:1:1:4 single
+    stream against a gated 1:1:1:6), so Klein matches a FLUX.1 file with no
+    dtype or rank refusal and WON it outright before this document existed.
+
+    The without-flux1 arm is the point: it names the baseline, so this assertion
+    is known to be able to fail rather than merely never having failed.
+    """
+
+    axes, measured = FLUX1_ARMS[arm]
+    names = _flux1_transformer_names(**axes)  # type: ignore[arg-type]
+    assert len(names) == measured, "the synthetic header drifted from the real one"
+    path = _bf16_file(tmp_path / f"flux1-{arm}.safetensors", names)
+
+    library = contracts.all()
+    assert ContractRegistry(list(library)).detect_file(path) == "flux1.diffusers-bf16@1"
+
+    without_flux1 = [item for item in library if item.name != "flux1.diffusers-bf16"]
+    assert len(without_flux1) == len(library) - 1
+    assert (
+        ContractRegistry(without_flux1).detect_file(path)
+        == "flux2-klein.diffusers-bf16@1"
+    ), "the wrong-family win this document closes"
