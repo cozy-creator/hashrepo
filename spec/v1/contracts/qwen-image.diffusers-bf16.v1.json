@@ -1,0 +1,414 @@
+{
+  "format": "tensorfs-contract-v1",
+  "name": "qwen-image.diffusers-bf16",
+  "version": 1,
+  "dtype": "bfloat16",
+  "description": "The canonical Qwen-Image serve layout: the diffusers QwenImageTransformer2DModel, all-bf16, every declaration derived from the real safetensors headers of the hub trees the fleet ACTUALLY SERVES - tensorhub/qwen-image (sha256:0780e58ef8ec..., QwenImagePipeline) and tensorhub/qwen-image-edit-2511 (sha256:53058727d177..., QwenImageEditPlusPipeline). ONE DOCUMENT COVERS BOTH REPOS, and that is a measurement rather than a judgement call: the two transformers are 1933 tensors each, the name sets are equal (zero keys unique to either side), every shared shape agrees and every dtype agrees. Both transformer/config.json declare _class_name QwenImageTransformer2DModel with num_layers 60, attention_head_dim 128, num_attention_heads 24, axes_dims_rope [16, 56, 56] and joint_attention_dim 3584; the only config delta is zero_cond_t on the edit arm, a forward-pass flag that is not a tensor. The two serve on two pipeline classes and two compiled cells (pgw#1112), but a compile-cell split is not a layout split. Same one-root precedent as wan22.diffusers-bf16. COMPLETENESS IS LOAD-BEARING ON THIS FAMILY SPECIFICALLY. flux2-klein.diffusers-bf16@1 already explains 722 of these 1933 keys (37.4%, measured) because both families serve the diffusers MMDiT spelling - transformer_blocks.{i}.attn.to_q/to_k/to_v, add_*_proj, norm_added_*, to_add_out. Detection specificity is the count of a file's tensors a contract explains, so a SAMPLED qwen document would lose qwen's own files to flux2-klein. This declaration is COMPLETE over the shipped header: all 1933 keys, no exceptions. ATTENTION IS SPLIT ON BOTH STREAMS, NOT FUSED. The image stream is to_q/to_k/to_v at [3072, 3072] with [3072] biases; the text stream is add_q_proj/add_k_proj/add_v_proj at the same ranks. No fusion is declared because no shipped packaging fuses, but the roles carry #q/#k/#v suffixes over one qkv role so a future fused [9216, 3072] packaging - equal thirds here, measured - is a run-preserving derive rather than a refusal, exactly as the sdxl.clip-g-* pair does. NOTE THE CONTRAST WITH FLUX.2 KLEIN, because the shared spelling invites the wrong assumption: Klein's single_transformer_blocks.{i}.attn.to_qkv_mlp_proj fuses attention AND a GATED mlp at 1:1:1:6, and thirds would mis-cut it. Qwen has no such tensor at all - its img_mlp/txt_mlp are plain non-gated 4x MLPs shipped already split (net.0.proj at [12288, 3072], net.2 at [3072, 12288]). img_mod.1/txt_mod.1 at [18432, 3072] are 6 x 3072 adaLN modulation, which no packaging splits, so they are declared whole. TRANSFORMER ONLY, deliberately, on the tensorfs#121 rule: AutoencoderKLQwenImage and the Qwen2.5-VL text encoder are undeclared - a shared component makes family detection TIE (tensorfs#122), and the encoder spelling is stock transformers that any future Qwen2.5-VL lane would collide with. The transformer is the compile subject and the only component that identifies the family. Top-level dtype is the serve-side load dtype (ctx.lane.dtype); the per-tensor dtypes are the matcher's constraint that this really is the bf16 packaging.",
+  "tensors": [
+    {
+      "role": "dit.img_in.bias",
+      "pattern": "img_in.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.img_in.weight",
+      "pattern": "img_in.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.final_layer.adaln.bias",
+      "pattern": "norm_out.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.final_layer.adaln.weight",
+      "pattern": "norm_out.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.final_layer.linear.bias",
+      "pattern": "proj_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.final_layer.linear.weight",
+      "pattern": "proj_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.time_in.fc1.bias",
+      "pattern": "time_text_embed.timestep_embedder.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.time_in.fc1.weight",
+      "pattern": "time_text_embed.timestep_embedder.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.time_in.fc2.bias",
+      "pattern": "time_text_embed.timestep_embedder.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.time_in.fc2.weight",
+      "pattern": "time_text_embed.timestep_embedder.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_attn.qkv.bias#k",
+      "pattern": "transformer_blocks.{i}.attn.add_k_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_attn.qkv.weight#k",
+      "pattern": "transformer_blocks.{i}.attn.add_k_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_attn.qkv.bias#q",
+      "pattern": "transformer_blocks.{i}.attn.add_q_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_attn.qkv.weight#q",
+      "pattern": "transformer_blocks.{i}.attn.add_q_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_attn.qkv.bias#v",
+      "pattern": "transformer_blocks.{i}.attn.add_v_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_attn.qkv.weight#v",
+      "pattern": "transformer_blocks.{i}.attn.add_v_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_attn.key_norm.weight",
+      "pattern": "transformer_blocks.{i}.attn.norm_added_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_attn.query_norm.weight",
+      "pattern": "transformer_blocks.{i}.attn.norm_added_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_attn.key_norm.weight",
+      "pattern": "transformer_blocks.{i}.attn.norm_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_attn.query_norm.weight",
+      "pattern": "transformer_blocks.{i}.attn.norm_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_attn.proj.bias",
+      "pattern": "transformer_blocks.{i}.attn.to_add_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_attn.proj.weight",
+      "pattern": "transformer_blocks.{i}.attn.to_add_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_attn.qkv.bias#k",
+      "pattern": "transformer_blocks.{i}.attn.to_k.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_attn.qkv.weight#k",
+      "pattern": "transformer_blocks.{i}.attn.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_attn.proj.{i}.bias",
+      "pattern": "transformer_blocks.{i}.attn.to_out.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_attn.proj.{i}.weight",
+      "pattern": "transformer_blocks.{i}.attn.to_out.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_attn.qkv.bias#q",
+      "pattern": "transformer_blocks.{i}.attn.to_q.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_attn.qkv.weight#q",
+      "pattern": "transformer_blocks.{i}.attn.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_attn.qkv.bias#v",
+      "pattern": "transformer_blocks.{i}.attn.to_v.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_attn.qkv.weight#v",
+      "pattern": "transformer_blocks.{i}.attn.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_mlp.fc2.{i}.bias",
+      "pattern": "transformer_blocks.{i}.img_mlp.net.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_mlp.fc1.{i}.bias",
+      "pattern": "transformer_blocks.{i}.img_mlp.net.{i}.proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_mlp.fc1.{i}.weight",
+      "pattern": "transformer_blocks.{i}.img_mlp.net.{i}.proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_mlp.fc2.{i}.weight",
+      "pattern": "transformer_blocks.{i}.img_mlp.net.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_mod.{i}.bias",
+      "pattern": "transformer_blocks.{i}.img_mod.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.img_mod.{i}.weight",
+      "pattern": "transformer_blocks.{i}.img_mod.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_mlp.fc2.{i}.bias",
+      "pattern": "transformer_blocks.{i}.txt_mlp.net.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_mlp.fc1.{i}.bias",
+      "pattern": "transformer_blocks.{i}.txt_mlp.net.{i}.proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_mlp.fc1.{i}.weight",
+      "pattern": "transformer_blocks.{i}.txt_mlp.net.{i}.proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_mlp.fc2.{i}.weight",
+      "pattern": "transformer_blocks.{i}.txt_mlp.net.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_mod.{i}.bias",
+      "pattern": "transformer_blocks.{i}.txt_mod.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.txt_mod.{i}.weight",
+      "pattern": "transformer_blocks.{i}.txt_mod.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.txt_in.bias",
+      "pattern": "txt_in.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.txt_in.weight",
+      "pattern": "txt_in.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.txt_norm.weight",
+      "pattern": "txt_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    }
+  ]
+}
