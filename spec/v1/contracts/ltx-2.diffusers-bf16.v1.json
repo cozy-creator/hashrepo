@@ -1,0 +1,1305 @@
+{
+  "format": "tensorfs-contract-v1",
+  "name": "ltx-2.diffusers-bf16",
+  "version": 1,
+  "dtype": "bfloat16",
+  "description": "The canonical LTX-2 (Lightricks LTX-2.3) serve layout: the diffusers LTX2VideoTransformer3DModel that LTX2ConditionPipeline denoises, all-bf16 weights, derived from the REAL safetensors headers of all eight transformer shards of diffusers/LTX-2.3-Distilled-Diffusers at revision 432e0d3c2d1769aaa4d295f9243f7062bf6b47ee - which is not a mirror-of-convenience but the exact source_repo/source_revision the fleet's own clone recipe (jobs/catalog/launch_ltx_2026-07-07.toml) used to produce tensorhub/ltx-2.3-distilled prod, and which is still that repo's HEAD. COMPLETE, and the completeness is checked rather than assumed: these 144 declarations match 4186 of 4186 tensors, each tensor matched by EXACTLY ONE declaration, with every declared dtype and rank equal to the header's. That matters here beyond tidiness - a PARTIAL DiT document silently loses its own files to another family's lane under the specificity rule, and minimax.h3-dit-diffusers already explains 96 of these tensors (the transformer_blocks.{i}.ff.net.{i} pair) purely through shared diffusers feed-forward spelling. THIS IS A JOINT AUDIO+VIDEO DiT and the document says so structurally: beside the video attn1/attn2 stacks at width 4096 sit a full audio tower (audio_attn1/audio_attn2, width 2048) and the two cross-modal seams, audio_to_video_attn and video_to_audio_attn, whose projections are RECTANGULAR across the two widths - audio_to_video_attn.to_q is [2048, 4096] and its to_out.0 is [4096, 2048], video_to_audio_attn.to_k and .to_v are [2048, 4096]. NO FUSION IS DECLARED ANYWHERE, and that is a measured statement rather than an omission: every attention projection in this checkpoint is stored SPLIT (to_q / to_k / to_v as separate tensors, each [4096, 4096] on the video tower and [2048, 2048] on the audio tower); there is no to_qkv tensor in any of the eight shards. MIXED DTYPE, deliberately declared per tensor: 3896 tensors are BF16 and 290 are F32, and the F32 set is exactly the adaptive-norm modulation tables - the six per-block *scale_shift_table entries across 48 blocks plus the two top-level ones. A document that flattened those to BF16 would refuse the real checkpoint. TRANSFORMER ONLY, on the tensorfs#121 rule, and every omission here is a collision that was checked: AutoencoderKLLTX2Video is shared verbatim with the LTX2LatentUpsamplePipeline artifact so declaring it would make family detection TIE (the tensorfs#122 regression); the text encoder is a stock Gemma3ForConditionalGeneration that any future Gemma lane would collide with; and the connectors and vocoder are LTX2TextConnectors / LTX2VocoderWithBWE, which are not the compile subject and do not identify the family. The transformer is the compile subject (the endpoint's Compile.targets is (\"transformer\",)) and the only component that identifies the family. Roles are a MECHANICAL transform of the diffusers spelling - transformer_blocks -> blocks, to_q/to_k/to_v/to_out -> q/k/v/out, norm_q/norm_k -> q_norm/k_norm, under a dit. prefix - and NOT an alignment with Lightricks' native single-file packaging, which this author did not read; a native <-> diffusers derive is therefore not claimed, and would need its own document and its own header evidence. The 2 x spatial latent upsampler is NOT covered here and gets no document at all: it is a 72-tensor 3-D convnet (LTX2LatentUpsamplerModel) sharing ZERO keys with this transformer, so it is an auxiliary in the Rife mould rather than a second packaging of this family. Top-level dtype is the serve-side load dtype (ctx.lane.dtype); the per-tensor dtypes are the matcher's constraint that this really is the bf16 packaging.",
+  "tensors": [
+    {
+      "role": "dit.audio_proj_in.bias",
+      "pattern": "audio_proj_in.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.audio_proj_in.weight",
+      "pattern": "audio_proj_in.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.audio_proj_out.bias",
+      "pattern": "audio_proj_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.audio_proj_out.weight",
+      "pattern": "audio_proj_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.audio_prompt_adaln.emb.timestep_embedder.linear_1.bias",
+      "pattern": "audio_prompt_adaln.emb.timestep_embedder.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.audio_prompt_adaln.emb.timestep_embedder.linear_1.weight",
+      "pattern": "audio_prompt_adaln.emb.timestep_embedder.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.audio_prompt_adaln.emb.timestep_embedder.linear_2.bias",
+      "pattern": "audio_prompt_adaln.emb.timestep_embedder.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.audio_prompt_adaln.emb.timestep_embedder.linear_2.weight",
+      "pattern": "audio_prompt_adaln.emb.timestep_embedder.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.audio_prompt_adaln.linear.bias",
+      "pattern": "audio_prompt_adaln.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.audio_prompt_adaln.linear.weight",
+      "pattern": "audio_prompt_adaln.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.audio_scale_shift_table",
+      "pattern": "audio_scale_shift_table",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.audio_time_embed.emb.timestep_embedder.linear_1.bias",
+      "pattern": "audio_time_embed.emb.timestep_embedder.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.audio_time_embed.emb.timestep_embedder.linear_1.weight",
+      "pattern": "audio_time_embed.emb.timestep_embedder.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.audio_time_embed.emb.timestep_embedder.linear_2.bias",
+      "pattern": "audio_time_embed.emb.timestep_embedder.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.audio_time_embed.emb.timestep_embedder.linear_2.weight",
+      "pattern": "audio_time_embed.emb.timestep_embedder.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.audio_time_embed.linear.bias",
+      "pattern": "audio_time_embed.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.audio_time_embed.linear.weight",
+      "pattern": "audio_time_embed.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_audio_scale_shift.emb.timestep_embedder.linear_1.bias",
+      "pattern": "av_cross_attn_audio_scale_shift.emb.timestep_embedder.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_audio_scale_shift.emb.timestep_embedder.linear_1.weight",
+      "pattern": "av_cross_attn_audio_scale_shift.emb.timestep_embedder.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_audio_scale_shift.emb.timestep_embedder.linear_2.bias",
+      "pattern": "av_cross_attn_audio_scale_shift.emb.timestep_embedder.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_audio_scale_shift.emb.timestep_embedder.linear_2.weight",
+      "pattern": "av_cross_attn_audio_scale_shift.emb.timestep_embedder.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_audio_scale_shift.linear.bias",
+      "pattern": "av_cross_attn_audio_scale_shift.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_audio_scale_shift.linear.weight",
+      "pattern": "av_cross_attn_audio_scale_shift.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_audio_v2a_gate.emb.timestep_embedder.linear_1.bias",
+      "pattern": "av_cross_attn_audio_v2a_gate.emb.timestep_embedder.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_audio_v2a_gate.emb.timestep_embedder.linear_1.weight",
+      "pattern": "av_cross_attn_audio_v2a_gate.emb.timestep_embedder.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_audio_v2a_gate.emb.timestep_embedder.linear_2.bias",
+      "pattern": "av_cross_attn_audio_v2a_gate.emb.timestep_embedder.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_audio_v2a_gate.emb.timestep_embedder.linear_2.weight",
+      "pattern": "av_cross_attn_audio_v2a_gate.emb.timestep_embedder.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_audio_v2a_gate.linear.bias",
+      "pattern": "av_cross_attn_audio_v2a_gate.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_audio_v2a_gate.linear.weight",
+      "pattern": "av_cross_attn_audio_v2a_gate.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_video_a2v_gate.emb.timestep_embedder.linear_1.bias",
+      "pattern": "av_cross_attn_video_a2v_gate.emb.timestep_embedder.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_video_a2v_gate.emb.timestep_embedder.linear_1.weight",
+      "pattern": "av_cross_attn_video_a2v_gate.emb.timestep_embedder.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_video_a2v_gate.emb.timestep_embedder.linear_2.bias",
+      "pattern": "av_cross_attn_video_a2v_gate.emb.timestep_embedder.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_video_a2v_gate.emb.timestep_embedder.linear_2.weight",
+      "pattern": "av_cross_attn_video_a2v_gate.emb.timestep_embedder.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_video_a2v_gate.linear.bias",
+      "pattern": "av_cross_attn_video_a2v_gate.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_video_a2v_gate.linear.weight",
+      "pattern": "av_cross_attn_video_a2v_gate.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_video_scale_shift.emb.timestep_embedder.linear_1.bias",
+      "pattern": "av_cross_attn_video_scale_shift.emb.timestep_embedder.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_video_scale_shift.emb.timestep_embedder.linear_1.weight",
+      "pattern": "av_cross_attn_video_scale_shift.emb.timestep_embedder.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_video_scale_shift.emb.timestep_embedder.linear_2.bias",
+      "pattern": "av_cross_attn_video_scale_shift.emb.timestep_embedder.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_video_scale_shift.emb.timestep_embedder.linear_2.weight",
+      "pattern": "av_cross_attn_video_scale_shift.emb.timestep_embedder.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_video_scale_shift.linear.bias",
+      "pattern": "av_cross_attn_video_scale_shift.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.av_cross_attn_video_scale_shift.linear.weight",
+      "pattern": "av_cross_attn_video_scale_shift.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.proj_in.bias",
+      "pattern": "proj_in.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.proj_in.weight",
+      "pattern": "proj_in.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.proj_out.bias",
+      "pattern": "proj_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.proj_out.weight",
+      "pattern": "proj_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.prompt_adaln.emb.timestep_embedder.linear_1.bias",
+      "pattern": "prompt_adaln.emb.timestep_embedder.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.prompt_adaln.emb.timestep_embedder.linear_1.weight",
+      "pattern": "prompt_adaln.emb.timestep_embedder.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.prompt_adaln.emb.timestep_embedder.linear_2.bias",
+      "pattern": "prompt_adaln.emb.timestep_embedder.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.prompt_adaln.emb.timestep_embedder.linear_2.weight",
+      "pattern": "prompt_adaln.emb.timestep_embedder.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.prompt_adaln.linear.bias",
+      "pattern": "prompt_adaln.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.prompt_adaln.linear.weight",
+      "pattern": "prompt_adaln.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.scale_shift_table",
+      "pattern": "scale_shift_table",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.time_embed.emb.timestep_embedder.linear_1.bias",
+      "pattern": "time_embed.emb.timestep_embedder.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.time_embed.emb.timestep_embedder.linear_1.weight",
+      "pattern": "time_embed.emb.timestep_embedder.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.time_embed.emb.timestep_embedder.linear_2.bias",
+      "pattern": "time_embed.emb.timestep_embedder.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.time_embed.emb.timestep_embedder.linear_2.weight",
+      "pattern": "time_embed.emb.timestep_embedder.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.time_embed.linear.bias",
+      "pattern": "time_embed.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.time_embed.linear.weight",
+      "pattern": "time_embed.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn1.k_norm.weight",
+      "pattern": "transformer_blocks.{i}.attn1.norm_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn1.q_norm.weight",
+      "pattern": "transformer_blocks.{i}.attn1.norm_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn1.gate_logits.bias",
+      "pattern": "transformer_blocks.{i}.attn1.to_gate_logits.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn1.gate_logits.weight",
+      "pattern": "transformer_blocks.{i}.attn1.to_gate_logits.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn1.k.bias",
+      "pattern": "transformer_blocks.{i}.attn1.to_k.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn1.k.weight",
+      "pattern": "transformer_blocks.{i}.attn1.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn1.out.{i}.bias",
+      "pattern": "transformer_blocks.{i}.attn1.to_out.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn1.out.{i}.weight",
+      "pattern": "transformer_blocks.{i}.attn1.to_out.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn1.q.bias",
+      "pattern": "transformer_blocks.{i}.attn1.to_q.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn1.q.weight",
+      "pattern": "transformer_blocks.{i}.attn1.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn1.v.bias",
+      "pattern": "transformer_blocks.{i}.attn1.to_v.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn1.v.weight",
+      "pattern": "transformer_blocks.{i}.attn1.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn2.k_norm.weight",
+      "pattern": "transformer_blocks.{i}.attn2.norm_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn2.q_norm.weight",
+      "pattern": "transformer_blocks.{i}.attn2.norm_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn2.gate_logits.bias",
+      "pattern": "transformer_blocks.{i}.attn2.to_gate_logits.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn2.gate_logits.weight",
+      "pattern": "transformer_blocks.{i}.attn2.to_gate_logits.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn2.k.bias",
+      "pattern": "transformer_blocks.{i}.attn2.to_k.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn2.k.weight",
+      "pattern": "transformer_blocks.{i}.attn2.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn2.out.{i}.bias",
+      "pattern": "transformer_blocks.{i}.attn2.to_out.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn2.out.{i}.weight",
+      "pattern": "transformer_blocks.{i}.attn2.to_out.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn2.q.bias",
+      "pattern": "transformer_blocks.{i}.attn2.to_q.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn2.q.weight",
+      "pattern": "transformer_blocks.{i}.attn2.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn2.v.bias",
+      "pattern": "transformer_blocks.{i}.attn2.to_v.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.attn2.v.weight",
+      "pattern": "transformer_blocks.{i}.attn2.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_a2v_cross_attn_scale_shift_table",
+      "pattern": "transformer_blocks.{i}.audio_a2v_cross_attn_scale_shift_table",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn1.k_norm.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn1.norm_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn1.q_norm.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn1.norm_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn1.gate_logits.bias",
+      "pattern": "transformer_blocks.{i}.audio_attn1.to_gate_logits.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn1.gate_logits.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn1.to_gate_logits.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn1.k.bias",
+      "pattern": "transformer_blocks.{i}.audio_attn1.to_k.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn1.k.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn1.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn1.out.{i}.bias",
+      "pattern": "transformer_blocks.{i}.audio_attn1.to_out.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn1.out.{i}.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn1.to_out.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn1.q.bias",
+      "pattern": "transformer_blocks.{i}.audio_attn1.to_q.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn1.q.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn1.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn1.v.bias",
+      "pattern": "transformer_blocks.{i}.audio_attn1.to_v.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn1.v.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn1.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn2.k_norm.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn2.norm_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn2.q_norm.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn2.norm_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn2.gate_logits.bias",
+      "pattern": "transformer_blocks.{i}.audio_attn2.to_gate_logits.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn2.gate_logits.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn2.to_gate_logits.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn2.k.bias",
+      "pattern": "transformer_blocks.{i}.audio_attn2.to_k.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn2.k.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn2.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn2.out.{i}.bias",
+      "pattern": "transformer_blocks.{i}.audio_attn2.to_out.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn2.out.{i}.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn2.to_out.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn2.q.bias",
+      "pattern": "transformer_blocks.{i}.audio_attn2.to_q.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn2.q.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn2.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn2.v.bias",
+      "pattern": "transformer_blocks.{i}.audio_attn2.to_v.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_attn2.v.weight",
+      "pattern": "transformer_blocks.{i}.audio_attn2.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_ff.net.{i}.bias",
+      "pattern": "transformer_blocks.{i}.audio_ff.net.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_ff.net.{i}.proj.bias",
+      "pattern": "transformer_blocks.{i}.audio_ff.net.{i}.proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_ff.net.{i}.proj.weight",
+      "pattern": "transformer_blocks.{i}.audio_ff.net.{i}.proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_ff.net.{i}.weight",
+      "pattern": "transformer_blocks.{i}.audio_ff.net.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_prompt_scale_shift_table",
+      "pattern": "transformer_blocks.{i}.audio_prompt_scale_shift_table",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_scale_shift_table",
+      "pattern": "transformer_blocks.{i}.audio_scale_shift_table",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_to_video_attn.k_norm.weight",
+      "pattern": "transformer_blocks.{i}.audio_to_video_attn.norm_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_to_video_attn.q_norm.weight",
+      "pattern": "transformer_blocks.{i}.audio_to_video_attn.norm_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_to_video_attn.gate_logits.bias",
+      "pattern": "transformer_blocks.{i}.audio_to_video_attn.to_gate_logits.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_to_video_attn.gate_logits.weight",
+      "pattern": "transformer_blocks.{i}.audio_to_video_attn.to_gate_logits.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_to_video_attn.k.bias",
+      "pattern": "transformer_blocks.{i}.audio_to_video_attn.to_k.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_to_video_attn.k.weight",
+      "pattern": "transformer_blocks.{i}.audio_to_video_attn.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_to_video_attn.out.{i}.bias",
+      "pattern": "transformer_blocks.{i}.audio_to_video_attn.to_out.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_to_video_attn.out.{i}.weight",
+      "pattern": "transformer_blocks.{i}.audio_to_video_attn.to_out.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_to_video_attn.q.bias",
+      "pattern": "transformer_blocks.{i}.audio_to_video_attn.to_q.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_to_video_attn.q.weight",
+      "pattern": "transformer_blocks.{i}.audio_to_video_attn.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_to_video_attn.v.bias",
+      "pattern": "transformer_blocks.{i}.audio_to_video_attn.to_v.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.audio_to_video_attn.v.weight",
+      "pattern": "transformer_blocks.{i}.audio_to_video_attn.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.ff.net.{i}.bias",
+      "pattern": "transformer_blocks.{i}.ff.net.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.ff.net.{i}.proj.bias",
+      "pattern": "transformer_blocks.{i}.ff.net.{i}.proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.ff.net.{i}.proj.weight",
+      "pattern": "transformer_blocks.{i}.ff.net.{i}.proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.ff.net.{i}.weight",
+      "pattern": "transformer_blocks.{i}.ff.net.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.prompt_scale_shift_table",
+      "pattern": "transformer_blocks.{i}.prompt_scale_shift_table",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.scale_shift_table",
+      "pattern": "transformer_blocks.{i}.scale_shift_table",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.video_a2v_cross_attn_scale_shift_table",
+      "pattern": "transformer_blocks.{i}.video_a2v_cross_attn_scale_shift_table",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.video_to_audio_attn.k_norm.weight",
+      "pattern": "transformer_blocks.{i}.video_to_audio_attn.norm_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.video_to_audio_attn.q_norm.weight",
+      "pattern": "transformer_blocks.{i}.video_to_audio_attn.norm_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.video_to_audio_attn.gate_logits.bias",
+      "pattern": "transformer_blocks.{i}.video_to_audio_attn.to_gate_logits.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.video_to_audio_attn.gate_logits.weight",
+      "pattern": "transformer_blocks.{i}.video_to_audio_attn.to_gate_logits.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.video_to_audio_attn.k.bias",
+      "pattern": "transformer_blocks.{i}.video_to_audio_attn.to_k.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.video_to_audio_attn.k.weight",
+      "pattern": "transformer_blocks.{i}.video_to_audio_attn.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.video_to_audio_attn.out.{i}.bias",
+      "pattern": "transformer_blocks.{i}.video_to_audio_attn.to_out.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.video_to_audio_attn.out.{i}.weight",
+      "pattern": "transformer_blocks.{i}.video_to_audio_attn.to_out.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.video_to_audio_attn.q.bias",
+      "pattern": "transformer_blocks.{i}.video_to_audio_attn.to_q.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.video_to_audio_attn.q.weight",
+      "pattern": "transformer_blocks.{i}.video_to_audio_attn.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.video_to_audio_attn.v.bias",
+      "pattern": "transformer_blocks.{i}.video_to_audio_attn.to_v.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "dit.blocks.{i}.video_to_audio_attn.v.weight",
+      "pattern": "transformer_blocks.{i}.video_to_audio_attn.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    }
+  ]
+}

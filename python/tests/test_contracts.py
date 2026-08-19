@@ -37,6 +37,9 @@ RUST_PINNED = {
     "hidream-o1.diffusers-bf16@1": (
         "69003d11e2cb3b52628cb05e02c275916db74e318eabbce2f6e89be625c7e01f"
     ),
+    "ltx-2.diffusers-bf16@1": (
+        "71038ae11883111d367077eec59a457b97c8746439c3b7bc0885555e26b7aa12"
+    ),
     "minimax.h3-dit-diffusers@1": (
         "22bbb607d3e4351c18ac55e8d86c8a8a3d03296309b80e4419d4bc5153481f28"
     ),
