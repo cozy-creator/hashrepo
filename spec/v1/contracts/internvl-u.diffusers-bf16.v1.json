@@ -1,0 +1,455 @@
+{
+  "format": "tensorfs-contract-v1",
+  "name": "internvl-u.diffusers-bf16",
+  "version": 1,
+  "dtype": "bfloat16",
+  "description": "The canonical InternVL-U serve layout: the diffusers InternVLUGenerationDecoder (the InternVLUTransformer2DModel MMDiT inside InternVLUPipeline), every declaration derived from the real safetensors header of InternVL-U/InternVL-U at revision f012d760e69712bb47f7d3d09a24280f346cee01 - the PUBLIC, UNGATED original, not a community mirror. GENERATION DECODER ONLY, deliberately, on the tensorfs#121 rule, and both exclusions are load-bearing. The vae is AutoencoderKLQwenImage - literally the qwen-image family's autoencoder - so declaring it would tie family detection ACROSS FAMILY LINES, which is the tensorfs#122 regression with a longer reach than the usual within-family shared VAE. The vlm component is an InternViT-300M vision tower (24 layers, width 1024, FUSED attn.qkv.weight [3072, 1024]) over a stock Qwen3 language model (28 layers, width 2048, vocab 151936, with the q_norm/k_norm QK-norm signature), and both are stock spellings that a future InternViT or Qwen3 lane would collide with, exactly as flux2-klein excludes its stock Qwen3ForCausalLM text encoder. The generation decoder is the compile subject and the only component that identifies this family. THE ATTENTION IS SPLIT AND ASYMMETRIC, and this is the trap: to_q is [3072, 1536] while to_k and to_v are [1536, 1536], so the stream carries 24 query heads of 128 against 12 kv heads - fusing q|k|v in equal thirds on the flux/klein analogy produces a WRONG document. The same asymmetry holds on the text stream (add_q_proj [3072, 1536] against add_k_proj/add_v_proj [1536, 1536]). Dual-stream MMDiT: 20 blocks, width 1536, joint_attention_dim 4096, patch_size 2, in_channels 64, out_channels 16, which the shipped generation_decoder/config.json states independently. THE DTYPE IS MIXED AND THE MIX IS STRUCTURED: 618 of 654 tensors are BF16, and the 36 that are F32 are exactly the whole final block (transformer_blocks.19.*) plus norm_out and proj_out - the standard fp32 output island for numerical stability. The hub and the upstream both advertise a flat bf16, so the advertised dtype is WRONG at tensor granularity and this document was dtype-histogrammed rather than trusting it. Top-level dtype is the serve-side load dtype (ctx.lane.dtype); the per-tensor dtypes are the matcher's constraint, and the block patterns therefore accept BF16 or F32 because block 19 genuinely differs from blocks 0-18.",
+  "tensors": [
+    {
+      "role": "img_in.bias",
+      "pattern": "decoder.img_in.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "img_in.weight",
+      "pattern": "decoder.img_in.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "final_layer.adaln.bias",
+      "pattern": "decoder.norm_out.linear.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "final_layer.adaln.weight",
+      "pattern": "decoder.norm_out.linear.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "final_layer.linear.bias",
+      "pattern": "decoder.proj_out.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "final_layer.linear.weight",
+      "pattern": "decoder.proj_out.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "time_embed.fc1.bias",
+      "pattern": "decoder.time_text_embed.timestep_embedder.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "time_embed.fc1.weight",
+      "pattern": "decoder.time_text_embed.timestep_embedder.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "time_embed.fc2.bias",
+      "pattern": "decoder.time_text_embed.timestep_embedder.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "time_embed.fc2.weight",
+      "pattern": "decoder.time_text_embed.timestep_embedder.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.qkv#k.bias",
+      "pattern": "decoder.transformer_blocks.{i}.attn.add_k_proj.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.qkv#k.weight",
+      "pattern": "decoder.transformer_blocks.{i}.attn.add_k_proj.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.qkv#q.bias",
+      "pattern": "decoder.transformer_blocks.{i}.attn.add_q_proj.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.qkv#q.weight",
+      "pattern": "decoder.transformer_blocks.{i}.attn.add_q_proj.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.qkv#v.bias",
+      "pattern": "decoder.transformer_blocks.{i}.attn.add_v_proj.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.qkv#v.weight",
+      "pattern": "decoder.transformer_blocks.{i}.attn.add_v_proj.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.norm_k.weight",
+      "pattern": "decoder.transformer_blocks.{i}.attn.norm_added_k.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.norm_q.weight",
+      "pattern": "decoder.transformer_blocks.{i}.attn.norm_added_q.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.norm_k.weight",
+      "pattern": "decoder.transformer_blocks.{i}.attn.norm_k.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.norm_q.weight",
+      "pattern": "decoder.transformer_blocks.{i}.attn.norm_q.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.out.bias",
+      "pattern": "decoder.transformer_blocks.{i}.attn.to_add_out.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.out.weight",
+      "pattern": "decoder.transformer_blocks.{i}.attn.to_add_out.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.qkv#k.bias",
+      "pattern": "decoder.transformer_blocks.{i}.attn.to_k.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.qkv#k.weight",
+      "pattern": "decoder.transformer_blocks.{i}.attn.to_k.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.out.bias",
+      "pattern": "decoder.transformer_blocks.{i}.attn.to_out.0.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.out.weight",
+      "pattern": "decoder.transformer_blocks.{i}.attn.to_out.0.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.qkv#q.bias",
+      "pattern": "decoder.transformer_blocks.{i}.attn.to_q.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.qkv#q.weight",
+      "pattern": "decoder.transformer_blocks.{i}.attn.to_q.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.qkv#v.bias",
+      "pattern": "decoder.transformer_blocks.{i}.attn.to_v.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.qkv#v.weight",
+      "pattern": "decoder.transformer_blocks.{i}.attn.to_v.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_mlp.fc1.bias",
+      "pattern": "decoder.transformer_blocks.{i}.img_mlp.net.0.proj.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_mlp.fc1.weight",
+      "pattern": "decoder.transformer_blocks.{i}.img_mlp.net.0.proj.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_mlp.fc2.bias",
+      "pattern": "decoder.transformer_blocks.{i}.img_mlp.net.2.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_mlp.fc2.weight",
+      "pattern": "decoder.transformer_blocks.{i}.img_mlp.net.2.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_mod.bias",
+      "pattern": "decoder.transformer_blocks.{i}.img_mod.1.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_mod.weight",
+      "pattern": "decoder.transformer_blocks.{i}.img_mod.1.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_mlp.fc1.bias",
+      "pattern": "decoder.transformer_blocks.{i}.txt_mlp.net.0.proj.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_mlp.fc1.weight",
+      "pattern": "decoder.transformer_blocks.{i}.txt_mlp.net.0.proj.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_mlp.fc2.bias",
+      "pattern": "decoder.transformer_blocks.{i}.txt_mlp.net.2.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_mlp.fc2.weight",
+      "pattern": "decoder.transformer_blocks.{i}.txt_mlp.net.2.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_mod.bias",
+      "pattern": "decoder.transformer_blocks.{i}.txt_mod.1.bias",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_mod.weight",
+      "pattern": "decoder.transformer_blocks.{i}.txt_mod.1.weight",
+      "dtypes": [
+        "BF16",
+        "F32"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "txt_in.bias",
+      "pattern": "decoder.txt_in.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "txt_in.weight",
+      "pattern": "decoder.txt_in.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "txt_norm.weight",
+      "pattern": "decoder.txt_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "encoder_padding_token",
+      "pattern": "encoder_padding_token",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    }
+  ]
+}
