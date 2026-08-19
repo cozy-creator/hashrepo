@@ -101,6 +101,10 @@ pub const BUILTIN: &[(&str, &str)] = &[
         include_str!("../../../spec/v1/contracts/sdxl.diffusers-fp8-rowwise.v1.json"),
     ),
     (
+        "trellis2.dit-bf16.v1.json",
+        include_str!("../../../spec/v1/contracts/trellis2.dit-bf16.v1.json"),
+    ),
+    (
         "wan22.diffusers-bf16.v1.json",
         include_str!("../../../spec/v1/contracts/wan22.diffusers-bf16.v1.json"),
     ),

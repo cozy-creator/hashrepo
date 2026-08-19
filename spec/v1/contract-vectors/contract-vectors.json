@@ -74,6 +74,12 @@
       "stamp": "sdxl.diffusers-fp8-rowwise@1"
     },
     {
+      "name": "trellis2.dit-bf16.v1",
+      "file": "contracts/trellis2.dit-bf16.v1.json",
+      "digest": "0a17d920f563166cc8fb3177f340125c19daffb4136390e955ac27476d5d7b95",
+      "stamp": "trellis2.dit-bf16@1"
+    },
+    {
       "name": "wan22.diffusers-bf16.v1",
       "file": "contracts/wan22.diffusers-bf16.v1.json",
       "digest": "91036beea9878c462311d97a878a5dc94128283182fbf0948b30118852d97bd5",
