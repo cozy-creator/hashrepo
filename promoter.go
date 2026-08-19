@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -19,22 +20,25 @@ type StoredObject struct {
 	Checksum  *Ref
 }
 
-// PromotionStore is the object-store seam required for staged publication.
+// PromotionStore is the object-store seam required for publication.
 //
-// Implementations are called concurrently. PromoteVerified must atomically
-// bind verification of the staged source's digest and length to the copy, then
-// return the store-asserted state of the immutable destination. A plain
-// inspect-then-copy sequence does not satisfy this contract.
+// th#2184 — there is ONE call, and it moves no bytes. Uploads are granted
+// straight at the content-addressed destination with the digest bound inside
+// the signature, so by the time a promotion runs the store either holds the
+// declared bytes at the declared key or it does not, and the promotion's whole
+// job is to say which with the store's own assertion. The copy this interface
+// used to demand made every promoted byte cross the process that minted the
+// grant; deleting it is the fix, not an optimization of it.
+//
+// Implementations are called concurrently.
 type PromotionStore interface {
 	Inspect(context.Context, string) (StoredObject, error)
-	PromoteVerified(context.Context, StagedObject, string) (StoredObject, error)
 }
 
 // PromotionReport is one retryable promotion pass with explicit denominators.
 type PromotionReport struct {
 	Objects           int      `json:"objects"`
-	Copied            int      `json:"copied"`
-	AlreadyResident   int      `json:"already_resident"`
+	Resident          int      `json:"resident"`
 	ChecksumConfirmed int      `json:"checksum_confirmed"`
 	Failed            []Ref    `json:"failed,omitempty"`
 	Errors            []string `json:"errors,omitempty"`
@@ -44,10 +48,11 @@ type PromotionReport struct {
 func (r PromotionReport) Complete() bool {
 	return len(r.Failed) == 0 &&
 		r.ChecksumConfirmed == r.Objects &&
-		r.Copied+r.AlreadyResident == r.Objects
+		r.Resident == r.Objects
 }
 
-// Promoter verifies and promotes staged uploads into immutable CAS keys.
+// Promoter confirms that every declared object is resident at its immutable
+// CAS key under the store's own checksum assertion.
 type Promoter struct {
 	Store        PromotionStore
 	ObjectPrefix string
@@ -55,17 +60,11 @@ type Promoter struct {
 }
 
 type promotionResult struct {
-	copied          bool
-	alreadyResident bool
-	err             error
+	resident bool
+	err      error
 }
 
-type promotionObject struct {
-	StagedObject
-	residentOnly bool
-}
-
-func requireStoredObject(state StoredObject, object StagedObject, where string) error {
+func requireStoredObject(state StoredObject, object PlannedObject, where string) error {
 	if !state.Present {
 		return fmt.Errorf("%s object is absent", where)
 	}
@@ -104,10 +103,13 @@ func declaredObjects(manifest Manifest) (map[Ref]int64, error) {
 }
 
 // validatePromotionPlan turns the mutable wire Plan into a trusted work list.
-// It also proves that staging cleanup can be left exclusively to the
-// session-scoped object-store lifecycle; the generic promoter never deletes a
-// caller-supplied key.
-func validatePromotionPlan(plan Plan) ([]promotionObject, error) {
+//
+// Every entry — resident-at-declare and granted-but-not-yet-observed alike —
+// is adjudicated at the SAME key, recomputed here from the digest and the
+// plan's own namespace. A caller-supplied key is never trusted and never
+// followed, which is what keeps a mutated plan from pointing a confirmation at
+// somebody else's object.
+func validatePromotionPlan(plan Plan, prefix string) ([]PlannedObject, error) {
 	if !sessionPattern.MatchString(plan.SessionID) {
 		return nil, errors.New("promotion plan has an invalid session id")
 	}
@@ -116,48 +118,54 @@ func validatePromotionPlan(plan Plan) ([]promotionObject, error) {
 		return nil, fmt.Errorf("promotion manifest: %w", err)
 	}
 	partitioned := make(map[Ref]bool, len(declared))
-	objects := make([]promotionObject, 0, len(declared))
+	objects := make([]PlannedObject, 0, len(declared))
+	add := func(ref Ref, size int64) error {
+		if partitioned[ref] {
+			return fmt.Errorf("object %s appears more than once in the plan", ref)
+		}
+		key, keyErr := UploadKey(prefix, ref)
+		if keyErr != nil {
+			return keyErr
+		}
+		partitioned[ref] = true
+		objects = append(objects, PlannedObject{
+			Object: Object{Digest: ref, SizeBytes: size}, UploadKey: key,
+		})
+		return nil
+	}
 	for _, ref := range plan.Have {
 		size, found := declared[ref]
 		if !found {
 			return nil, fmt.Errorf("resident object %s is not declared by the manifest", ref)
 		}
-		if partitioned[ref] {
-			return nil, fmt.Errorf("object %s appears more than once in the plan", ref)
+		if err := add(ref, size); err != nil {
+			return nil, err
 		}
-		partitioned[ref] = true
-		objects = append(objects, promotionObject{
-			StagedObject: StagedObject{Object: Object{Digest: ref, SizeBytes: size}},
-			residentOnly: true,
-		})
 	}
-	pending := plan.PendingObjects()
-	for _, object := range pending {
+	for _, object := range plan.PendingObjects() {
 		size, found := declared[object.Digest]
 		if !found {
-			return nil, fmt.Errorf("staged object %s is not declared by the manifest", object.Digest)
+			return nil, fmt.Errorf("granted object %s is not declared by the manifest", object.Digest)
 		}
 		if size != object.SizeBytes {
 			return nil, fmt.Errorf(
-				"staged object %s is %d bytes, manifest declares %d",
+				"granted object %s is %d bytes, manifest declares %d",
 				object.Digest, object.SizeBytes, size,
 			)
 		}
-		if partitioned[object.Digest] {
-			return nil, fmt.Errorf("object %s appears more than once in the plan", object.Digest)
-		}
-		expected, keyErr := StagedKey(plan.SessionID, object.Digest)
+		expected, keyErr := UploadKey(prefix, object.Digest)
 		if keyErr != nil {
 			return nil, keyErr
 		}
-		if object.StagingKey != expected {
+		if object.UploadKey != expected {
 			return nil, fmt.Errorf(
-				"staging key %q is outside session %q; expected %q",
-				object.StagingKey, plan.SessionID, expected,
+				"grant key %q is outside the plan namespace; expected %q",
+				object.UploadKey, expected,
 			)
 		}
-		partitioned[object.Digest] = true
-		objects = append(objects, promotionObject{StagedObject: object})
+		if err := add(object.Digest, size); err != nil {
+			return nil, err
+		}
 	}
 	if len(partitioned) != len(declared) {
 		return nil, fmt.Errorf(
@@ -167,55 +175,51 @@ func validatePromotionPlan(plan Plan) ([]promotionObject, error) {
 	return objects, nil
 }
 
-func (p Promoter) promoteOne(ctx context.Context, planned promotionObject) promotionResult {
-	object := planned.StagedObject
+func (p Promoter) promoteOne(ctx context.Context, object PlannedObject) promotionResult {
 	if err := ctx.Err(); err != nil {
 		return promotionResult{err: err}
 	}
-	destination, err := object.Digest.ObjectKey(p.ObjectPrefix)
+	state, err := p.Store.Inspect(ctx, object.UploadKey)
 	if err != nil {
+		return promotionResult{err: fmt.Errorf("residency inspection: %w", err)}
+	}
+	if !state.Present {
+		// RETRYABLE and precise: the grant was minted, the bytes never
+		// arrived. A later pass over the same content-addressed key confirms
+		// whatever has landed since.
+		return promotionResult{err: errors.New("object is absent at its content-addressed key")}
+	}
+	// A poisoned destination is repaired the same way it was written: the
+	// planner reports it non-resident and grants a fresh checksum-enforced
+	// upload over it. There is nothing for a promotion to heal.
+	if err := requireStoredObject(state, object, "resident"); err != nil {
 		return promotionResult{err: err}
 	}
-	resident, err := p.Store.Inspect(ctx, destination)
-	if err != nil {
-		return promotionResult{err: fmt.Errorf("resident inspection: %w", err)}
-	}
-	if resident.Present {
-		if err := requireStoredObject(resident, object, "resident"); err == nil {
-			return promotionResult{alreadyResident: true}
-		}
-		// A poisoned destination can be repaired only through the same atomic,
-		// verified staging operation used for first publication.
-	}
-	if planned.residentOnly {
-		if resident.Present {
-			return promotionResult{err: errors.New("resident object has invalid checksum or size")}
-		}
-		return promotionResult{err: errors.New("resident object is absent")}
-	}
-
-	resident, err = p.Store.PromoteVerified(ctx, object, destination)
-	if err != nil {
-		return promotionResult{err: fmt.Errorf("verified promotion: %w", err)}
-	}
-	if err := requireStoredObject(resident, object, "promoted"); err != nil {
-		return promotionResult{err: err}
-	}
-	return promotionResult{copied: true}
+	return promotionResult{resident: true}
 }
 
 // Promote validates the complete plan before making any store call, then
-// checksum-confirms every destination. Per-object failures remain retryable.
+// checksum-confirms every destination. It reads NO object bytes: the whole
+// pass is one HEAD per distinct object. Per-object failures remain retryable —
+// the destination is content-addressed, so a later pass sees whatever landed
+// in between and nothing it confirmed can change underneath it.
 func (p Promoter) Promote(ctx context.Context, plan Plan) (PromotionReport, error) {
 	if p.Store == nil {
 		return PromotionReport{}, errors.New("tensorfs: promotion store is required")
 	}
-	objects, err := validatePromotionPlan(plan)
+	if p.ObjectPrefix == "" {
+		p.ObjectPrefix = defaultObjectPrefix
+	}
+	// The plan's own namespace wins when it carries one: grants were minted
+	// into it, and confirming a different one would look for objects nobody
+	// was ever authorized to write.
+	prefix := p.ObjectPrefix
+	if planPrefix := strings.TrimSpace(plan.ObjectPrefix); planPrefix != "" {
+		prefix = planPrefix
+	}
+	objects, err := validatePromotionPlan(plan, prefix)
 	if err != nil {
 		return PromotionReport{}, err
-	}
-	if p.ObjectPrefix == "" {
-		p.ObjectPrefix = "objects"
 	}
 	report := PromotionReport{Objects: len(objects)}
 	if len(objects) == 0 {
@@ -255,16 +259,13 @@ send:
 	}
 
 	for index, result := range results {
-		object := objects[index].StagedObject
+		object := objects[index]
 		switch {
 		case result.err != nil:
 			report.Failed = append(report.Failed, object.Digest)
 			report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", object.Digest, result.err))
-		case result.copied:
-			report.Copied++
-			report.ChecksumConfirmed++
-		case result.alreadyResident:
-			report.AlreadyResident++
+		case result.resident:
+			report.Resident++
 			report.ChecksumConfirmed++
 		}
 	}

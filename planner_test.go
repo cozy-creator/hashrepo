@@ -28,7 +28,7 @@ func TestGrantMatchesSharedV1Vector(t *testing.T) {
 	}
 	wantExpiry := time.Date(2026, 8, 13, 12, 10, 0, 0, time.UTC)
 	if grant.Digest != wantDigest || grant.SizeBytes != 18 ||
-		grant.StagingKey != "staging/sha256/session-1/"+wantDigest.Hex() ||
+		grant.UploadKey != "blobs/sha256/"+wantDigest.Hex()[:2]+"/"+wantDigest.Hex()[2:4]+"/"+wantDigest.Hex() ||
 		grant.URL != "https://objects.invalid/upload?token=v1" ||
 		grant.ExpiresAt != wantExpiry {
 		t.Fatalf("decoded grant does not match v1 vector: %+v", grant)
@@ -88,7 +88,8 @@ func TestEverySharedInvalidGrantIsRefused(t *testing.T) {
 type memoryStore struct {
 	resident map[Ref]bool
 	staged   map[Ref]bool
-	granted  []StagedObject
+	granted  []PlannedObject
+	sessions []string
 	emptyURL bool
 }
 
@@ -100,16 +101,9 @@ func (s *memoryStore) Residency(_ context.Context, objects []Object) (map[Ref]bo
 	return answer, nil
 }
 
-func (s *memoryStore) StagedResidency(_ context.Context, _ string, objects []Object) (map[Ref]bool, error) {
-	answer := make(map[Ref]bool, len(objects))
-	for _, object := range objects {
-		answer[object.Digest] = s.staged[object.Digest]
-	}
-	return answer, nil
-}
-
-func (s *memoryStore) PresignPut(_ context.Context, object StagedObject, _ time.Duration) (string, map[string]string, error) {
+func (s *memoryStore) PresignPut(_ context.Context, sessionID string, object PlannedObject, _ time.Duration) (string, map[string]string, error) {
 	s.granted = append(s.granted, object)
+	s.sessions = append(s.sessions, sessionID)
 	if s.emptyURL {
 		return "", nil, nil
 	}
@@ -185,10 +179,11 @@ func TestPlanDeduplicatesResumesAndHidesUnclaimableResidency(t *testing.T) {
 	}
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	planner := Planner{
-		Store:    store,
-		Claims:   denyClaims{hello: true},
-		GrantTTL: 10 * time.Minute,
-		Now:      func() time.Time { return now },
+		Store:        store,
+		Claims:       denyClaims{hello: true},
+		ObjectPrefix: "blobs",
+		GrantTTL:     10 * time.Minute,
+		Now:          func() time.Time { return now },
 	}
 	plan, err := planner.Plan(context.Background(), "session-1", manifest)
 	if err != nil {
@@ -200,17 +195,71 @@ func TestPlanDeduplicatesResumesAndHidesUnclaimableResidency(t *testing.T) {
 	if len(plan.Have) != 1 || plan.Have[0] != empty {
 		t.Fatalf("have = %v, want only empty object", plan.Have)
 	}
-	if len(plan.Staged) != 1 || plan.Staged[0].Digest != firstChunk {
-		t.Fatalf("staged = %v, want first large-file chunk", plan.Staged)
-	}
-	if len(plan.Need) != 2 {
-		t.Fatalf("need = %d, want final chunk plus unclaimable hello", len(plan.Need))
+	// th#2184: a previously-uploaded object is RESIDENT — it sits at its final
+	// key — so there is no second "staged" bucket and no second probe. The
+	// store's `staged` map is deliberately populated here and deliberately
+	// ignored: `firstChunk` is granted again because nothing observed it.
+	if len(plan.Need) != 3 {
+		t.Fatalf("need = %d, want both chunks plus unclaimable hello", len(plan.Need))
 	}
 	if plan.Need[0].ExpiresAt != now.Add(10*time.Minute) {
 		t.Fatalf("grant expiry = %s", plan.Need[0].ExpiresAt)
 	}
 	if len(plan.PendingObjects()) != 3 {
-		t.Fatalf("pending = %d, want staged + need", len(plan.PendingObjects()))
+		t.Fatalf("pending = %d, want the granted set", len(plan.PendingObjects()))
+	}
+	// Every grant points at the FINAL content key, and the session id reaches
+	// the store so it can bind a possession witness into the same signature.
+	for _, grant := range plan.Need {
+		want, err := grant.Digest.ObjectKey("blobs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if grant.UploadKey != want {
+			t.Fatalf("grant key = %q, want the final CAS key %q", grant.UploadKey, want)
+		}
+	}
+	for _, session := range store.sessions {
+		if session != "session-1" {
+			t.Fatalf("PresignPut saw session %q, want session-1", session)
+		}
+	}
+}
+
+// TestPlanReplanAdoptsWhatLandedWithoutASecondProbe is the resume proof: the
+// bytes a dead pod already PUT are found by the ORDINARY residency probe,
+// because they are already at their final key.
+func TestPlanReplanAdoptsWhatLandedWithoutASecondProbe(t *testing.T) {
+	manifest := sharedManifest(t)
+	store := &memoryStore{resident: map[Ref]bool{}, staged: map[Ref]bool{}}
+	planner := Planner{Store: store, ObjectPrefix: "blobs"}
+	first, err := planner.Plan(context.Background(), "session-1", manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Need) != 4 || len(first.Have) != 0 {
+		t.Fatalf("first plan = %d need / %d have, want 4/0", len(first.Need), len(first.Have))
+	}
+	// The client uploads three of the four. Nothing tells the hub; the objects
+	// simply exist at their final keys now.
+	for _, grant := range first.Need[:3] {
+		store.resident[grant.Digest] = true
+	}
+	again, err := planner.Plan(context.Background(), "session-1", manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Have) != 3 || len(again.Need) != 1 {
+		t.Fatalf("re-plan = %d have / %d need, want 3/1", len(again.Have), len(again.Need))
+	}
+	// A DIFFERENT session resumes onto the same landed bytes — the old
+	// session-scoped staging prefix made that impossible.
+	crossPod, err := planner.Plan(context.Background(), "session-2", manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(crossPod.Have) != 3 || len(crossPod.Need) != 1 {
+		t.Fatalf("cross-session re-plan = %d have / %d need, want 3/1", len(crossPod.Have), len(crossPod.Need))
 	}
 }
 
