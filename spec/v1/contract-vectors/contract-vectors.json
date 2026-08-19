@@ -26,6 +26,12 @@
       "stamp": "hidream-o1.diffusers-bf16@1"
     },
     {
+      "name": "ltx-2.diffusers-bf16.v1",
+      "file": "contracts/ltx-2.diffusers-bf16.v1.json",
+      "digest": "71038ae11883111d367077eec59a457b97c8746439c3b7bc0885555e26b7aa12",
+      "stamp": "ltx-2.diffusers-bf16@1"
+    },
+    {
       "name": "minimax.h3-dit-diffusers.v1",
       "file": "contracts/minimax.h3-dit-diffusers.v1.json",
       "digest": "22bbb607d3e4351c18ac55e8d86c8a8a3d03296309b80e4419d4bc5153481f28",
