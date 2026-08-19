@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -16,6 +15,10 @@ import (
 )
 
 const defaultGrantTTL = 30 * time.Minute
+
+// defaultObjectPrefix is the CAS namespace a planner grants into when its
+// owner names none. It is the promoter's default destination prefix too.
+const defaultObjectPrefix = "objects"
 
 const (
 	defaultMaxFiles      = 100_000
@@ -32,36 +35,50 @@ type Object struct {
 	SizeBytes int64 `json:"size_bytes"`
 }
 
-// StagedObject is an object owned by one incomplete publication session.
-type StagedObject struct {
+// PlannedObject is one declared object plus the exact key its upload grant
+// writes to.
+//
+// th#2184 — that key is the object's FINAL content-addressed destination, not
+// a session-scoped staging key. A CAS namespace does not need a quarantine:
+// the grant binds the digest INSIDE the signature, so the store refuses any
+// body that does not hash to the name it was granted, and an object at
+// `<prefix>/sha256/…` is byte-identical to what any other publisher of that
+// digest would write. Nothing unreferenced is reachable, and the collector
+// already reclaims it. Staging bought one property — "the bytes are somewhere
+// else until we say so" — and cost every promoted byte a round trip through
+// the control plane that minted the grant.
+//
+// The JSON name stays `staging_key` because deployed publishers parse it; it
+// is inert on the client side (carried, never used).
+type PlannedObject struct {
 	Object
-	StagingKey string `json:"staging_key"`
+	UploadKey string `json:"staging_key"`
 }
 
 // Grant is a verbatim, expiring HTTP PUT authorization.
 type Grant struct {
-	StagedObject
+	PlannedObject
 	URL       string            `json:"url"`
 	Headers   map[string]string `json:"headers"`
 	ExpiresAt time.Time         `json:"expires_at"`
 }
 
 type wireGrant struct {
-	Digest     Ref               `json:"digest"`
-	SizeBytes  *int64            `json:"size_bytes"`
-	StagingKey string            `json:"staging_key"`
-	URL        string            `json:"url"`
-	Headers    map[string]string `json:"headers"`
-	ExpiresAt  string            `json:"expires_at"`
+	Digest    Ref               `json:"digest"`
+	SizeBytes *int64            `json:"size_bytes"`
+	UploadKey string            `json:"staging_key"`
+	URL       string            `json:"url"`
+	Headers   map[string]string `json:"headers"`
+	ExpiresAt string            `json:"expires_at"`
 }
 
 // MarshalJSON keeps the v1 grant wire shape stable. In particular, no headers
 // is an empty object rather than null: clients can always pass the value
 // directly to an HTTP request without a nullable special case.
 func (g Grant) MarshalJSON() ([]byte, error) {
-	if g.Digest.hex == "" || g.SizeBytes < 0 || strings.TrimSpace(g.StagingKey) == "" ||
+	if g.Digest.hex == "" || g.SizeBytes < 0 || strings.TrimSpace(g.UploadKey) == "" ||
 		strings.TrimSpace(g.URL) == "" || g.ExpiresAt.IsZero() {
-		return nil, errors.New("grant requires digest, non-negative size, staging key, URL and expiry")
+		return nil, errors.New("grant requires digest, non-negative size, upload key, URL and expiry")
 	}
 	headers := g.Headers
 	if headers == nil {
@@ -69,12 +86,12 @@ func (g Grant) MarshalJSON() ([]byte, error) {
 	}
 	sizeBytes := g.SizeBytes
 	return json.Marshal(wireGrant{
-		Digest:     g.Digest,
-		SizeBytes:  &sizeBytes,
-		StagingKey: g.StagingKey,
-		URL:        g.URL,
-		Headers:    headers,
-		ExpiresAt:  g.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		Digest:    g.Digest,
+		SizeBytes: &sizeBytes,
+		UploadKey: g.UploadKey,
+		URL:       g.URL,
+		Headers:   headers,
+		ExpiresAt: g.ExpiresAt.UTC().Format(time.RFC3339Nano),
 	})
 }
 
@@ -97,14 +114,14 @@ func (g *Grant) UnmarshalJSON(data []byte) error {
 	if err != nil || !strings.HasSuffix(wire.ExpiresAt, "Z") {
 		return errors.New("grant expiry must be an RFC 3339 UTC timestamp ending in Z")
 	}
-	if wire.Digest.hex == "" || wire.SizeBytes == nil || *wire.SizeBytes < 0 || strings.TrimSpace(wire.StagingKey) == "" ||
+	if wire.Digest.hex == "" || wire.SizeBytes == nil || *wire.SizeBytes < 0 || strings.TrimSpace(wire.UploadKey) == "" ||
 		strings.TrimSpace(wire.URL) == "" || expiresAt.IsZero() {
-		return errors.New("grant requires digest, non-negative size, staging key, URL and expiry")
+		return errors.New("grant requires digest, non-negative size, upload key, URL and expiry")
 	}
 	*g = Grant{
-		StagedObject: StagedObject{
-			Object:     Object{Digest: wire.Digest, SizeBytes: *wire.SizeBytes},
-			StagingKey: wire.StagingKey,
+		PlannedObject: PlannedObject{
+			Object:    Object{Digest: wire.Digest, SizeBytes: *wire.SizeBytes},
+			UploadKey: wire.UploadKey,
 		},
 		URL:       wire.URL,
 		Headers:   wire.Headers,
@@ -115,26 +132,31 @@ func (g *Grant) UnmarshalJSON(data []byte) error {
 
 // Plan is the complete answer to a repository declaration.
 type Plan struct {
-	SessionID string         `json:"session_id"`
-	Manifest  Manifest       `json:"manifest"`
-	Have      []Ref          `json:"have"`
-	Staged    []StagedObject `json:"staged,omitempty"`
-	Need      []Grant        `json:"need"`
+	SessionID string   `json:"session_id"`
+	Manifest  Manifest `json:"manifest"`
+	Have      []Ref    `json:"have"`
+	Need      []Grant  `json:"need"`
+
+	// ObjectPrefix is the CAS namespace both the grants above and the
+	// promoter's destinations are computed under. It rides on the plan so a
+	// promotion validates against the SAME namespace the grants were minted
+	// in, rather than one supplied later by a caller.
+	ObjectPrefix string `json:"object_prefix"`
 
 	DeclaredFiles   int   `json:"declared_files"`
 	DeclaredBytes   int64 `json:"declared_bytes"`
 	DistinctObjects int   `json:"distinct_objects"`
 	ExaminedObjects int   `json:"examined_objects"`
 	ResidentObjects int   `json:"resident_objects"`
-	StagedObjects   int   `json:"staged_objects"`
 }
 
-// PendingObjects returns everything this session owns in staging, including
-// objects found during a resumed declaration and newly granted objects.
-func (p Plan) PendingObjects() []StagedObject {
-	objects := append([]StagedObject(nil), p.Staged...)
+// PendingObjects returns the objects this session was granted and that were
+// not resident when the plan was made. They are addressed at their FINAL key,
+// so "pending" means only "not yet observed at it".
+func (p Plan) PendingObjects() []PlannedObject {
+	objects := make([]PlannedObject, 0, len(p.Need))
 	for _, grant := range p.Need {
-		objects = append(objects, grant.StagedObject)
+		objects = append(objects, grant.PlannedObject)
 	}
 	return objects
 }
@@ -142,8 +164,12 @@ func (p Plan) PendingObjects() []StagedObject {
 // Store is the narrow object-store seam used by the generic planner.
 type Store interface {
 	Residency(context.Context, []Object) (map[Ref]bool, error)
-	StagedResidency(context.Context, string, []Object) (map[Ref]bool, error)
-	PresignPut(context.Context, StagedObject, time.Duration) (string, map[string]string, error)
+	// PresignPut mints the grant for one object. The session id is passed so
+	// an implementation can bind a per-session possession witness into the
+	// signature — with the destination shared, the witness is the only thing
+	// that distinguishes "this publisher produced these bytes" from "they were
+	// already here".
+	PresignPut(context.Context, string, PlannedObject, time.Duration) (string, map[string]string, error)
 }
 
 // ClaimGate hides resident objects a publisher is not authorized to claim.
@@ -232,12 +258,15 @@ func ValidateManifest(manifest Manifest, limits Limits) (Manifest, error) {
 
 // Planner validates a full declaration and grants only missing objects.
 type Planner struct {
-	Store       Store
-	Claims      ClaimGate
-	Limits      Limits
-	GrantTTL    time.Duration
-	GrantExpiry func(needBytes int64) (time.Time, error)
-	Now         func() time.Time
+	Store  Store
+	Claims ClaimGate
+	Limits Limits
+	// ObjectPrefix is the CAS namespace grants are minted into; empty uses
+	// defaultObjectPrefix.
+	ObjectPrefix string
+	GrantTTL     time.Duration
+	GrantExpiry  func(needBytes int64) (time.Time, error)
+	Now          func() time.Time
 }
 
 func requireCompleteResidency(objects []Object, answer map[Ref]bool, label string) error {
@@ -259,17 +288,13 @@ func checkedAdd(total, increment int64, label string) (int64, error) {
 	return total + increment, nil
 }
 
-// StagedKey returns the portable algorithm-qualified, session-scoped key for a
-// pending object.
-func StagedKey(sessionID string, ref Ref) (string, error) {
-	session := strings.ToLower(strings.TrimSpace(sessionID))
-	if !sessionPattern.MatchString(session) {
-		return "", errors.New("session id must be one [a-z0-9][a-z0-9._-]{0,63} segment")
-	}
-	if ref.hex == "" {
-		return "", errors.New("staged key requires a non-zero ref")
-	}
-	return path.Join("staging", "sha256", session, ref.hex), nil
+// UploadKey is the key a grant for `ref` writes to: the object's final
+// content-addressed destination under `prefix`. It is deliberately the same
+// function the promoter uses to compute the destination it confirms — one
+// definition, so a grant can never point somewhere the promotion does not
+// look.
+func UploadKey(prefix string, ref Ref) (string, error) {
+	return ref.ObjectKey(prefix)
 }
 
 // Plan validates a manifest, checks every distinct object, and returns upload
@@ -287,7 +312,14 @@ func (p Planner) Plan(ctx context.Context, sessionID string, manifest Manifest) 
 		return Plan{}, errors.New("session id must be one [a-z0-9][a-z0-9._-]{0,63} segment")
 	}
 
-	result := Plan{SessionID: sessionID, Manifest: manifest, DeclaredFiles: len(manifest.Files)}
+	prefix := strings.TrimSpace(p.ObjectPrefix)
+	if prefix == "" {
+		prefix = defaultObjectPrefix
+	}
+	result := Plan{
+		SessionID: sessionID, Manifest: manifest,
+		ObjectPrefix: prefix, DeclaredFiles: len(manifest.Files),
+	}
 	order := make([]Ref, 0)
 	sizes := map[Ref]int64{}
 	for _, file := range manifest.Files {
@@ -353,21 +385,16 @@ func (p Planner) Plan(ctx context.Context, sessionID string, manifest Manifest) 
 		}
 		pending = append(pending, Object{Digest: ref, SizeBytes: sizes[ref]})
 	}
-	staged, err := p.Store.StagedResidency(ctx, sessionID, pending)
-	if err != nil {
-		return Plan{}, fmt.Errorf("staged residency: %w", err)
-	}
-	if err := requireCompleteResidency(pending, staged, "staged"); err != nil {
-		return Plan{}, err
-	}
-
+	// There is no second probe. An object this session already uploaded is
+	// sitting at its FINAL key, so `Residency` above has already found it and
+	// it never reaches here — which is exactly what makes resume free: a
+	// re-plan grants only what is still genuinely missing, and it costs one
+	// HEAD per object, never a byte.
 	var needBytes int64
 	for _, object := range pending {
-		if !staged[object.Digest] {
-			needBytes, err = checkedAdd(needBytes, object.SizeBytes, "missing object size")
-			if err != nil {
-				return Plan{}, err
-			}
+		needBytes, err = checkedAdd(needBytes, object.SizeBytes, "missing object size")
+		if err != nil {
+			return Plan{}, err
 		}
 	}
 	now := time.Now().UTC()
@@ -390,17 +417,12 @@ func (p Planner) Plan(ctx context.Context, sessionID string, manifest Manifest) 
 	}
 
 	for _, object := range pending {
-		key, keyErr := StagedKey(sessionID, object.Digest)
+		key, keyErr := UploadKey(prefix, object.Digest)
 		if keyErr != nil {
 			return Plan{}, keyErr
 		}
-		stagedObject := StagedObject{Object: object, StagingKey: key}
-		if staged[object.Digest] {
-			result.Staged = append(result.Staged, stagedObject)
-			result.StagedObjects++
-			continue
-		}
-		url, headers, grantErr := p.Store.PresignPut(ctx, stagedObject, ttl)
+		planned := PlannedObject{Object: object, UploadKey: key}
+		url, headers, grantErr := p.Store.PresignPut(ctx, sessionID, planned, ttl)
 		if grantErr != nil {
 			return Plan{}, fmt.Errorf("grant for %s: %w", object.Digest, grantErr)
 		}
@@ -408,10 +430,10 @@ func (p Planner) Plan(ctx context.Context, sessionID string, manifest Manifest) 
 			return Plan{}, fmt.Errorf("grant for %s has an empty URL", object.Digest)
 		}
 		result.Need = append(result.Need, Grant{
-			StagedObject: stagedObject,
-			URL:          url,
-			Headers:      headers,
-			ExpiresAt:    now.Add(ttl),
+			PlannedObject: planned,
+			URL:           url,
+			Headers:       headers,
+			ExpiresAt:     now.Add(ttl),
 		})
 	}
 	sort.Slice(result.Have, func(i, j int) bool { return result.Have[i].String() < result.Have[j].String() })

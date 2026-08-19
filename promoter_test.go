@@ -3,15 +3,14 @@ package tensorfs
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 )
 
 type promotionMemoryStore struct {
 	objects        map[string]StoredObject
-	promoteErrors  map[string]error
-	promotions     [][2]string
-	dropChecksum   bool
+	inspectErrors  map[string]error
 	inspectionKeys []string
 	mu             sync.Mutex
 }
@@ -20,39 +19,32 @@ func (s *promotionMemoryStore) Inspect(_ context.Context, key string) (StoredObj
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.inspectionKeys = append(s.inspectionKeys, key)
+	if err := s.inspectErrors[key]; err != nil {
+		return StoredObject{}, err
+	}
 	return s.objects[key], nil
 }
 
-func (s *promotionMemoryStore) PromoteVerified(
-	_ context.Context, source StagedObject, destination string,
-) (StoredObject, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.promoteErrors[source.StagingKey]; err != nil {
-		return StoredObject{}, err
-	}
-	staged := s.objects[source.StagingKey]
-	if err := requireStoredObject(staged, source, "staged"); err != nil {
-		return StoredObject{}, err
-	}
-	resident := staged
-	if s.dropChecksum {
-		resident.Checksum = nil
-	}
-	s.promotions = append(s.promotions, [2]string{source.StagingKey, destination})
-	s.objects[destination] = resident
-	return resident, nil
-}
-
-func promotionPlan(t *testing.T) (Plan, StagedObject, StagedObject) {
+// promotionPlan is the ordinary post-upload shape: one object the planner found
+// resident at declare time, one it granted. Under th#2184 both live at the SAME
+// final key, and the promotion tells them apart only by where they came from in
+// the plan — which is exactly why it does the same thing to both.
+func promotionPlan(t *testing.T) (Plan, PlannedObject, PlannedObject) {
 	t.Helper()
-	first := StagedObject{
-		Object:     Object{Digest: RefBytes([]byte("first")), SizeBytes: 5},
-		StagingKey: "staging/sha256/session/" + RefBytes([]byte("first")).Hex(),
+	key := func(ref Ref) string {
+		out, err := ref.ObjectKey("objects")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
 	}
-	second := StagedObject{
-		Object:     Object{Digest: RefBytes([]byte("second")), SizeBytes: 6},
-		StagingKey: "staging/sha256/session/" + RefBytes([]byte("second")).Hex(),
+	first := PlannedObject{
+		Object:    Object{Digest: RefBytes([]byte("first")), SizeBytes: 5},
+		UploadKey: key(RefBytes([]byte("first"))),
+	}
+	second := PlannedObject{
+		Object:    Object{Digest: RefBytes([]byte("second")), SizeBytes: 6},
+		UploadKey: key(RefBytes([]byte("second"))),
 	}
 	return Plan{
 		SessionID: "session",
@@ -60,140 +52,160 @@ func promotionPlan(t *testing.T) (Plan, StagedObject, StagedObject) {
 			{Path: "first", SizeBytes: 5, Digest: first.Digest},
 			{Path: "second", SizeBytes: 6, Digest: second.Digest},
 		}},
-		Staged: []StagedObject{first},
-		Need: []Grant{{
-			StagedObject: second,
-			URL:          "https://objects.invalid/second",
-		}},
+		Have: []Ref{first.Digest},
+		Need: []Grant{{PlannedObject: second, URL: "https://objects.invalid/second"}},
 	}, first, second
 }
 
-func promotionStore(first, second StagedObject) *promotionMemoryStore {
+func promotionStore(first, second PlannedObject) *promotionMemoryStore {
 	firstChecksum, secondChecksum := first.Digest, second.Digest
 	return &promotionMemoryStore{
 		objects: map[string]StoredObject{
-			first.StagingKey:  {Present: true, SizeBytes: 5, Checksum: &firstChecksum},
-			second.StagingKey: {Present: true, SizeBytes: 6, Checksum: &secondChecksum},
+			first.UploadKey:  {Present: true, SizeBytes: 5, Checksum: &firstChecksum},
+			second.UploadKey: {Present: true, SizeBytes: 6, Checksum: &secondChecksum},
 		},
-		promoteErrors: map[string]error{},
+		inspectErrors: map[string]error{},
 	}
 }
 
-func TestPromoteAtomicallyVerifiesAndChecksumConfirmsDestinations(t *testing.T) {
+func TestPromoteChecksumConfirmsEveryDestinationAndMovesNoBytes(t *testing.T) {
 	plan, first, second := promotionPlan(t)
 	store := promotionStore(first, second)
 	report, err := (Promoter{Store: store, Parallel: 2}).Promote(context.Background(), plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.Complete() || report.Copied != 2 || report.ChecksumConfirmed != 2 {
+	if !report.Complete() || report.Resident != 2 || report.ChecksumConfirmed != 2 {
 		t.Fatalf("unexpected report: %+v", report)
 	}
-}
-
-func TestPromoteRefusesUnverifiedStagingAndIsRetryable(t *testing.T) {
-	plan, first, second := promotionPlan(t)
-	store := promotionStore(first, second)
-	store.objects[first.StagingKey] = StoredObject{Present: true, SizeBytes: 5}
-	store.promoteErrors[second.StagingKey] = errors.New("transient")
-	report, err := (Promoter{Store: store}).Promote(context.Background(), plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.Complete() || len(report.Failed) != 2 || len(store.promotions) != 0 {
-		t.Fatalf("unexpected report: %+v, promotions=%v", report, store.promotions)
-	}
-
-	firstChecksum := first.Digest
-	store.objects[first.StagingKey] = StoredObject{Present: true, SizeBytes: 5, Checksum: &firstChecksum}
-	delete(store.promoteErrors, second.StagingKey)
-	retry, err := (Promoter{Store: store}).Promote(context.Background(), plan)
-	if err != nil || !retry.Complete() {
-		t.Fatalf("retry = %+v, err=%v", retry, err)
+	// THE POINT OF THE ISSUE: one HEAD per object and nothing else. There is no
+	// second seam on PromotionStore that could read or write a byte.
+	if len(store.inspectionKeys) != 2 {
+		t.Fatalf("inspections = %v, want exactly one per object", store.inspectionKeys)
 	}
 }
 
-func TestPromoteRecognizesChecksumConfirmedResidentRetry(t *testing.T) {
+// TestPromoteConfirmsTheKeyItRECOMPUTES is the fence that replaces the old
+// session-prefix check: a plan is untrusted data, so the destination comes from
+// the digest, never from the plan.
+func TestPromoteConfirmsTheKeyItRecomputesNotTheOneThePlanCarries(t *testing.T) {
 	plan, first, second := promotionPlan(t)
-	plan.Have = []Ref{second.Digest}
-	plan.Need = nil
-	store := promotionStore(first, second)
-	checksum := first.Digest
-	destination, err := first.Digest.ObjectKey("objects")
-	if err != nil {
-		t.Fatal(err)
-	}
-	store.objects[destination] = StoredObject{Present: true, SizeBytes: 5, Checksum: &checksum}
-	secondChecksum := second.Digest
-	secondDestination, err := second.Digest.ObjectKey("objects")
-	if err != nil {
-		t.Fatal(err)
-	}
-	store.objects[secondDestination] = StoredObject{
-		Present: true, SizeBytes: 6, Checksum: &secondChecksum,
-	}
-	report, err := (Promoter{Store: store}).Promote(context.Background(), plan)
-	if err != nil || !report.Complete() || report.AlreadyResident != 2 || report.Objects != 2 {
-		t.Fatalf("report = %+v, err=%v", report, err)
-	}
-}
-
-func TestPromoteAuditsEveryHaveDestination(t *testing.T) {
-	plan, first, second := promotionPlan(t)
-	plan.Have = []Ref{second.Digest}
-	plan.Need = nil
-	store := promotionStore(first, second)
-	report, err := (Promoter{Store: store}).Promote(context.Background(), plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.Complete() || report.Objects != 2 || len(report.Failed) != 1 ||
-		report.Failed[0] != second.Digest {
-		t.Fatalf("missing Have destination was accepted: %+v", report)
-	}
-}
-
-func TestPromoteRefusesArbitraryStagingKeyBeforeStoreAccess(t *testing.T) {
-	plan, first, second := promotionPlan(t)
-	plan.Staged[0].StagingKey = "objects/unrelated"
+	plan.Need[0].UploadKey = "objects/unrelated"
 	store := promotionStore(first, second)
 	_, err := (Promoter{Store: store}).Promote(context.Background(), plan)
 	if err == nil {
-		t.Fatal("arbitrary staging key was accepted")
+		t.Fatal("a grant key outside the plan namespace was accepted")
 	}
-	if len(store.inspectionKeys) != 0 || len(store.promotions) != 0 {
-		t.Fatalf("store was accessed before plan validation: %+v", store)
+	if !strings.Contains(err.Error(), "outside the plan namespace") {
+		t.Fatalf("unexpected refusal: %v", err)
+	}
+	if len(store.inspectionKeys) != 0 {
+		t.Fatalf("store was accessed before plan validation: %+v", store.inspectionKeys)
 	}
 }
 
-func TestPromoteNeverCallsUnassertedDestinationComplete(t *testing.T) {
+// TestPromoteHonoursThePlansOwnNamespace: grants were minted into the plan's
+// prefix, so a Promoter configured with a different one must not go looking in
+// its own.
+func TestPromoteHonoursThePlansOwnNamespace(t *testing.T) {
+	plan, first, second := promotionPlan(t)
+	plan.ObjectPrefix = "blobs"
+	blobKey := func(ref Ref) string {
+		out, err := ref.ObjectKey("blobs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	plan.Need[0].UploadKey = blobKey(second.Digest)
+	firstChecksum, secondChecksum := first.Digest, second.Digest
+	store := &promotionMemoryStore{
+		objects: map[string]StoredObject{
+			blobKey(first.Digest):  {Present: true, SizeBytes: 5, Checksum: &firstChecksum},
+			blobKey(second.Digest): {Present: true, SizeBytes: 6, Checksum: &secondChecksum},
+		},
+		inspectErrors: map[string]error{},
+	}
+	report, err := (Promoter{Store: store, ObjectPrefix: "objects"}).Promote(context.Background(), plan)
+	if err != nil || !report.Complete() {
+		t.Fatalf("report = %+v, err = %v", report, err)
+	}
+	for _, key := range store.inspectionKeys {
+		if !strings.HasPrefix(key, "blobs/") {
+			t.Fatalf("inspected %q, want the plan's own namespace", key)
+		}
+	}
+}
+
+// TestPromoteReportsAnAbsentGrantAsRetryableNotAsSuccess — the upload never
+// landed. Before th#2184 this was "the copy failed"; now it is "the bytes are
+// not there", which is the same verdict for the client and one fewer moving
+// part for the hub.
+func TestPromoteReportsAnAbsentObjectAsRetryable(t *testing.T) {
 	plan, first, second := promotionPlan(t)
 	store := promotionStore(first, second)
-	store.dropChecksum = true
+	delete(store.objects, second.UploadKey)
 	report, err := (Promoter{Store: store}).Promote(context.Background(), plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Complete() || len(report.Failed) != 2 || report.ChecksumConfirmed != 0 {
+	if report.Complete() || len(report.Failed) != 1 || report.Failed[0] != second.Digest {
 		t.Fatalf("unexpected report: %+v", report)
 	}
+	if len(report.Errors) != 1 || !strings.Contains(report.Errors[0], "absent at its content-addressed key") {
+		t.Fatalf("errors = %v", report.Errors)
+	}
+
+	// The retry is the whole contract: put the object there and re-run the SAME
+	// plan.
+	checksum := second.Digest
+	store.objects[second.UploadKey] = StoredObject{Present: true, SizeBytes: 6, Checksum: &checksum}
+	retry, err := (Promoter{Store: store}).Promote(context.Background(), plan)
+	if err != nil || !retry.Complete() {
+		t.Fatalf("retry = %+v, err = %v", retry, err)
+	}
 }
 
-func TestPromoteRepairsPoisonedDestinationThroughVerifiedPromotion(t *testing.T) {
+func TestPromoteNeverCallsUnassertedOrShortDestinationComplete(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state StoredObject
+	}{
+		{"no store-asserted checksum", StoredObject{Present: true, SizeBytes: 6}},
+		{"wrong length", func() StoredObject {
+			c := RefBytes([]byte("second"))
+			return StoredObject{Present: true, SizeBytes: 5, Checksum: &c}
+		}()},
+		{"wrong digest", func() StoredObject {
+			c := RefBytes([]byte("first"))
+			return StoredObject{Present: true, SizeBytes: 6, Checksum: &c}
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, first, second := promotionPlan(t)
+			store := promotionStore(first, second)
+			store.objects[second.UploadKey] = tc.state
+			report, err := (Promoter{Store: store}).Promote(context.Background(), plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.Complete() || report.ChecksumConfirmed != 1 || len(report.Failed) != 1 {
+				t.Fatalf("unexpected report: %+v", report)
+			}
+		})
+	}
+}
+
+func TestPromoteSurfacesAStoreErrorPerObjectAndStaysRetryable(t *testing.T) {
 	plan, first, second := promotionPlan(t)
 	store := promotionStore(first, second)
-	destination, err := first.Digest.ObjectKey("objects")
+	store.inspectErrors[second.UploadKey] = errors.New("transient")
+	report, err := (Promoter{Store: store}).Promote(context.Background(), plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrong := second.Digest
-	store.objects[destination] = StoredObject{Present: true, SizeBytes: 5, Checksum: &wrong}
-	report, err := (Promoter{Store: store}).Promote(context.Background(), plan)
-	if err != nil || !report.Complete() || report.Copied != 2 {
-		t.Fatalf("report = %+v, err=%v", report, err)
-	}
-	if stored := store.objects[destination]; stored.Checksum == nil || *stored.Checksum != first.Digest {
-		t.Fatalf("poisoned destination was not repaired: %+v", stored)
+	if report.Complete() || len(report.Failed) != 1 || !strings.Contains(report.Errors[0], "transient") {
+		t.Fatalf("unexpected report: %+v", report)
 	}
 }
 
@@ -207,5 +219,15 @@ func TestPromoteRefusesIncompleteManifestPartition(t *testing.T) {
 	}
 	if len(store.inspectionKeys) != 0 {
 		t.Fatal("store was accessed for an incomplete plan")
+	}
+}
+
+func TestPromoteRefusesADuplicatedObject(t *testing.T) {
+	plan, first, second := promotionPlan(t)
+	plan.Have = []Ref{first.Digest, second.Digest}
+	store := promotionStore(first, second)
+	_, err := (Promoter{Store: store}).Promote(context.Background(), plan)
+	if err == nil {
+		t.Fatal("an object planned twice was accepted")
 	}
 }

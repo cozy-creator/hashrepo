@@ -100,13 +100,15 @@ manifest format.
 An upload grant has exactly these fields:
 
 ```json
-{"digest":"sha256:...","size_bytes":18,"staging_key":"staging/sha256/session-1/...","url":"https://objects.invalid/upload?token=v1","headers":{},"expires_at":"2026-08-13T12:10:00Z"}
+{"digest":"sha256:...","size_bytes":18,"staging_key":"blobs/sha256/0a/d1/0ad1...","url":"https://objects.invalid/upload?token=v1","headers":{},"expires_at":"2026-08-13T12:10:00Z"}
 ```
 
 - `digest` is the exact object content reference.
 - `size_bytes` is the exact non-negative request-body length.
-- `staging_key` is the server-owned, algorithm-qualified, session-scoped
-  destination key `staging/sha256/<session>/<digest hex>`.
+- `staging_key` is the server-owned destination key, and it is the object's
+  FINAL content-addressed key `<prefix>/sha256/<xx>/<yy>/<digest hex>`. The
+  field keeps its v1 name because deployed publishers parse it; it is inert on
+  the client side, which uploads to `url` and never derives a key itself.
 - `url` is an opaque upload URL; clients must not infer its provider.
 - `headers` is an object of verbatim request headers and is `{}` when empty,
   never `null`.
@@ -119,14 +121,24 @@ verified local objects are the restart journal: a new process skips them and
 fetches only absent or corrupt objects. An expired grant is a typed re-plan
 result, distinct from a byte failure.
 
-Server-side publication is staged. A store adapter must attest the SHA-256 and
-length of a staged PUT as part of an atomic, version-bound promotion into the
-immutable content key. The destination must also carry a store-asserted SHA-256
-checksum; existence and length alone are never called complete. A serialized
-plan is untrusted until its manifest partition, session ID, object sizes, and
-derived staging keys have all been validated. Promotion is per-object,
-idempotent, and retryable. The generic promoter never deletes staging keys;
-stores lifecycle-expire the session-scoped staging namespace.
+Server-side publication is DIRECT. A grant authorizes a PUT at the object's
+final content key with the digest bound inside the signature, so the store
+refuses any body that does not hash to the name it was granted and a quarantine
+namespace buys nothing: an object at `<prefix>/sha256/…` is byte-identical to
+what any other publisher of that digest would write, and one no committed
+manifest references is unreachable and collectable. Promotion therefore moves
+NO bytes — it confirms, per object, that the store itself asserts the declared
+SHA-256 and length at the declared key. Existence and length alone are never
+called complete. A serialized plan is untrusted until its manifest partition,
+object sizes, and derived object keys have all been validated; a key carried on
+the plan is compared against the one recomputed from the digest, never
+followed. Promotion is per-object, idempotent, and retryable.
+
+A store that grants a shared destination must bind a per-session possession
+witness into the same signature, because the destination alone can no longer
+distinguish "this publisher produced these bytes" from "they were already
+here". That is a store concern: the planner passes the session id to
+`PresignPut` and requires nothing else of it.
 
 ## Local reachability
 
