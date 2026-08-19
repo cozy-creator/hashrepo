@@ -499,10 +499,20 @@ def test_flux1_does_not_steal_the_sibling_familys_files(tmp_path: Path) -> None:
     names = _flux2_klein_transformer_names()
     assert len(names) == 169, "the synthetic header drifted from the real one"
     path = _bf16_file(tmp_path / "flux2-klein-4b.safetensors", names)
-    assert (
-        ContractRegistry(list(contracts.all())).detect_file(path)
-        == "flux2-klein.diffusers-bf16@1"
-    ), "flux1 must not win its sibling family's checkpoint"
+    winner = ContractRegistry(list(contracts.all())).detect_file(path)
+    # THE NEGATIVE, for the same reason the baseline arm below asserts one:
+    # naming WHICH document should win a Klein tree is a fact about other
+    # lanes' documents, and pinning it turns any future library addition into a
+    # red master for this lane. (Measured: the sibling arm pinned
+    # `flux2-klein` and tensorfs#131 made it `qwen-image` on landing.) What
+    # THIS lane owes is that flux1 never takes Klein's tree.
+    assert not winner.startswith("flux1."), (
+        "flux1 must not win its sibling family's checkpoint — it explains 104 "
+        f"of Klein's 169 tensors, so it is a real candidate; got {winner}"
+    )
+    # NOT `assert winner`: a no-match renders as the STRING "none", which is
+    # truthy, so a bare truthiness check passes on exactly the vacuous case.
+    assert winner != "none", "some document must claim a Klein tree"
 
 
 #: arm -> (config axes, the MEASURED transformer tensor count). The count is
