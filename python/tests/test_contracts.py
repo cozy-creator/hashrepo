@@ -70,6 +70,9 @@ RUST_PINNED = {
     "sdxl.diffusers-fp8-rowwise@1": (
         "7b78f2e44382dc5a3fe413e0f8f0a62ba63efefc810123304151c2ded931ee37"
     ),
+    "trellis2.dit-bf16@1": (
+        "f9763a5aa4b82d552c7b582d7b540cd0fdf576cc5bd234bb9e73ec617738ab52"
+    ),
     "wan22.diffusers-bf16@1": (
         "91036beea9878c462311d97a878a5dc94128283182fbf0948b30118852d97bd5"
     ),
