@@ -70,6 +70,12 @@ RUST_PINNED = {
     "wan22.diffusers-bf16@1": (
         "91036beea9878c462311d97a878a5dc94128283182fbf0948b30118852d97bd5"
     ),
+    "qwen-image.diffusers-bf16@1": (
+        "757379261ff69111f5e50a5cf2a066c6a118759f1dfe1f34b605f8a49325e673"
+    ),
+    "z-image.diffusers-bf16@1": (
+        "f726fae567c094783ac5aa41822b77f4ae3387bfc07daf22f3ca189ed74c1af5"
+    ),
 }
 
 

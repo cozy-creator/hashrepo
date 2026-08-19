@@ -718,6 +718,10 @@ fn the_shipped_library_is_pinned_by_digest() {
             "5f6b7b4a8cd070653607840b922c213a846838e35379737727111c4b0a8de56c",
         ),
         (
+            "qwen-image.diffusers-bf16@1",
+            "757379261ff69111f5e50a5cf2a066c6a118759f1dfe1f34b605f8a49325e673",
+        ),
+        (
             "sd15.diffusers-bf16@1",
             "0bc98e52edac1a4b3a8f063162d3785350413b60701ba49d9701e46d69f304d3",
         ),
@@ -744,6 +748,10 @@ fn the_shipped_library_is_pinned_by_digest() {
         (
             "wan22.diffusers-bf16@1",
             "91036beea9878c462311d97a878a5dc94128283182fbf0948b30118852d97bd5",
+        ),
+        (
+            "z-image.diffusers-bf16@1",
+            "f726fae567c094783ac5aa41822b77f4ae3387bfc07daf22f3ca189ed74c1af5",
         ),
     ]);
     let registry = Registry::builtin().expect("the shipped contracts parse");
