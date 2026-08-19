@@ -742,6 +742,10 @@ fn the_shipped_library_is_pinned_by_digest() {
             "364c0c537e54013eab72994a3e6bf0b913cfb76ab1627dc0822b95cf17b1b262",
         ),
         (
+            "ernie.diffusers-bf16@1",
+            "b4e726e157035529a98a594a211b3d085cc5c3577182ed1e3b9bb4c1d5811c67",
+        ),
+        (
             "sdxl.clip-g-split-qkv@1",
             "c1bbfc65a89a736154504f68296b2b8be3dc43364d4dc04a192c08a184bf64fa",
         ),

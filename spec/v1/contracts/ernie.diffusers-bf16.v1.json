@@ -1,0 +1,225 @@
+{
+  "format": "tensorfs-contract-v1",
+  "name": "ernie.diffusers-bf16",
+  "version": 1,
+  "dtype": "bfloat16",
+  "description": "The canonical Baidu ERNIE-Image serve layout: the diffusers ErnieImageTransformer2DModel (ErnieImagePipeline), all-bf16, every pattern derived from the real safetensors header of tensorhub/ernie-image@prod (checkpoint sha256:e8cd9241cfa57d2115f7bfdefd98fde5cd77a5f2fd40e586e511f7b807c05f0d, cloned from huggingface:baidu/ERNIE-Image@5346b31d68c9c23758ba56ef8be5e9dc174c7f99) via ranged reads of chunk 0 - header table only, zero weight bytes. 24 patterns cover all 409 tensors: 11 per layer x 36 layers = 396, plus 13 singletons. ONE DOCUMENT COVERS BOTH CHECKPOINTS: ernie-image and ernie-image-turbo were measured to carry an IDENTICAL pattern set with identical rank, shape and dtype per pattern - only the weight BYTES differ (all 8 transformer shards differ by digest), which is exactly what a step distillation is. SPLIT QKV, NOT FUSED, and this is the load-bearing fusion call: self_attention.to_q/to_k/to_v are three SEPARATE [4096, 4096] projections, confirmed against transformer/config.json (hidden_size 4096, num_layers 36, num_attention_heads 32 => head dim 128, matching norm_q/norm_k [128], ffn_hidden_size 12288, in_channels 128, text_in_dim 3072). ERNIE therefore matches ZERO tensors of dit.blocks-fused-qkv@1 - the timm/native blocks.{i}.attn.qkv fragment that silently captured the flux1 lane - so the q/k/v role suffixes over one qkv role exist to make a future fused packaging a run-preserving derive rather than a refusal, the same shape as the sdxl.clip-g-* pair. The gated MLP is likewise split: gate_proj and up_proj are each [12288, 4096] against linear_fc2 [4096, 12288], so linear_in carries #gate/#up shares of 1:1. TRANSFORMER ONLY, deliberately, on the tensorfs#121 rule, and here it is measured rather than assumed: ernie-image and ernie-image-turbo ship a BYTE-IDENTICAL vae (sha256:ca70d2202afe6415..., 168120878 B), byte-identical text_encoder (4 shards) and byte-identical pe (4 shards) - so a document covering any of them would TIE the two checkpoints to each other and could not tell a distilled release from its base. The vae is additionally an AutoencoderKLFlux2, the same key spelling flux2-klein declares and refuses for the same reason, and it carries one I64 tensor among 250 BF16, so a flat-bf16 declaration over it would refuse the fleet's own checkpoint. The transformer is the compile subject (Compile(targets=('transformer',))) and the only component that identifies the family. This document also removes a LIVE misclassification: both ernie checkpoints currently carry metadata.model_family 'flux' with variant 'flux2', because model_index.json declares vae AutoencoderKLFlux2 and _class_name ErnieImagePipeline is not in the family map, so ingest fell through to a flux guess. Top-level dtype is the serve-side load dtype (ctx.lane.dtype); the per-tensor dtypes are the matcher's constraint that this really is the bf16 packaging - measured uniform BF16 across all 8 shards, 409 of 409, with no F32 island.",
+  "tensors": [
+    {
+      "role": "global_adaln.bias",
+      "pattern": "adaLN_modulation.1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "global_adaln.weight",
+      "pattern": "adaLN_modulation.1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "final_layer.linear.bias",
+      "pattern": "final_linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "final_layer.linear.weight",
+      "pattern": "final_linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "final_layer.adaln.bias",
+      "pattern": "final_norm.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "final_layer.adaln.weight",
+      "pattern": "final_norm.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.norm_mlp.weight",
+      "pattern": "layers.{i}.adaLN_mlp_ln.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.norm_attn.weight",
+      "pattern": "layers.{i}.adaLN_sa_ln.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.mlp.linear_in.weight#gate",
+      "pattern": "layers.{i}.mlp.gate_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.mlp.linear_out.weight",
+      "pattern": "layers.{i}.mlp.linear_fc2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.mlp.linear_in.weight#up",
+      "pattern": "layers.{i}.mlp.up_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.attn.key_norm.weight",
+      "pattern": "layers.{i}.self_attention.norm_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.attn.query_norm.weight",
+      "pattern": "layers.{i}.self_attention.norm_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.attn.qkv.weight#k",
+      "pattern": "layers.{i}.self_attention.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.attn.proj.weight",
+      "pattern": "layers.{i}.self_attention.to_out.0.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.attn.qkv.weight#q",
+      "pattern": "layers.{i}.self_attention.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "blocks.{i}.attn.qkv.weight#v",
+      "pattern": "layers.{i}.self_attention.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "txt_in.weight",
+      "pattern": "text_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "time_embed.linear_1.bias",
+      "pattern": "time_embedding.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "time_embed.linear_1.weight",
+      "pattern": "time_embedding.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "time_embed.linear_2.bias",
+      "pattern": "time_embedding.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "time_embed.linear_2.weight",
+      "pattern": "time_embedding.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "patch_embed.bias",
+      "pattern": "x_embedder.proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "patch_embed.weight",
+      "pattern": "x_embedder.proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4,
+      "required": false
+    }
+  ]
+}
