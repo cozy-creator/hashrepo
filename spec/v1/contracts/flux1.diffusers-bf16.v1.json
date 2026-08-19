@@ -1,0 +1,603 @@
+{
+  "format": "tensorfs-contract-v1",
+  "name": "flux1.diffusers-bf16",
+  "version": 1,
+  "dtype": "bfloat16",
+  "description": "The canonical FLUX.1 serve layout: the diffusers FluxTransformer2DModel (FluxPipeline), all-bf16, every declaration derived from the real safetensors headers of the two checkpoints the fleet actually serves - tensorhub/flux1-dev and tensorhub/flux1-schnell, which the hub records as revision-pinned clones of black-forest-labs/FLUX.1-dev@3de623fc3c33e44ffbe2bad470d0f45bccf2eb21 and black-forest-labs/FLUX.1-schnell@741f7c3ce8b383c54771c7003378a50191e9efe9. Both BFL repos are 401 unauthenticated, so the headers were read from the hub's own CAS objects by HTTP Range over the header table alone; no weight byte transited the authoring machine. THIS IS NOT dit.blocks-fused-qkv@1, which matches ZERO tensors here (measured): that fragment is the timm block spelling, blocks.{i}.attn.qkv, and a flux tree has no blocks.{i} at all. Nor is it flux2-klein.diffusers-bf16@1, and that one is the dangerous near miss rather than an obvious one: it matches 308 of the 1160 FLUX.1 transformer tensors with no dtype or rank refusal, so before this document existed a FLUX.1 checkpoint DETECTED AS FLUX.2 Klein - a silent wrong-family win, not a loud refusal. The two are different architectures wearing the same diffusers vocabulary. FLUX.1 is 19 double-stream transformer_blocks and 38 single_transformer_blocks; Klein is 5 and 20. FLUX.1 SPLITS its attention projections - to_q, to_k, to_v are three [3072, 3072] tensors each with its own [3072] bias, and the context stream repeats them as add_q_proj/add_k_proj/add_v_proj - where Klein fuses them into one to_qkv_mlp_proj. FLUX.1's single-stream MLP is NOT gated: proj_mlp is [12288, 3072], mlp_ratio 4.0 over inner_dim 3072, so the native linear1 concatenation is q|k|v|mlp at 3072+3072+3072+12288 = 21504 in shares 1:1:1:4, confirmed with no inference by proj_out.weight [3072, 15360] = 3072 attention + 12288 mlp. Klein's is 1:1:1:6 because its MLP is gated. Getting that ratio from the sibling family would mis-cut every single block. NO fusion is declared here, deliberately: the packaging this document describes SPLITS those tensors, and no fused FLUX.1 packaging has been measured into this library, so declaring a seam would be inventing one. The #q/#k/#v/#mlp role suffixes over the native-aligned qkv and linear1 roles reserve the conversion algebra - the sdxl.clip-g-* idiom - so a future fused-packaging document is a run-preserving derive rather than a version bump here. ONE DOCUMENT SERVES BOTH DEV AND SCHNELL, and the difference is exactly four tensors: transformer/config.json says guidance_embeds true for dev and false for schnell, and the headers agree at 1160 vs 1156, the four being time_text_embed.guidance_embedder.linear_1/linear_2 weight and bias. They are declared, optional, and carry the guidance_in.* role; every other spelling is identical between the two checkpoints, so schnell matches at 1156/1156 and dev at 1160/1160 rather than one of them half-matching. THE THIRD SERVED CHECKPOINT IS COVERED TOO, and it is the one that proves declaring shapes here would have been a mistake. ostris/Flex.2-preview - a FLUX.1-architecture redistill, not a BFL checkpoint, served by the flux.1-schnell endpoint under this same family vocabulary - is public and ungated upstream, and its 808 transformer tensors were read the same way. Every spelling it uses is already in this document (zero new names) and it matches 808/808, but its transformer/config.json declares num_layers 8 against dev's 19 and in_channels 196 against dev's 64, so its x_embedder.weight is [3072, 196] where both BFL checkpoints are [3072, 64] - the universal control inputs concatenated into the latent channel dim. Declarations here constrain RANK and dtype, never shape, which is exactly why one document spans a 12B BFL checkpoint and an 8-block derivative without either of them half-matching. TRANSFORMER ONLY, on the tensorfs#121 rule and the tensorfs#122 regression: FLUX.1's AutoencoderKL is the same key spelling SD2 and SDXL ship, so declaring the vae would tie sdxl.diffusers-bf16@1 on an SDXL vae file and win it on name order, and the text encoders are a stock CLIPTextModel and a stock T5EncoderModel that any future CLIP or T5 lane would collide with. The transformer is the compile subject and the only component that identifies the family. Top-level dtype is the serve-side load dtype (ctx.lane.dtype); the per-tensor dtypes are the matcher's constraint that this really is the bf16 packaging, and the fp8 rowwise conversion the hub also stores for flux1-dev is a separate document, not this one.",
+  "tensors": [
+    {
+      "role": "txt_in.bias",
+      "pattern": "context_embedder.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "txt_in.weight",
+      "pattern": "context_embedder.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "final_layer.adaln.bias",
+      "pattern": "norm_out.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "final_layer.adaln.weight",
+      "pattern": "norm_out.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "final_layer.linear.bias",
+      "pattern": "proj_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "final_layer.linear.weight",
+      "pattern": "proj_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "single.{i}.key_norm.weight",
+      "pattern": "single_transformer_blocks.{i}.attn.norm_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "single.{i}.query_norm.weight",
+      "pattern": "single_transformer_blocks.{i}.attn.norm_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "single.{i}.linear1.bias#k",
+      "pattern": "single_transformer_blocks.{i}.attn.to_k.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "single.{i}.linear1.weight#k",
+      "pattern": "single_transformer_blocks.{i}.attn.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "single.{i}.linear1.bias#q",
+      "pattern": "single_transformer_blocks.{i}.attn.to_q.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "single.{i}.linear1.weight#q",
+      "pattern": "single_transformer_blocks.{i}.attn.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "single.{i}.linear1.bias#v",
+      "pattern": "single_transformer_blocks.{i}.attn.to_v.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "single.{i}.linear1.weight#v",
+      "pattern": "single_transformer_blocks.{i}.attn.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "single.{i}.modulation.lin.bias",
+      "pattern": "single_transformer_blocks.{i}.norm.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "single.{i}.modulation.lin.weight",
+      "pattern": "single_transformer_blocks.{i}.norm.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "single.{i}.linear1.bias#mlp",
+      "pattern": "single_transformer_blocks.{i}.proj_mlp.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "single.{i}.linear1.weight#mlp",
+      "pattern": "single_transformer_blocks.{i}.proj_mlp.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "single.{i}.linear2.bias",
+      "pattern": "single_transformer_blocks.{i}.proj_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "single.{i}.linear2.weight",
+      "pattern": "single_transformer_blocks.{i}.proj_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "guidance_in.fc1.bias",
+      "pattern": "time_text_embed.guidance_embedder.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "guidance_in.fc1.weight",
+      "pattern": "time_text_embed.guidance_embedder.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "guidance_in.fc2.bias",
+      "pattern": "time_text_embed.guidance_embedder.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "guidance_in.fc2.weight",
+      "pattern": "time_text_embed.guidance_embedder.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "vector_in.fc1.bias",
+      "pattern": "time_text_embed.text_embedder.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vector_in.fc1.weight",
+      "pattern": "time_text_embed.text_embedder.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "vector_in.fc2.bias",
+      "pattern": "time_text_embed.text_embedder.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "vector_in.fc2.weight",
+      "pattern": "time_text_embed.text_embedder.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "time_in.fc1.bias",
+      "pattern": "time_text_embed.timestep_embedder.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "time_in.fc1.weight",
+      "pattern": "time_text_embed.timestep_embedder.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "time_in.fc2.bias",
+      "pattern": "time_text_embed.timestep_embedder.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "time_in.fc2.weight",
+      "pattern": "time_text_embed.timestep_embedder.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.qkv.bias#k",
+      "pattern": "transformer_blocks.{i}.attn.add_k_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.qkv.weight#k",
+      "pattern": "transformer_blocks.{i}.attn.add_k_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.qkv.bias#q",
+      "pattern": "transformer_blocks.{i}.attn.add_q_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.qkv.weight#q",
+      "pattern": "transformer_blocks.{i}.attn.add_q_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.qkv.bias#v",
+      "pattern": "transformer_blocks.{i}.attn.add_v_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.qkv.weight#v",
+      "pattern": "transformer_blocks.{i}.attn.add_v_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.key_norm.weight",
+      "pattern": "transformer_blocks.{i}.attn.norm_added_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.query_norm.weight",
+      "pattern": "transformer_blocks.{i}.attn.norm_added_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.key_norm.weight",
+      "pattern": "transformer_blocks.{i}.attn.norm_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.query_norm.weight",
+      "pattern": "transformer_blocks.{i}.attn.norm_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.proj.bias",
+      "pattern": "transformer_blocks.{i}.attn.to_add_out.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_attn.proj.weight",
+      "pattern": "transformer_blocks.{i}.attn.to_add_out.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.qkv.bias#k",
+      "pattern": "transformer_blocks.{i}.attn.to_k.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.qkv.weight#k",
+      "pattern": "transformer_blocks.{i}.attn.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.proj.{i}.bias",
+      "pattern": "transformer_blocks.{i}.attn.to_out.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.proj.{i}.weight",
+      "pattern": "transformer_blocks.{i}.attn.to_out.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.qkv.bias#q",
+      "pattern": "transformer_blocks.{i}.attn.to_q.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.qkv.weight#q",
+      "pattern": "transformer_blocks.{i}.attn.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.qkv.bias#v",
+      "pattern": "transformer_blocks.{i}.attn.to_v.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_attn.qkv.weight#v",
+      "pattern": "transformer_blocks.{i}.attn.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_mlp.fc1.bias",
+      "pattern": "transformer_blocks.{i}.ff.net.0.proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_mlp.fc1.weight",
+      "pattern": "transformer_blocks.{i}.ff.net.0.proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_mlp.fc2.bias",
+      "pattern": "transformer_blocks.{i}.ff.net.2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_mlp.fc2.weight",
+      "pattern": "transformer_blocks.{i}.ff.net.2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_mlp.fc1.bias",
+      "pattern": "transformer_blocks.{i}.ff_context.net.0.proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_mlp.fc1.weight",
+      "pattern": "transformer_blocks.{i}.ff_context.net.0.proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_mlp.fc2.bias",
+      "pattern": "transformer_blocks.{i}.ff_context.net.2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_mlp.fc2.weight",
+      "pattern": "transformer_blocks.{i}.ff_context.net.2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_mod.lin.bias",
+      "pattern": "transformer_blocks.{i}.norm1.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.img_mod.lin.weight",
+      "pattern": "transformer_blocks.{i}.norm1.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_mod.lin.bias",
+      "pattern": "transformer_blocks.{i}.norm1_context.linear.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "double.{i}.txt_mod.lin.weight",
+      "pattern": "transformer_blocks.{i}.norm1_context.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    },
+    {
+      "role": "img_in.bias",
+      "pattern": "x_embedder.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1,
+      "required": false
+    },
+    {
+      "role": "img_in.weight",
+      "pattern": "x_embedder.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2,
+      "required": false
+    }
+  ]
+}

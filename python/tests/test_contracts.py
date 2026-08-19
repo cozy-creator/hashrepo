@@ -31,6 +31,9 @@ RUST_PINNED = {
     "dit.blocks-fused-qkv@1": (
         "57f09073ca1a631bb173293c84e11f462089d0fa8cf9ce45e142fc33881a17a1"
     ),
+    "flux1.diffusers-bf16@1": (
+        "392e9b54605ef75e18e7b7a29da3501f59215c091c228a16d18d403463320a63"
+    ),
     "flux2-klein.diffusers-bf16@1": (
         "4d9fada187e6e086a1c4c496d81b785ce9419fc089e64d0141f6427b88e9d40d"
     ),
@@ -326,3 +329,211 @@ def test_compositions_accept_contract_objects_end_to_end(tmp_path: Path) -> None
         contract=fused,
     )
     assert len(trimmed) == len(records)
+
+
+# ---------------------------------------------------------------------------
+# tensorfs#124: flux1 is not flux2-klein
+# ---------------------------------------------------------------------------
+
+
+def _flux1_transformer_names(
+    *, layers: int = 19, single_layers: int = 38, guidance_embeds: bool = True
+) -> dict[str, int]:
+    """The diffusers ``FluxTransformer2DModel`` state dict, name -> rank.
+
+    The spellings are the real ones, read off the safetensors headers of the
+    two checkpoints the fleet serves (tensorhub/flux1-dev and
+    tensorhub/flux1-schnell, revision-pinned clones of the gated BFL repos).
+    ``layers``/``single_layers``/``guidance_embeds`` are the three axes
+    ``transformer/config.json`` actually varies across the served arms.
+    """
+
+    names: dict[str, int] = {
+        "x_embedder.weight": 2,
+        "x_embedder.bias": 1,
+        "context_embedder.weight": 2,
+        "context_embedder.bias": 1,
+        "proj_out.weight": 2,
+        "proj_out.bias": 1,
+        "norm_out.linear.weight": 2,
+        "norm_out.linear.bias": 1,
+    }
+    embedders = ["timestep_embedder", "text_embedder"]
+    if guidance_embeds:
+        embedders.append("guidance_embedder")
+    for embedder in embedders:
+        for index in (1, 2):
+            stem = f"time_text_embed.{embedder}.linear_{index}"
+            names[f"{stem}.weight"] = 2
+            names[f"{stem}.bias"] = 1
+    for block in range(layers):
+        stem = f"transformer_blocks.{block}"
+        for leaf in (
+            "attn.to_q", "attn.to_k", "attn.to_v",
+            "attn.add_q_proj", "attn.add_k_proj", "attn.add_v_proj",
+            "attn.to_out.0", "attn.to_add_out",
+            "ff.net.0.proj", "ff.net.2",
+            "ff_context.net.0.proj", "ff_context.net.2",
+            "norm1.linear", "norm1_context.linear",
+        ):
+            names[f"{stem}.{leaf}.weight"] = 2
+            names[f"{stem}.{leaf}.bias"] = 1
+        for norm in ("norm_q", "norm_k", "norm_added_q", "norm_added_k"):
+            names[f"{stem}.attn.{norm}.weight"] = 1
+    for block in range(single_layers):
+        stem = f"single_transformer_blocks.{block}"
+        for leaf in ("attn.to_q", "attn.to_k", "attn.to_v",
+                     "proj_mlp", "proj_out", "norm.linear"):
+            names[f"{stem}.{leaf}.weight"] = 2
+            names[f"{stem}.{leaf}.bias"] = 1
+        for norm in ("norm_q", "norm_k"):
+            names[f"{stem}.attn.{norm}.weight"] = 1
+    return names
+
+
+#: Outermost dim for the synthetic headers. NOT 2, and that is load-bearing:
+#: ``Contract.matches`` refuses outright when a declared ``fusion`` cannot cut
+#: the tensor it names, so an outer dim that is not divisible by the parts sum
+#: makes a fusion-bearing document — flux2-klein's 1:1:1:6, H3's 56 groups —
+#: refuse a file it should match, and the refusal looks exactly like the
+#: no-match this test is trying to observe. MEASURED: at 2, a real FLUX.2 Klein
+#: tree read as ``flux1.diffusers-bf16@1``, which is a false alarm about THIS
+#: document rather than a fact about it. 5040 = 2^4 x 3^2 x 5 x 7 clears every
+#: parts sum and group count in the shipped library.
+SYNTHETIC_OUTER_DIM = 5040
+
+
+def _bf16_file(path: Path, names: dict[str, int]) -> Path:
+    """A real safetensors file carrying those names at those RANKS.
+
+    Inner dims are 2: these declarations constrain rank and dtype and never
+    shape, which is what lets ONE document span a 12B BFL checkpoint and an
+    8-block derivative whose ``x_embedder`` is 196 channels wide instead of 64.
+    """
+
+    header: dict[str, object] = {}
+    offset = 0
+    for name, rank in names.items():
+        dims = [SYNTHETIC_OUTER_DIM] + [2] * (rank - 1) if rank else []
+        span = 2  # two bytes per BF16 element
+        for dim in dims:
+            span *= dim
+        header[name] = {
+            "dtype": "BF16",
+            "shape": dims,
+            "data_offsets": [offset, offset + span],
+        }
+        offset += span
+    blob = json.dumps(header).encode()
+    path.write_bytes(struct.pack("<Q", len(blob)) + blob + bytes(offset))
+    return path
+
+
+def _flux2_klein_transformer_names() -> dict[str, int]:
+    """The FLUX.2 Klein 4B transformer state dict, name -> rank.
+
+    Read off the real header of ``tensorhub/flux2-klein-4b``. Here so the
+    no-tie proof runs in BOTH directions: a document that wins its own family
+    by stealing the sibling family's files has not been proven, it has been
+    half-measured.
+    """
+
+    names: dict[str, int] = {
+        "x_embedder.weight": 2,
+        "context_embedder.weight": 2,
+        "proj_out.weight": 2,
+        "norm_out.linear.weight": 2,
+        "double_stream_modulation_img.linear.weight": 2,
+        "double_stream_modulation_txt.linear.weight": 2,
+        "single_stream_modulation.linear.weight": 2,
+        "time_guidance_embed.timestep_embedder.linear_1.weight": 2,
+        "time_guidance_embed.timestep_embedder.linear_2.weight": 2,
+    }
+    for block in range(5):
+        stem = f"transformer_blocks.{block}"
+        for leaf in (
+            "attn.to_q", "attn.to_k", "attn.to_v",
+            "attn.add_q_proj", "attn.add_k_proj", "attn.add_v_proj",
+            "attn.to_out.0", "attn.to_add_out",
+            "ff.linear_in", "ff.linear_out",
+            "ff_context.linear_in", "ff_context.linear_out",
+        ):
+            names[f"{stem}.{leaf}.weight"] = 2
+        for norm in ("norm_q", "norm_k", "norm_added_q", "norm_added_k"):
+            names[f"{stem}.attn.{norm}.weight"] = 1
+    for block in range(20):
+        stem = f"single_transformer_blocks.{block}"
+        names[f"{stem}.attn.to_qkv_mlp_proj.weight"] = 2
+        names[f"{stem}.attn.to_out.weight"] = 2
+        names[f"{stem}.attn.norm_q.weight"] = 1
+        names[f"{stem}.attn.norm_k.weight"] = 1
+    return names
+
+
+def test_flux1_does_not_steal_the_sibling_familys_files(tmp_path: Path) -> None:
+    """The other direction of tensorfs#124's no-tie proof.
+
+    FLUX.1 and FLUX.2 Klein are the closest two MMDiT spellings in the library
+    and they share 104 of Klein's 169 tensor NAMES, so the predicate that
+    separates them has to be the name SET and not a digest. Klein explains 169
+    of its own 169 where flux1 explains 104, so Klein keeps its tree; flux1
+    explains 1160 of a FLUX.1 tree where Klein explains 308, so flux1 takes
+    that one. Neither count ever ties.
+    """
+
+    names = _flux2_klein_transformer_names()
+    assert len(names) == 169, "the synthetic header drifted from the real one"
+    path = _bf16_file(tmp_path / "flux2-klein-4b.safetensors", names)
+    assert (
+        ContractRegistry(list(contracts.all())).detect_file(path)
+        == "flux2-klein.diffusers-bf16@1"
+    ), "flux1 must not win its sibling family's checkpoint"
+
+
+#: arm -> (config axes, the MEASURED transformer tensor count). The count is
+#: what ties this synthetic header to the real ones: it is what the shard
+#: headers actually add up to, so a drift in the spellings above stops being
+#: invisible.
+FLUX1_ARMS = {
+    # FLUX.1-dev: guidance-distilled.
+    "dev": (dict(layers=19, single_layers=38, guidance_embeds=True), 1160),
+    # FLUX.1-schnell: no guidance embedder — the four-tensor delta.
+    "schnell": (dict(layers=19, single_layers=38, guidance_embeds=False), 1156),
+    # ostris/Flex.2-preview: a FLUX.1-architecture redistill the flux.1-schnell
+    # endpoint serves, 8 double blocks.
+    "flex2": (dict(layers=8, single_layers=38, guidance_embeds=True), 808),
+}
+
+
+@pytest.mark.parametrize("arm", sorted(FLUX1_ARMS))
+def test_a_flux1_tree_is_flux1_and_was_flux2_klein_without_it(
+    arm: str, tmp_path: Path
+) -> None:
+    """tensorfs#124: the near miss this document exists to end.
+
+    ``dit.blocks-fused-qkv@1`` fails LOUDLY on a flux tree — it is the timm
+    ``blocks.{i}`` spelling and explains nothing. ``flux2-klein.diffusers-bf16@1``
+    is the dangerous one: FLUX.1 and FLUX.2 Klein wear the same diffusers
+    vocabulary over different architectures (19+38 blocks against 5+20, split
+    to_q/to_k/to_v against a fused to_qkv_mlp_proj, an ungated 1:1:1:4 single
+    stream against a gated 1:1:1:6), so Klein matches a FLUX.1 file with no
+    dtype or rank refusal and WON it outright before this document existed.
+
+    The without-flux1 arm is the point: it names the baseline, so this assertion
+    is known to be able to fail rather than merely never having failed.
+    """
+
+    axes, measured = FLUX1_ARMS[arm]
+    names = _flux1_transformer_names(**axes)  # type: ignore[arg-type]
+    assert len(names) == measured, "the synthetic header drifted from the real one"
+    path = _bf16_file(tmp_path / f"flux1-{arm}.safetensors", names)
+
+    library = contracts.all()
+    assert ContractRegistry(list(library)).detect_file(path) == "flux1.diffusers-bf16@1"
+
+    without_flux1 = [item for item in library if item.name != "flux1.diffusers-bf16"]
+    assert len(without_flux1) == len(library) - 1
+    assert (
+        ContractRegistry(without_flux1).detect_file(path)
+        == "flux2-klein.diffusers-bf16@1"
+    ), "the wrong-family win this document closes"
