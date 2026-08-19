@@ -76,6 +76,9 @@ RUST_PINNED = {
     "sdxl.diffusers-fp8-rowwise@1": (
         "7b78f2e44382dc5a3fe413e0f8f0a62ba63efefc810123304151c2ded931ee37"
     ),
+    "stable-audio.diffusers-fp16@1": (
+        "c580a73fda845048b99b3d3f2093be9c282da4166e1e5521fea139957b454ed3"
+    ),
     "trellis2.dit-bf16@1": (
         "f9763a5aa4b82d552c7b582d7b540cd0fdf576cc5bd234bb9e73ec617738ab52"
     ),
@@ -421,23 +424,29 @@ def _flux1_transformer_names(
 SYNTHETIC_OUTER_DIM = 5040
 
 
-def _bf16_file(path: Path, names: dict[str, int]) -> Path:
+def _bf16_file(path: Path, names: dict[str, int], dtype: str = "BF16") -> Path:
     """A real safetensors file carrying those names at those RANKS.
 
     Inner dims are 2: these declarations constrain rank and dtype and never
     shape, which is what lets ONE document span a 12B BFL checkpoint and an
     8-block derivative whose ``x_embedder`` is 196 channels wide instead of 64.
+
+    ``dtype`` is parameterised (tensorfs#139) because the audio family ships
+    F16 while every other shipped document is BF16, and because the SEPARATION
+    between some documents currently rests on element width rather than on
+    architecture — a fact worth being able to write a test about. Both BF16 and
+    F16 are two bytes, so the span arithmetic is unchanged.
     """
 
     header: dict[str, object] = {}
     offset = 0
     for name, rank in names.items():
         dims = [SYNTHETIC_OUTER_DIM] + [2] * (rank - 1) if rank else []
-        span = 2  # two bytes per BF16 element
+        span = 2  # two bytes per BF16/F16 element
         for dim in dims:
             span *= dim
         header[name] = {
-            "dtype": "BF16",
+            "dtype": dtype,
             "shape": dims,
             "data_offsets": [offset, offset + span],
         }
@@ -586,4 +595,191 @@ def test_a_flux1_tree_is_flux1_and_was_flux2_klein_without_it(
     assert runner_up != "flux1.diffusers-bf16@1", "flux1 was supposed to be removed"
     assert not runner_up.startswith("flux1."), (
         f"the wrong-family win this document closes; got {runner_up}"
+    )
+
+
+# ── stable-audio (tensorfs#139, se#769 audio lane) ───────────────────────────
+
+
+def _stable_audio_transformer_names(blocks: int = 24) -> dict[str, int]:
+    """The StableAudioDiTModel state dict, name -> rank.
+
+    Read off the REAL header of ``tensorhub/stable-audio-open``'s transformer
+    (445 tensors, ranged read, http=206) and cross-checked byte-for-byte in
+    names/shapes/dtypes against ``tensorhub/foundation-1``. The inner indices
+    are the measured ones, not guesses: ``timestep_proj``/``global_proj``/
+    ``cross_attention_proj`` are MLPs whose Linear layers sit at 0 and 2 with a
+    non-parametric activation at 1, ``to_out`` has only index 0, and ``ff.net``
+    is GEGLU at 0 + Linear at 2.
+    """
+
+    names: dict[str, int] = {
+        # The family-DISTINCTIVE anchors: FLUX has no counterpart for any of
+        # these, which is what carries specificity given the shared
+        # `transformer_blocks.*` spelling.
+        "preprocess_conv.weight": 3,
+        "postprocess_conv.weight": 3,
+        "proj_in.weight": 2,
+        "proj_out.weight": 2,
+        "time_proj.weight": 1,
+    }
+    for i in (0, 2):
+        names[f"timestep_proj.{i}.weight"] = 2
+        names[f"timestep_proj.{i}.bias"] = 1
+        names[f"global_proj.{i}.weight"] = 2
+        names[f"cross_attention_proj.{i}.weight"] = 2
+    for b in range(blocks):
+        stem = f"transformer_blocks.{b}"
+        for norm in ("norm1", "norm2", "norm3"):
+            names[f"{stem}.{norm}.weight"] = 1
+            names[f"{stem}.{norm}.bias"] = 1
+        # attn1 = self-attention, attn2 = cross-attention. SPLIT q/k/v (no
+        # fusion is declared anywhere in this family), and FLUX.1's patterns
+        # are bare `attn`, so they miss both of these.
+        for attn in ("attn1", "attn2"):
+            for proj in ("to_q", "to_k", "to_v"):
+                names[f"{stem}.{attn}.{proj}.weight"] = 2
+            names[f"{stem}.{attn}.to_out.0.weight"] = 2
+        names[f"{stem}.ff.net.0.proj.weight"] = 2
+        names[f"{stem}.ff.net.0.proj.bias"] = 1
+        names[f"{stem}.ff.net.2.weight"] = 2
+        names[f"{stem}.ff.net.2.bias"] = 1
+    return names
+
+
+#: The MEASURED transformer tensor count, so a drift in the spellings above
+#: stops being invisible.
+STABLE_AUDIO_TENSORS = 445
+
+
+def test_a_stable_audio_tree_is_stable_audio_and_nothing_wins_it_without_the_document(
+    tmp_path: Path,
+) -> None:
+    """tensorfs#139: the audio DiT wins its own tree, and the baseline is NAMED.
+
+    The near miss this document closes is real and was measured from BOTH
+    sides: 432 of StableAudio's 445 tensors are spelled ``transformer_blocks.*``
+    — the same spelling FLUX.1 uses — and the flux1 lane measured
+    ``flux1.diffusers-bf16@1`` matching 97 of them (the diffusers ``FeedForward``
+    leaf spelling ``ff.net.0.proj.*``/``ff.net.2.*`` plus ``proj_out.weight``,
+    shared verbatim). Specificity here comes from the anchors FLUX has no
+    counterpart for, plus the ``attn1``/``attn2`` split that FLUX's bare
+    ``attn`` patterns miss.
+
+    The without-the-document arm NAMES the baseline so this assertion is known
+    to be able to fail. It deliberately does NOT hardcode WHICH other family
+    wins: that is exactly the assertion that went red fleet-wide when the
+    registry legitimately grew and the runner-up changed. The durable property
+    is "removing this document changes the answer, and nothing else claims the
+    tree as stable-audio", which no amount of registry growth can invalidate.
+    """
+
+    names = _stable_audio_transformer_names()
+    assert len(names) == STABLE_AUDIO_TENSORS, (
+        "the synthetic header drifted from the real one"
+    )
+    path = _bf16_file(tmp_path / "stable-audio.safetensors", names, dtype="F16")
+
+    library = list(contracts.all())
+    assert ContractRegistry(library).detect_file(path) == "stable-audio.diffusers-fp16@1"
+
+    without = [c for c in library if c.name != "stable-audio.diffusers-fp16"]
+    assert len(without) == len(library) - 1
+    runner_up = ContractRegistry(without).detect_file(path)
+    # The baseline is MEASURED and stated exactly, not merely asserted to
+    # differ. `!= "stable-audio…"` would pass VACUOUSLY here: a no-match
+    # renders as the string "none", which is not the stamp and is also truthy,
+    # so the obvious spelling of this guard could never fire (the same trap
+    # #138 fixed in the flux1 arm above).
+    #
+    # "none" IS the honest answer for this family, and for a reason worth
+    # recording: every OTHER shipped document declares BF16, so they all refuse
+    # an F16 file outright on dtype rather than scoring against it. This
+    # document therefore closes a gap where nothing matched, not a wrong-family
+    # win — which is a WEAKER guarantee than flux1's, and the bf16 test below
+    # is where that weakness is pinned.
+    assert runner_up == "none", (
+        "the baseline moved: something now claims an F16 StableAudio tree "
+        f"without this document ({runner_up}). That is a real cross-family "
+        "capture and wants investigating, not a test update."
+    )
+
+
+def test_the_audio_family_does_not_claim_its_siblings_or_get_claimed(
+    tmp_path: Path,
+) -> None:
+    """The cross-family arms, both directions, at the TENSOR level.
+
+    tensorfs#122's tie is what this guards. Two measured facts drive it:
+    the AutoencoderOobleck and the T5 text encoder are BYTE-IDENTICAL across
+    stable-audio-open and foundation-1, and StableAudio's T5 is NAME-identical
+    with musicgen's (Jaccard 1.0, all 99). Neither is in this document, which
+    is why the tie cannot happen — but "is not declared" is only a claim until
+    a test reads the shipped document and says so.
+    """
+
+    doc = next(c for c in contracts.all() if c.name == "stable-audio.diffusers-fp16")
+    patterns = {t.pattern for t in doc.tensors}
+
+    # Transformer-only: no autoencoder, no text encoder, no tokenizer.
+    for forbidden in ("vae", "decoder.", "encoder.block", "audio_encoder", "shared."):
+        assert not any(forbidden in p for p in patterns), (
+            f"{forbidden!r} leaked into a transformer-only document"
+        )
+
+    # A FLUX.1 tree must not be claimed by the audio document.
+    flux_names = _flux1_transformer_names(
+        layers=19, single_layers=38, guidance_embeds=True
+    )
+    flux_path = _bf16_file(tmp_path / "flux1.safetensors", flux_names)
+    assert ContractRegistry(list(contracts.all())).detect_file(flux_path) != (
+        "stable-audio.diffusers-fp16@1"
+    ), "the audio document must not claim a FLUX tree"
+
+
+def test_a_bf16_stable_audio_tree_is_not_claimed_by_the_fp16_document(
+    tmp_path: Path,
+) -> None:
+    """🔴 The KNOWN GAP, pinned deliberately rather than papered over.
+
+    The served checkpoints histogram ``{F16: 445}`` and the hub records
+    ``dtype=fp16``, so this document declares F16 and NOTHING ELSE. A bf16
+    REPACK of the same architecture is therefore NOT claimed by it — the dtype
+    refusal is correct behaviour, not a bug, and widening ``dtypes`` to admit
+    BF16 would be inventing a packaging the fleet does not ship.
+
+    This matters because the flux1 lane measured that the separation between
+    ``flux1.diffusers-bf16@1`` and a StableAudio tree currently rests on
+    ELEMENT WIDTH: their 66 declarations are all BF16, so they refuse this F16
+    file outright rather than scoring 97 against it. If a bf16 StableAudio
+    repack ever ships it needs its OWN document
+    (``stable-audio.diffusers-bf16@1``), exactly as sdxl carries both a
+    ``diffusers-bf16`` and a ``diffusers-fp8-rowwise`` lane. This test exists
+    so that day is a loud failure here rather than a silent mis-serve.
+    """
+
+    names = _stable_audio_transformer_names()
+    bf16_path = _bf16_file(tmp_path / "stable-audio-bf16.safetensors", names)
+    claimed_by = ContractRegistry(list(contracts.all())).detect_file(bf16_path)
+
+    assert claimed_by != "stable-audio.diffusers-fp16@1", (
+        "an fp16 document must not claim a bf16 tree"
+    )
+
+    # 🔴 AND THE HAZARD IS LIVE, not hypothetical. MEASURED: a bf16 twin of this
+    # exact tree is claimed by ANOTHER family today — the flux1 lane predicted
+    # `flux1`, and the actual winner turned out to be a different family again,
+    # which is precisely why this is asserted as a PROPERTY rather than pinned
+    # to a name (a hardcoded winner is hostage to registry growth — the #136
+    # fleet-red).
+    #
+    # So a bf16 repack of Stable Audio would TODAY be silently mis-served as
+    # some other architecture. The endpoints still declare `plain.bf16@1`
+    # against fp16 bytes, so that repack is a plausible future, not a fantasy.
+    # The fix when it lands is a `stable-audio.diffusers-bf16@1` document, the
+    # way sdxl carries both a bf16 and an fp8-rowwise lane — never widening
+    # this document's `dtypes` to admit a packaging the fleet does not ship.
+    assert claimed_by != "none", (
+        "a bf16 StableAudio tree is claimed by NOTHING now — good news, and it "
+        "means this pin can be relaxed; re-read the comment above before doing so"
     )
