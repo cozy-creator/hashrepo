@@ -391,28 +391,103 @@ def _flux1_transformer_names(
     return names
 
 
+#: Outermost dim for the synthetic headers. NOT 2, and that is load-bearing:
+#: ``Contract.matches`` refuses outright when a declared ``fusion`` cannot cut
+#: the tensor it names, so an outer dim that is not divisible by the parts sum
+#: makes a fusion-bearing document — flux2-klein's 1:1:1:6, H3's 56 groups —
+#: refuse a file it should match, and the refusal looks exactly like the
+#: no-match this test is trying to observe. MEASURED: at 2, a real FLUX.2 Klein
+#: tree read as ``flux1.diffusers-bf16@1``, which is a false alarm about THIS
+#: document rather than a fact about it. 5040 = 2^4 x 3^2 x 5 x 7 clears every
+#: parts sum and group count in the shipped library.
+SYNTHETIC_OUTER_DIM = 5040
+
+
 def _bf16_file(path: Path, names: dict[str, int]) -> Path:
     """A real safetensors file carrying those names at those RANKS.
 
-    Dims are 2 everywhere on purpose: these declarations constrain rank and
-    dtype and never shape, which is what lets ONE document span a 12B BFL
-    checkpoint and an 8-block derivative whose ``x_embedder`` is 196 channels
-    wide instead of 64.
+    Inner dims are 2: these declarations constrain rank and dtype and never
+    shape, which is what lets ONE document span a 12B BFL checkpoint and an
+    8-block derivative whose ``x_embedder`` is 196 channels wide instead of 64.
     """
 
     header: dict[str, object] = {}
     offset = 0
     for name, rank in names.items():
-        span = 2 ** rank * 2  # dims of 2, two bytes per BF16 element
+        dims = [SYNTHETIC_OUTER_DIM] + [2] * (rank - 1) if rank else []
+        span = 2  # two bytes per BF16 element
+        for dim in dims:
+            span *= dim
         header[name] = {
             "dtype": "BF16",
-            "shape": [2] * rank,
+            "shape": dims,
             "data_offsets": [offset, offset + span],
         }
         offset += span
     blob = json.dumps(header).encode()
     path.write_bytes(struct.pack("<Q", len(blob)) + blob + bytes(offset))
     return path
+
+
+def _flux2_klein_transformer_names() -> dict[str, int]:
+    """The FLUX.2 Klein 4B transformer state dict, name -> rank.
+
+    Read off the real header of ``tensorhub/flux2-klein-4b``. Here so the
+    no-tie proof runs in BOTH directions: a document that wins its own family
+    by stealing the sibling family's files has not been proven, it has been
+    half-measured.
+    """
+
+    names: dict[str, int] = {
+        "x_embedder.weight": 2,
+        "context_embedder.weight": 2,
+        "proj_out.weight": 2,
+        "norm_out.linear.weight": 2,
+        "double_stream_modulation_img.linear.weight": 2,
+        "double_stream_modulation_txt.linear.weight": 2,
+        "single_stream_modulation.linear.weight": 2,
+        "time_guidance_embed.timestep_embedder.linear_1.weight": 2,
+        "time_guidance_embed.timestep_embedder.linear_2.weight": 2,
+    }
+    for block in range(5):
+        stem = f"transformer_blocks.{block}"
+        for leaf in (
+            "attn.to_q", "attn.to_k", "attn.to_v",
+            "attn.add_q_proj", "attn.add_k_proj", "attn.add_v_proj",
+            "attn.to_out.0", "attn.to_add_out",
+            "ff.linear_in", "ff.linear_out",
+            "ff_context.linear_in", "ff_context.linear_out",
+        ):
+            names[f"{stem}.{leaf}.weight"] = 2
+        for norm in ("norm_q", "norm_k", "norm_added_q", "norm_added_k"):
+            names[f"{stem}.attn.{norm}.weight"] = 1
+    for block in range(20):
+        stem = f"single_transformer_blocks.{block}"
+        names[f"{stem}.attn.to_qkv_mlp_proj.weight"] = 2
+        names[f"{stem}.attn.to_out.weight"] = 2
+        names[f"{stem}.attn.norm_q.weight"] = 1
+        names[f"{stem}.attn.norm_k.weight"] = 1
+    return names
+
+
+def test_flux1_does_not_steal_the_sibling_familys_files(tmp_path: Path) -> None:
+    """The other direction of tensorfs#124's no-tie proof.
+
+    FLUX.1 and FLUX.2 Klein are the closest two MMDiT spellings in the library
+    and they share 104 of Klein's 169 tensor NAMES, so the predicate that
+    separates them has to be the name SET and not a digest. Klein explains 169
+    of its own 169 where flux1 explains 104, so Klein keeps its tree; flux1
+    explains 1160 of a FLUX.1 tree where Klein explains 308, so flux1 takes
+    that one. Neither count ever ties.
+    """
+
+    names = _flux2_klein_transformer_names()
+    assert len(names) == 169, "the synthetic header drifted from the real one"
+    path = _bf16_file(tmp_path / "flux2-klein-4b.safetensors", names)
+    assert (
+        ContractRegistry(list(contracts.all())).detect_file(path)
+        == "flux2-klein.diffusers-bf16@1"
+    ), "flux1 must not win its sibling family's checkpoint"
 
 
 #: arm -> (config axes, the MEASURED transformer tensor count). The count is
