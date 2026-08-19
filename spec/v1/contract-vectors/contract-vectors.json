@@ -8,6 +8,12 @@
       "stamp": "dit.blocks-fused-qkv@1"
     },
     {
+      "name": "ernie.diffusers-bf16.v1",
+      "file": "contracts/ernie.diffusers-bf16.v1.json",
+      "digest": "b4e726e157035529a98a594a211b3d085cc5c3577182ed1e3b9bb4c1d5811c67",
+      "stamp": "ernie.diffusers-bf16@1"
+    },
+    {
       "name": "flux1.diffusers-bf16.v1",
       "file": "contracts/flux1.diffusers-bf16.v1.json",
       "digest": "392e9b54605ef75e18e7b7a29da3501f59215c091c228a16d18d403463320a63",

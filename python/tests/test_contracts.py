@@ -58,6 +58,9 @@ RUST_PINNED = {
     "minimax.h3-dit-fp8-rowwise@1": (
         "69a2cc8f338ba925d4415f67719f1ed1643e9d31f43e4af04d9b2ff1dc035d1f"
     ),
+    "ernie.diffusers-bf16@1": (
+        "b4e726e157035529a98a594a211b3d085cc5c3577182ed1e3b9bb4c1d5811c67"
+    ),
     "sdxl.clip-g-fused-qkv@1": (
         "364c0c537e54013eab72994a3e6bf0b913cfb76ab1627dc0822b95cf17b1b262"
     ),
