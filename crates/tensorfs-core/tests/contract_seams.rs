@@ -739,7 +739,7 @@ fn the_shipped_library_is_pinned_by_digest() {
         ),
         (
             "trellis2.dit-bf16@1",
-            "0a17d920f563166cc8fb3177f340125c19daffb4136390e955ac27476d5d7b95",
+            "f9763a5aa4b82d552c7b582d7b540cd0fdf576cc5bd234bb9e73ec617738ab52",
         ),
         (
             "wan22.diffusers-bf16@1",
