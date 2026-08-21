@@ -1,6 +1,14 @@
 """Content-addressed local storage and direct tensor reads and writes."""
 
-from .layout2 import ExpectedHeader, LayoutTensor, Quant
+from .layout2 import (
+    Arrangement,
+    ExpectedHeader,
+    LayoutTensor,
+    Quant,
+    SubAxis,
+    identity_arrangement,
+    layouts,
+)
 from .local import DigestMismatch, LocalCAS, Reclaimed, RefConflict, TempCollection
 from .manifest import MAX_CHUNK_SIZE, Chunk, FileEntry, RepositoryManifest
 from .project import (
@@ -42,6 +50,9 @@ __all__ = [
     "CASRef",
     "Chunk",
     "DigestMismatch",
+    "Arrangement",
+    "identity_arrangement",
+    "layouts",
     "ExpectedHeader",
     "FileEntry",
     "LayoutTensor",
@@ -49,6 +60,7 @@ __all__ = [
     "MAX_CHUNK_SIZE",
     "ProjectionError",
     "Quant",
+    "SubAxis",
     "Reclaimed",
     "RefConflict",
     "RepositoryManifest",
