@@ -246,6 +246,59 @@ def _hub_resolve(ref: str) -> list[tuple[str, object]]:
     return sorted(members, key=lambda member: member[0])
 
 
+def _check_complete(ref: str, note: str) -> None:
+    """REFUSE an hf source that covers a strict subset of the repo's tensor-
+    bearing SUBFOLDERS, unless the row says `SUB-NETWORK` on purpose.
+
+    This is the tensorfs#153 guard, and it runs HERE because completeness is a
+    fact about the source of truth, which no offline test can see: seven
+    topologies were extracted from `hf:…:unet`-shaped refs, every offline gate
+    re-derived them perfectly from their own (equally partial) banks, and
+    production stamped 12 of 501. Root-level tensor files are alternate
+    single-file packagings by convention (FLUX's `flux1-dev.safetensors`,
+    krea's `raw.safetensors`) and do not count against a subfolder tree; a
+    subfolder full of tensors that the ref does not name DOES.
+    """
+
+    declared: set[str] = set()
+    repos: set[tuple[str, str]] = set()
+    for one in ref.split(","):
+        if not one.startswith("hf:"):
+            return  # hub: resolves the whole checkpoint; local: is unverifiable
+        repo_rev, _, path = one[3:].partition(":")
+        repo, _, rev = repo_rev.partition("@")
+        repos.add((repo, rev or "main"))
+        top = path.split("/", 1)[0] if path else ""
+        declared.add(top)
+    if "SUB-NETWORK" in note:
+        return
+    for repo, rev in sorted(repos):
+        url = f"{_HF}/api/models/{repo}/tree/{rev}?recursive=true"
+        entries = json.loads(_get(url, {}))
+        tensorDirs = {
+            str(entry["path"]).split("/", 1)[0]
+            for entry in entries
+            if entry.get("type") == "file"
+            and str(entry["path"]).endswith((".safetensors", ".gguf"))
+            and "/" in str(entry["path"])
+        }
+        undeclared = sorted(
+            directory for directory in tensorDirs - declared
+            # A named exclusion is a decision, not an omission: the note may
+            # say `EXCLUDES vae_1_0 (…)` for an alternate component packaging
+            # that shares the repo — the check then holds for everything the
+            # note does NOT own up to.
+            if not ("EXCLUDES" in note and directory in note)
+        )
+        if undeclared:
+            raise SourceError(
+                f"{ref}: INCOMPLETE — {repo} carries tensor members under "
+                f"{undeclared} that this ref does not name. A topology is the "
+                "WHOLE published tree (tensorfs#153); either add the missing "
+                "subfolders or mark the row SUB-NETWORK with the reason it is "
+                "deliberately partial")
+
+
 def _resolve(ref: str) -> list[tuple[str, object]]:
     """A ref to [(member path, readable url-or-path)]."""
 
@@ -313,6 +366,7 @@ def main() -> int:
                 banked, dtype = ref[len("recast:"):].split(":", 1)
                 files = _recast(banked, dtype)
             else:
+                _check_complete(ref, note)
                 members = [member for one in ref.split(",") for member in _resolve(one)]
                 members = [member for member in members if _keep(member[0], member_filter)]
                 if not members:

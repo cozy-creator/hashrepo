@@ -173,7 +173,7 @@ func TestReplayB_AnimaPackagingsAreMorphismRelated(t *testing.T) {
 // still a fact about it.
 func TestReplayC_FusedQkvFp16FineTuneDerivesInTwoSteps(t *testing.T) {
 	loaded := catalog(t)
-	fused := mustLayoutID(t, "sdxl.clip-g-fused@1+plain.f16@1")
+	fused := mustLayoutID(t, "sdxl.clip-g-fused@2+plain.f16@1")
 	layout, err := loaded.Layout(fused)
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +189,7 @@ func TestReplayC_FusedQkvFp16FineTuneDerivesInTwoSteps(t *testing.T) {
 		t.Fatalf("stamped %s, want %s", stamp, fused)
 	}
 
-	lane := mustLayoutID(t, "sdxl.diffusers@1+plain.bf16@1")
+	lane := mustLayoutID(t, "sdxl.diffusers@2+plain.bf16@1")
 	decision := loaded.Admit(files, []tensorfs.LayoutID{lane})
 	if decision.Kind != tensorfs.DecisionDerivable {
 		t.Fatalf("want derivable, got %s: %v", decision.Kind, decision.Refusal)

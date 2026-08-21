@@ -2,24 +2,24 @@
  "_": "THE v1 -> v2 SUCCESSOR MAP. Every v1 document either names the (topology, quant) lane that replaces it, or is listed with the reason it has none. Silence is not allowed: the regression fails on a document that is in neither list.",
  "_closed": "tensorfs#152 moved SEVEN documents out of no_successor, and the reasons they carried are worth keeping because each was a different way of being wrong. flux1, stable-audio and krea-2 read 'HTTP 401 / GATED' — the repos are gated and the bank had simply been run WITHOUT HF_TOKEN; with the fleet's own token all three answer, and flux1 and stable-audio had SOURCES.tsv lines the whole time that nothing ever ran (which is the defect this issue's gate now catches). trellis2 read 'assembled from several upstream repos' — it is not: all nine members are in microsoft/TRELLIS.2-4B's ckpts/, and what actually blocked it was that three DIFFERENT DiTs share that one folder, which the extractor could not express. internvl-u and qwen-image read 'not yet extracted', which was true. rife read 'NO UPSTREAM HEADER TO EXTRACT FROM ... re-derive it from the producing module's state_dict' — the right answer was simpler and better: tensorhub SERVES the produced checkpoint, so its bytes are the reference, and bank-headers.py now reads a hub source directly.",
  "lanes": {
-  "sdxl.diffusers-bf16@1": "sdxl.diffusers@1+plain.bf16@1",
-  "sdxl.diffusers-fp8-rowwise@1": "sdxl.diffusers@1+cozy.fp8-rowwise@1",
-  "sdxl.diffusers-nvfp4-flat@1": "sdxl.diffusers@1+cozy.nvfp4-flat@1",
-  "sd15.diffusers-bf16@1": "sd15.diffusers@1+plain.bf16@1",
-  "sd2.diffusers-bf16@1": "sd2.diffusers@1+plain.bf16@1",
-  "anima.diffsynth-bf16@1": "anima.net@1+plain.bf16@1",
+  "sdxl.diffusers-bf16@1": "sdxl.diffusers@2+plain.bf16@1",
+  "sdxl.diffusers-fp8-rowwise@1": "sdxl.diffusers@2+cozy.fp8-rowwise@2",
+  "sdxl.diffusers-nvfp4-flat@1": "sdxl.diffusers@2+cozy.nvfp4-flat@1",
+  "sd15.diffusers-bf16@1": "sd15.diffusers@2+plain.bf16@1",
+  "sd2.diffusers-bf16@1": "sd2.diffusers@2+plain.bf16@1",
+  "anima.diffsynth-bf16@1": "anima.net@2+plain.bf16@1",
   "joycaption.llava-bf16@1": "joycaption.llava@1+plain.bf16@1",
   "musicgen.transformers-fp16@1": "musicgen.transformers@1+plain.f16@1",
-  "ltx-2-upsampler.diffusers-bf16@1": "ltx2-upsampler.diffusers@1+plain.bf16@1",
+  "ltx-2-upsampler.diffusers-bf16@1": "ltx2-upsampler.diffusers@2+plain.bf16@1",
   "ltx-2.diffusers-bf16@1": "ltx2.diffusers@1+plain.bf16@1",
-  "ernie.diffusers-bf16@1": "ernie.diffusers@1+plain.bf16@1",
-  "minimax.h3-dit-diffusers@1": "minimax-h3.diffusers@1+plain.bf16@1",
+  "ernie.diffusers-bf16@1": "ernie.diffusers@2+plain.bf16@1",
+  "minimax.h3-dit-diffusers@1": "minimax-h3.diffusers@2+plain.bf16@1",
   "minimax.h3-dit-native@1": "minimax-h3.native@1+plain.bf16@1",
-  "minimax.h3-dit-fp8-rowwise@1": "minimax-h3.diffusers@1+cozy.fp8-rowwise@1",
+  "minimax.h3-dit-fp8-rowwise@1": "minimax-h3.diffusers@2+cozy.fp8-rowwise@2",
   "flux2-klein.diffusers-bf16@1": "flux2-klein.diffusers@1+plain.bf16@1",
   "hidream-o1.diffusers-bf16@1": "hidream-o1.diffusers@1+plain.bf16@1",
-  "wan22.diffusers-bf16@1": "wan22.diffusers@1+plain.bf16@1",
-  "z-image.diffusers-bf16@1": "z-image.diffusers@1+plain.bf16@1",
+  "wan22.diffusers-bf16@1": "wan22.diffusers@2+plain.bf16@1",
+  "z-image.diffusers-bf16@1": "z-image.diffusers@2+plain.bf16@1",
   "flux1.diffusers-bf16@1": "flux1.diffusers@1+plain.bf16@1",
   "krea-2.diffusers-bf16@1": "krea-2.diffusers@1+plain.bf16@1",
   "stable-audio.diffusers-fp16@1": "stable-audio.diffusers@1+plain.f16@1",
@@ -38,10 +38,17 @@
  "intentional_diffs": [
   {
    "contract": "anima.diffsynth-bf16@1",
-   "checkpoint": "anima-turbo",
-   "v1": "incompatible",
-   "v2": "derivable",
-   "why": "v2 GAINED A CAPABILITY v1 DID NOT HAVE. v1 could only compare a checkpoint to one document and had no way to say that two packagings are the same network, so it refused. v2 relates them through a ratified morphism and answers with the job that closes the gap. This is the direction the design calls for: over-constraint is the failure tensorfs#122's matching-set ruling forbids."
+   "checkpoint": "anima-base",
+   "v1": "satisfies",
+   "v2": "refuse",
+   "why": "SUB-TREE BANK vs WHOLE-TREE LANE (tensorfs#153). The v1 document was scoped to one member (anima-base is that member's bank, and v1 rightly satisfied it); Paul's ruling made the lane the WHOLE published tree, so the successor pair's layout has components this bank does not carry and v2 refuses it fail-closed. The whole-tree packaging the fleet binds is banked beside it as its -hub row and ADMITS the same lane — the pair (this refuse, that admit) is the ruling, measured."
+  },
+  {
+   "contract": "ernie.diffusers-bf16@1",
+   "checkpoint": "ernie",
+   "v1": "satisfies",
+   "v2": "refuse",
+   "why": "SUB-TREE BANK vs WHOLE-TREE LANE (tensorfs#153). The v1 document was scoped to one member (ernie is that member's bank, and v1 rightly satisfied it); Paul's ruling made the lane the WHOLE published tree, so the successor pair's layout has components this bank does not carry and v2 refuses it fail-closed. The whole-tree packaging the fleet binds is banked beside it as its -hub row and ADMITS the same lane — the pair (this refuse, that admit) is the ruling, measured."
   },
   {
    "contract": "ernie.diffusers-bf16@1",
@@ -184,6 +191,13 @@
    "why": "v1 FALSE CONVERSION OFFER. krea-2.diffusers-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 reached a DTYPE disagreement against `minimax-h3-diffusers` before any structural one and offered a cast job that would have been paid for and still could not serve the lane — `minimax-h3-diffusers` is a different model. v2 stamps it first and refuses before anything is downloaded or billed."
   },
   {
+   "contract": "ltx-2-upsampler.diffusers-bf16@1",
+   "checkpoint": "ltx-2-upsampler",
+   "v1": "satisfies",
+   "v2": "refuse",
+   "why": "SUB-TREE BANK vs WHOLE-TREE LANE (tensorfs#153). The v1 document was scoped to one member (ltx-2-upsampler is that member's bank, and v1 rightly satisfied it); Paul's ruling made the lane the WHOLE published tree, so the successor pair's layout has components this bank does not carry and v2 refuses it fail-closed. The whole-tree packaging the fleet binds is banked beside it as its -hub row and ADMITS the same lane — the pair (this refuse, that admit) is the ruling, measured."
+  },
+  {
    "contract": "ltx-2.diffusers-bf16@1",
    "checkpoint": "flux2-klein",
    "v1": "satisfies",
@@ -196,6 +210,20 @@
    "v1": "derivable",
    "v2": "refuse",
    "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `ltx-2.diffusers-bf16@1` — `minimax-h3-diffusers` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `minimax-h3-diffusers` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+  },
+  {
+   "contract": "minimax.h3-dit-diffusers@1",
+   "checkpoint": "minimax-h3-diffusers",
+   "v1": "satisfies",
+   "v2": "refuse",
+   "why": "SUB-TREE BANK vs WHOLE-TREE LANE (tensorfs#153). The v1 document was scoped to one member (minimax-h3-diffusers is that member's bank, and v1 rightly satisfied it); Paul's ruling made the lane the WHOLE published tree, so the successor pair's layout has components this bank does not carry and v2 refuses it fail-closed. The whole-tree packaging the fleet binds is banked beside it as its -hub row and ADMITS the same lane — the pair (this refuse, that admit) is the ruling, measured."
+  },
+  {
+   "contract": "minimax.h3-dit-fp8-rowwise@1",
+   "checkpoint": "minimax-h3-diffusers",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "SUB-TREE BANK vs WHOLE-TREE LANE (tensorfs#153), the conversion-offer arm: v1 reached a dtype or packaging disagreement on the lone member and offered a derivation into the lane; the @2 lane is the whole published tree, and no cast of one member produces the missing components, so v2 refuses. The -hub whole-tree bank admits (or stamps the quantized pair) in its place."
   },
   {
    "contract": "minimax.h3-dit-native@1",
@@ -248,6 +276,13 @@
   },
   {
    "contract": "sd15.diffusers-bf16@1",
+   "checkpoint": "sd15",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "SUB-TREE BANK vs WHOLE-TREE LANE (tensorfs#153), the conversion-offer arm: v1 reached a dtype or packaging disagreement on the lone member and offered a derivation into the lane; the @2 lane is the whole published tree, and no cast of one member produces the missing components, so v2 refuses. The -hub whole-tree bank admits (or stamps the quantized pair) in its place."
+  },
+  {
+   "contract": "sd15.diffusers-bf16@1",
    "checkpoint": "sdxl-base",
    "v1": "derivable",
    "v2": "refuse",
@@ -273,6 +308,13 @@
    "v1": "satisfies",
    "v2": "refuse",
    "why": "v1 FALSE ADMIT. `sd2.diffusers-bf16@1` explained part of `ernie` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+  },
+  {
+   "contract": "sd2.diffusers-bf16@1",
+   "checkpoint": "sd-turbo",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "SUB-TREE BANK vs WHOLE-TREE LANE (tensorfs#153), the conversion-offer arm: v1 reached a dtype or packaging disagreement on the lone member and offered a derivation into the lane; the @2 lane is the whole published tree, and no cast of one member produces the missing components, so v2 refuses. The -hub whole-tree bank admits (or stamps the quantized pair) in its place."
   },
   {
    "contract": "sd2.diffusers-bf16@1",
@@ -562,18 +604,18 @@
    "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `wan22.diffusers-bf16@1` — `sdxl-base-fp16` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base-fp16` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
-   "contract": "z-image.diffusers-bf16@1",
-   "checkpoint": "z-image",
+   "contract": "wan22.diffusers-bf16@1",
+   "checkpoint": "wan22",
    "v1": "derivable",
-   "v2": "admit",
-   "why": "v1 REFUSED ITS OWN REFERENCE. `z-image.diffusers-bf16@1` declared BF16 for keys the shipped `z-image` tree carries at F32, so v1 offered a cast for the very checkpoint the document was derived from. v2's plain rules are reference-tolerant on islands — a key the reference itself ships at a wider compute type is accepted at either — so the reference admits, and no pointless conversion is billed."
+   "v2": "refuse",
+   "why": "SUB-TREE BANK vs WHOLE-TREE LANE (tensorfs#153), the conversion-offer arm: v1 reached a dtype or packaging disagreement on the lone member and offered a derivation into the lane; the @2 lane is the whole published tree, and no cast of one member produces the missing components, so v2 refuses. The -hub whole-tree bank admits (or stamps the quantized pair) in its place."
   }
  ],
  "_diff_summary": {
-  "incompatible -> derivable": 2,
-  "derivable -> refuse": 48,
-  "satisfies -> refuse": 25,
-  "derivable -> admit": 1,
-  "note": "Every divergence from the v1 baseline is v1 being wrong in a direction the design named: false admits, conversion jobs offered for checkpoints no conversion could make servable, refusals v2 turns into ratified derivations, and one reference checkpoint v1 refused for carrying an F32 island. The four sdxl-inpainting-bf16 rows are THE HOLE: v1's own engine SATISFIES a 9-channel conv_in against the 4-channel SDXL lane, on all 1680 tensors."
- }
+  "satisfies -> refuse": 29,
+  "derivable -> refuse": 52,
+  "incompatible -> derivable": 1,
+  "note": "Every divergence from the v1 baseline is v1 being wrong in a direction the design named: false admits, conversion jobs offered for checkpoints no conversion could make servable, refusals v2 turns into ratified derivations, and one reference checkpoint v1 refused for carrying an F32 island. The four sdxl-inpainting-bf16 rows are THE HOLE: v1's own engine SATISFIES a 9-channel conv_in against the 4-channel SDXL lane, on all 1680 tensors. tensorfs#153 retired two diffs that now REPRODUCE v1 (anima-turbo vs the composed lane is a plain refusal both sides; upstream z-image is derivable-by-cast both sides, its F32 transformer no longer hidden by count-dominance) and added eight sub-tree-bank-vs-whole-tree-lane rows, one per re-scoped v1 document."
+ },
+ "_153": "tensorfs#153 (Paul's ruling): a topology is the key->shape map of the WHOLE published checkpoint tree. The seven sub-tree-extracted records (sd15, sd2, anima.net, sdxl-inpainting, minimax-h3, ernie, ltx2-upsampler) were DEFECTIVE DATA and are REPLACED at @2, re-extracted from the trees tensorhub actually binds (digest-pinned hub sources; sdxl-inpainting from the whole upstream tree because no hub packaging exists). wan22, sdxl and z-image joined them: wan22@1 and sdxl@1 carried island maps from packagings the fleet does not bind (refusing wan-2.2@prod on its F32 VAE and sdxl's @prod-fp16vae outright), and z-image@1's BF16 dtype was a key-counting artifact over an F32-transformer reference. The @1 records are DELETED, not kept beside: Admit is stamp-first and sorted, so a candidate admitting two versions would stamp @1 and then refuse an @2 lane — the one exception pair, anima.net@1 and minimax-h3.diffusers@1, remains because each anchors a ratified morphism and their member sets cannot overlap a whole tree's. Lanes above point at the @2 pairs; the pgw#1621 re-key must consume THESE. cozy.fp8-rowwise is likewise REPLACED at @2 (the ie#681 adaln_proj transcription). flux1-schnell.diffusers@1 and flux2-klein-9b.diffusers@1 are NEW lanes with no v1 display spelling of their own: v1's rank-only documents let dev/schnell and 4B/9B share a spelling, and their endpoints must re-key onto the new pairs explicitly."
 }

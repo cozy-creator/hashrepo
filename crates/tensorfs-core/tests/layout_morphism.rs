@@ -150,7 +150,10 @@ fn an_unratified_candidate_never_derives() {
     // Nothing in the shipped catalog is a candidate today; if that changes it
     // is a deliberate act and this line is where it is noticed.
     for (handle, record) in catalog().unwrap() {
-        assert!(record.ensure_ratified().is_ok(), "{handle} ships unratified");
+        assert!(
+            record.ensure_ratified().is_ok(),
+            "{handle} ships unratified"
+        );
     }
 }
 
@@ -175,13 +178,15 @@ fn channels_last_matches_an_independent_nhwc_oracle() {
                 for ci in 0..c {
                     let to = (((ni * h + hi) * w + wi) * c + ci) as usize;
                     let from = (((ni * c + ci) * h + hi) * w + wi) as usize;
-                    expected[to * 4..to * 4 + 4]
-                        .copy_from_slice(&source[from * 4..from * 4 + 4]);
+                    expected[to * 4..to * 4 + 4].copy_from_slice(&source[from * 4..from * 4 + 4]);
                 }
             }
         }
     }
-    assert_eq!(destination, expected, "the record is not torch's channels_last");
+    assert_eq!(
+        destination, expected,
+        "the record is not torch's channels_last"
+    );
 }
 
 /// The oracle for `cublas.blockscale-128x4@1`, written from python-gen-worker
@@ -260,7 +265,9 @@ fn a_bijective_but_wrong_permutation_survives_ratification_and_fails_the_oracle(
 
     let (rows, cols) = (100u64, 3u64);
     let plan = wrong.plan(&[rows, cols]).unwrap();
-    let right = record("cublas.blockscale-128x4@1").plan(&[rows, cols]).unwrap();
+    let right = record("cublas.blockscale-128x4@1")
+        .plan(&[rows, cols])
+        .unwrap();
     let count = (rows * cols) as usize;
     let source: Vec<u8> = (0..count as u32)
         .flat_map(|at| (at + 1).to_le_bytes())
@@ -314,9 +321,8 @@ fn plan_vectors_agree_with_the_bank() {
         std::fs::write(path, &rendered).expect("rebank layout-plans.json");
         return;
     }
-    let existing = std::fs::read_to_string(path).unwrap_or_else(|error| {
-        panic!("{path}: {error}. Run with TENSORFS_REBANK=1 to write it.")
-    });
+    let existing = std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("{path}: {error}. Run with TENSORFS_REBANK=1 to write it."));
     let left: serde_json::Value = serde_json::from_str(&existing).unwrap();
     assert_eq!(
         left, banked,

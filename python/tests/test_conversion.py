@@ -302,7 +302,7 @@ def test_a_real_computed_layout_drives_the_planner(tmp_path: Path) -> None:
     layout = ExpectedHeader.from_document(_LTX2)
     shapes = {
         key: entry.shape
-        for key, entry in layout.tensors().items()
+        for key, entry in layout.component("latent_upsampler").items()
         if _count(entry.shape) <= 1024
     }
     assert shapes, "the fixture has no cheap keys to drive bytes through"

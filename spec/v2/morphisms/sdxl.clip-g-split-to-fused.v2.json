@@ -1,12 +1,13 @@
 {
  "description": "SDXL's CLIP-G text encoder, in its two shipped packagings: the diffusers split (`q_proj`/`k_proj`/`v_proj`) and the single-file OpenCLIP fusion (`in_proj_weight`). Contiguous thirds, T2 — the derive is manifest range-slicing over the same chunks, which is what makes single-file \u003c-\u003e diffusers conversion of the CLIP-G tensors a run-preserving derive rather than a refusal. SCOPED to text_encoder_2: CLIP-L ships the same key spellings at 768 and is a different component with its own packaging.",
- "digest": "6034c178fbe12401eac6d272949932f440d4433b2ed22e49cc6730d74cf5c180",
+ "digest": "1492b9a050aef9c36a7c8775f6fdd305d273e9d9f92fe1f9c18d5bfe739d620f",
  "format": "tensorfs-morphism-v2",
- "from": "sdxl.diffusers@1",
+ "from": "sdxl.diffusers@2",
  "invertible": true,
  "name": "sdxl.clip-g-split-to-fused",
  "provenance": [
-  "tensorfs#127 CLOSES HERE. v1 could not say whether a document was a SERVE LANE or a FRAGMENT, and only an accident distinguished them — the CLIP-G pair were fragments that a `lanes=` header must never name. In v2 a fragment is not a document kind at all: it is this, a morphism between two topologies, and only topologies can be named by a lane."
+  "tensorfs#127 CLOSES HERE. v1 could not say whether a document was a SERVE LANE or a FRAGMENT, and only an accident distinguished them — the CLIP-G pair were fragments that a `lanes=` header must never name. In v2 a fragment is not a document kind at all: it is this, a morphism between two topologies, and only topologies can be named by a lane.",
+  "v2 (tensorfs#153): from/to re-pinned onto the whole-published-tree sdxl.diffusers@2 / sdxl.clip-g-fused@2. The seam itself — the CLIP-G q|k|v thirds — is UNCHANGED from the ratified v1; only the topology handles moved when the sub-tree-era sdxl records were replaced."
  ],
  "seams": [
   {
@@ -57,6 +58,6 @@
   }
  ],
  "tier": 2,
- "to": "sdxl.clip-g-fused@1",
- "version": 1
+ "to": "sdxl.clip-g-fused@2",
+ "version": 2
 }

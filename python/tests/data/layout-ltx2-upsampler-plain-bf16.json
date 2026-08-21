@@ -1,7 +1,7 @@
 {
- "stamp": "ltx2-upsampler.diffusers@1+plain.bf16@1",
- "topology": "ltx2-upsampler.diffusers@1",
- "topology_digest": "0a2ea5dbfc77ed24dbcbb7647ebc51ca5babb43cc9765b1f63dc859ef3c328e1",
+ "stamp": "ltx2-upsampler.diffusers@2+plain.bf16@1",
+ "topology": "ltx2-upsampler.diffusers@2",
+ "topology_digest": "c918880121bfd5260b7f80802d91fdd2c44b8c85ecd5cf55395f543d8b5ae83d",
  "quant": {
   "handle": "plain.bf16@1",
   "declared_dtype": "bfloat16",
@@ -668,6 +668,1708 @@
       1024,
       3,
       3
+     ]
+    }
+   }
+  },
+  {
+   "name": "vae",
+   "role": "vae",
+   "tensors": {
+    "decoder.conv_in.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024
+     ]
+    },
+    "decoder.conv_in.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.conv_out.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      48
+     ]
+    },
+    "decoder.conv_out.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      48,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.mid_block.resnets.0.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024
+     ]
+    },
+    "decoder.mid_block.resnets.0.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.mid_block.resnets.0.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024
+     ]
+    },
+    "decoder.mid_block.resnets.0.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.mid_block.resnets.1.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024
+     ]
+    },
+    "decoder.mid_block.resnets.1.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.mid_block.resnets.1.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024
+     ]
+    },
+    "decoder.mid_block.resnets.1.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.0.resnets.0.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.0.resnets.0.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.0.resnets.0.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.0.resnets.0.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.0.resnets.1.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.0.resnets.1.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.0.resnets.1.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.0.resnets.1.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.0.upsamplers.0.conv.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      4096
+     ]
+    },
+    "decoder.up_blocks.0.upsamplers.0.conv.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      4096,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.1.resnets.0.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.1.resnets.0.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.1.resnets.0.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.1.resnets.0.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.1.resnets.1.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.1.resnets.1.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.1.resnets.1.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.1.resnets.1.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.1.resnets.2.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.1.resnets.2.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.1.resnets.2.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.1.resnets.2.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.1.resnets.3.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.1.resnets.3.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.1.resnets.3.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.1.resnets.3.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.1.upsamplers.0.conv.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      4096
+     ]
+    },
+    "decoder.up_blocks.1.upsamplers.0.conv.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      4096,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.2.resnets.0.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "decoder.up_blocks.2.resnets.0.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.2.resnets.0.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "decoder.up_blocks.2.resnets.0.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.2.resnets.1.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "decoder.up_blocks.2.resnets.1.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.2.resnets.1.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "decoder.up_blocks.2.resnets.1.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.2.resnets.2.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "decoder.up_blocks.2.resnets.2.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.2.resnets.2.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "decoder.up_blocks.2.resnets.2.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.2.resnets.3.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "decoder.up_blocks.2.resnets.3.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.2.resnets.3.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "decoder.up_blocks.2.resnets.3.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.2.resnets.4.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "decoder.up_blocks.2.resnets.4.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.2.resnets.4.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "decoder.up_blocks.2.resnets.4.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.2.resnets.5.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "decoder.up_blocks.2.resnets.5.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.2.resnets.5.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "decoder.up_blocks.2.resnets.5.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.2.upsamplers.0.conv.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.2.upsamplers.0.conv.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.3.resnets.0.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "decoder.up_blocks.3.resnets.0.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.3.resnets.0.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "decoder.up_blocks.3.resnets.0.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.3.resnets.1.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "decoder.up_blocks.3.resnets.1.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.3.resnets.1.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "decoder.up_blocks.3.resnets.1.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.3.resnets.2.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "decoder.up_blocks.3.resnets.2.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.3.resnets.2.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "decoder.up_blocks.3.resnets.2.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.3.resnets.3.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "decoder.up_blocks.3.resnets.3.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.3.resnets.3.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "decoder.up_blocks.3.resnets.3.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "decoder.up_blocks.3.upsamplers.0.conv.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "decoder.up_blocks.3.upsamplers.0.conv.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.conv_in.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "encoder.conv_in.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      48,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.conv_out.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      129
+     ]
+    },
+    "encoder.conv_out.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      129,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.0.downsamplers.0.conv.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      64
+     ]
+    },
+    "encoder.down_blocks.0.downsamplers.0.conv.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      64,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.0.resnets.0.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "encoder.down_blocks.0.resnets.0.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.0.resnets.0.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "encoder.down_blocks.0.resnets.0.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.0.resnets.1.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "encoder.down_blocks.0.resnets.1.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.0.resnets.1.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "encoder.down_blocks.0.resnets.1.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.0.resnets.2.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "encoder.down_blocks.0.resnets.2.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.0.resnets.2.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "encoder.down_blocks.0.resnets.2.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.0.resnets.3.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "encoder.down_blocks.0.resnets.3.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.0.resnets.3.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "encoder.down_blocks.0.resnets.3.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      128,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.1.downsamplers.0.conv.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "encoder.down_blocks.1.downsamplers.0.conv.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.1.resnets.0.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "encoder.down_blocks.1.resnets.0.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.1.resnets.0.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "encoder.down_blocks.1.resnets.0.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.1.resnets.1.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "encoder.down_blocks.1.resnets.1.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.1.resnets.1.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "encoder.down_blocks.1.resnets.1.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.1.resnets.2.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "encoder.down_blocks.1.resnets.2.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.1.resnets.2.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "encoder.down_blocks.1.resnets.2.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.1.resnets.3.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "encoder.down_blocks.1.resnets.3.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.1.resnets.3.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "encoder.down_blocks.1.resnets.3.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.1.resnets.4.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "encoder.down_blocks.1.resnets.4.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.1.resnets.4.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "encoder.down_blocks.1.resnets.4.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.1.resnets.5.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "encoder.down_blocks.1.resnets.5.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.1.resnets.5.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256
+     ]
+    },
+    "encoder.down_blocks.1.resnets.5.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      256,
+      256,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.2.downsamplers.0.conv.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "encoder.down_blocks.2.downsamplers.0.conv.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.2.resnets.0.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "encoder.down_blocks.2.resnets.0.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.2.resnets.0.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "encoder.down_blocks.2.resnets.0.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.2.resnets.1.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "encoder.down_blocks.2.resnets.1.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.2.resnets.1.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "encoder.down_blocks.2.resnets.1.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.2.resnets.2.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "encoder.down_blocks.2.resnets.2.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.2.resnets.2.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "encoder.down_blocks.2.resnets.2.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.2.resnets.3.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "encoder.down_blocks.2.resnets.3.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.2.resnets.3.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512
+     ]
+    },
+    "encoder.down_blocks.2.resnets.3.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      512,
+      512,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.3.downsamplers.0.conv.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "encoder.down_blocks.3.downsamplers.0.conv.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.3.resnets.0.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024
+     ]
+    },
+    "encoder.down_blocks.3.resnets.0.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.3.resnets.0.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024
+     ]
+    },
+    "encoder.down_blocks.3.resnets.0.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.3.resnets.1.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024
+     ]
+    },
+    "encoder.down_blocks.3.resnets.1.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.down_blocks.3.resnets.1.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024
+     ]
+    },
+    "encoder.down_blocks.3.resnets.1.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.mid_block.resnets.0.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024
+     ]
+    },
+    "encoder.mid_block.resnets.0.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.mid_block.resnets.0.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024
+     ]
+    },
+    "encoder.mid_block.resnets.0.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.mid_block.resnets.1.conv1.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024
+     ]
+    },
+    "encoder.mid_block.resnets.1.conv1.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "encoder.mid_block.resnets.1.conv2.conv.bias": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024
+     ]
+    },
+    "encoder.mid_block.resnets.1.conv2.conv.weight": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      1024,
+      1024,
+      3,
+      3,
+      3
+     ]
+    },
+    "latents_mean": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
+     ]
+    },
+    "latents_std": {
+     "dtypes": [
+      "BF16"
+     ],
+     "shape": [
+      128
      ]
     }
    }

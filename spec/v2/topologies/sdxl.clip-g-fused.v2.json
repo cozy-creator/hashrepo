@@ -706,31 +706,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.0.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.0.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.0.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.0.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.0.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.0.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.0.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.0.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.0.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.0.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -760,31 +746,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.1.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.1.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.1.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.1.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.1.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.1.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.1.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.1.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.1.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.1.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -814,31 +786,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.10.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.10.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.10.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.10.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.10.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.10.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.10.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.10.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.10.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.10.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -868,31 +826,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.11.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.11.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.11.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.11.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.11.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.11.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.11.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.11.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.11.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.11.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -922,31 +866,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.12.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.12.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.12.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.12.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.12.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.12.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.12.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.12.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.12.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.12.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -976,31 +906,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.13.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.13.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.13.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.13.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.13.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.13.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.13.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.13.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.13.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.13.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1030,31 +946,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.14.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.14.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.14.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.14.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.14.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.14.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.14.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.14.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.14.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.14.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1084,31 +986,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.15.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.15.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.15.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.15.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.15.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.15.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.15.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.15.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.15.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.15.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1138,31 +1026,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.16.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.16.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.16.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.16.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.16.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.16.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.16.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.16.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.16.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.16.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1192,31 +1066,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.17.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.17.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.17.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.17.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.17.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.17.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.17.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.17.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.17.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.17.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1246,31 +1106,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.18.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.18.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.18.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.18.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.18.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.18.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.18.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.18.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.18.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.18.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1300,31 +1146,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.19.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.19.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.19.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.19.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.19.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.19.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.19.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.19.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.19.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.19.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1354,31 +1186,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.2.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.2.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.2.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.2.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.2.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.2.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.2.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.2.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.2.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.2.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1408,31 +1226,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.20.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.20.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.20.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.20.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.20.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.20.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.20.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.20.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.20.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.20.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1462,31 +1266,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.21.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.21.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.21.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.21.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.21.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.21.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.21.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.21.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.21.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.21.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1516,31 +1306,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.22.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.22.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.22.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.22.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.22.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.22.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.22.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.22.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.22.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.22.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1570,31 +1346,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.23.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.23.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.23.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.23.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.23.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.23.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.23.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.23.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.23.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.23.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1624,31 +1386,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.24.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.24.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.24.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.24.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.24.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.24.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.24.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.24.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.24.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.24.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1678,31 +1426,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.25.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.25.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.25.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.25.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.25.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.25.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.25.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.25.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.25.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.25.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1732,31 +1466,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.26.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.26.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.26.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.26.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.26.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.26.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.26.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.26.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.26.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.26.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1786,31 +1506,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.27.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.27.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.27.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.27.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.27.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.27.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.27.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.27.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.27.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.27.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1840,31 +1546,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.28.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.28.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.28.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.28.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.28.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.28.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.28.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.28.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.28.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.28.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1894,31 +1586,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.29.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.29.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.29.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.29.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.29.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.29.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.29.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.29.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.29.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.29.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -1948,31 +1626,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.3.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.3.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.3.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.3.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.3.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.3.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.3.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.3.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.3.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.3.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -2002,31 +1666,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.30.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.30.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.30.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.30.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.30.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.30.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.30.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.30.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.30.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.30.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -2056,31 +1706,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.31.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.31.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.31.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.31.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.31.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.31.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.31.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.31.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.31.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.31.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -2110,31 +1746,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.4.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.4.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.4.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.4.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.4.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.4.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.4.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.4.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.4.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.4.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -2164,31 +1786,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.5.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.5.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.5.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.5.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.5.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.5.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.5.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.5.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.5.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.5.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -2218,31 +1826,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.6.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.6.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.6.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.6.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.6.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.6.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.6.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.6.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.6.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.6.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -2272,31 +1866,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.7.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.7.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.7.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.7.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.7.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.7.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.7.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.7.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.7.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.7.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -2326,31 +1906,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.8.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.8.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.8.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.8.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.8.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.8.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.8.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.8.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.8.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.8.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -2380,31 +1946,17 @@
      1280,
      5120
     ],
-    "text_model.encoder.layers.9.self_attn.k_proj.bias": [
-     1280
+    "text_model.encoder.layers.9.self_attn.in_proj_bias": [
+     3840
     ],
-    "text_model.encoder.layers.9.self_attn.k_proj.weight": [
-     1280,
+    "text_model.encoder.layers.9.self_attn.in_proj_weight": [
+     3840,
      1280
     ],
     "text_model.encoder.layers.9.self_attn.out_proj.bias": [
      1280
     ],
     "text_model.encoder.layers.9.self_attn.out_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.9.self_attn.q_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.9.self_attn.q_proj.weight": [
-     1280,
-     1280
-    ],
-    "text_model.encoder.layers.9.self_attn.v_proj.bias": [
-     1280
-    ],
-    "text_model.encoder.layers.9.self_attn.v_proj.weight": [
      1280,
      1280
     ],
@@ -8363,6 +7915,256 @@
    }
   },
   {
+   "islands": {
+    "decoder.conv_in.bias": "F32",
+    "decoder.conv_in.weight": "F32",
+    "decoder.conv_norm_out.bias": "F32",
+    "decoder.conv_norm_out.weight": "F32",
+    "decoder.conv_out.bias": "F32",
+    "decoder.conv_out.weight": "F32",
+    "decoder.mid_block.attentions.0.group_norm.bias": "F32",
+    "decoder.mid_block.attentions.0.group_norm.weight": "F32",
+    "decoder.mid_block.attentions.0.to_k.bias": "F32",
+    "decoder.mid_block.attentions.0.to_k.weight": "F32",
+    "decoder.mid_block.attentions.0.to_out.0.bias": "F32",
+    "decoder.mid_block.attentions.0.to_out.0.weight": "F32",
+    "decoder.mid_block.attentions.0.to_q.bias": "F32",
+    "decoder.mid_block.attentions.0.to_q.weight": "F32",
+    "decoder.mid_block.attentions.0.to_v.bias": "F32",
+    "decoder.mid_block.attentions.0.to_v.weight": "F32",
+    "decoder.mid_block.resnets.0.conv1.bias": "F32",
+    "decoder.mid_block.resnets.0.conv1.weight": "F32",
+    "decoder.mid_block.resnets.0.conv2.bias": "F32",
+    "decoder.mid_block.resnets.0.conv2.weight": "F32",
+    "decoder.mid_block.resnets.0.norm1.bias": "F32",
+    "decoder.mid_block.resnets.0.norm1.weight": "F32",
+    "decoder.mid_block.resnets.0.norm2.bias": "F32",
+    "decoder.mid_block.resnets.0.norm2.weight": "F32",
+    "decoder.mid_block.resnets.1.conv1.bias": "F32",
+    "decoder.mid_block.resnets.1.conv1.weight": "F32",
+    "decoder.mid_block.resnets.1.conv2.bias": "F32",
+    "decoder.mid_block.resnets.1.conv2.weight": "F32",
+    "decoder.mid_block.resnets.1.norm1.bias": "F32",
+    "decoder.mid_block.resnets.1.norm1.weight": "F32",
+    "decoder.mid_block.resnets.1.norm2.bias": "F32",
+    "decoder.mid_block.resnets.1.norm2.weight": "F32",
+    "decoder.up_blocks.0.resnets.0.conv1.bias": "F32",
+    "decoder.up_blocks.0.resnets.0.conv1.weight": "F32",
+    "decoder.up_blocks.0.resnets.0.conv2.bias": "F32",
+    "decoder.up_blocks.0.resnets.0.conv2.weight": "F32",
+    "decoder.up_blocks.0.resnets.0.norm1.bias": "F32",
+    "decoder.up_blocks.0.resnets.0.norm1.weight": "F32",
+    "decoder.up_blocks.0.resnets.0.norm2.bias": "F32",
+    "decoder.up_blocks.0.resnets.0.norm2.weight": "F32",
+    "decoder.up_blocks.0.resnets.1.conv1.bias": "F32",
+    "decoder.up_blocks.0.resnets.1.conv1.weight": "F32",
+    "decoder.up_blocks.0.resnets.1.conv2.bias": "F32",
+    "decoder.up_blocks.0.resnets.1.conv2.weight": "F32",
+    "decoder.up_blocks.0.resnets.1.norm1.bias": "F32",
+    "decoder.up_blocks.0.resnets.1.norm1.weight": "F32",
+    "decoder.up_blocks.0.resnets.1.norm2.bias": "F32",
+    "decoder.up_blocks.0.resnets.1.norm2.weight": "F32",
+    "decoder.up_blocks.0.resnets.2.conv1.bias": "F32",
+    "decoder.up_blocks.0.resnets.2.conv1.weight": "F32",
+    "decoder.up_blocks.0.resnets.2.conv2.bias": "F32",
+    "decoder.up_blocks.0.resnets.2.conv2.weight": "F32",
+    "decoder.up_blocks.0.resnets.2.norm1.bias": "F32",
+    "decoder.up_blocks.0.resnets.2.norm1.weight": "F32",
+    "decoder.up_blocks.0.resnets.2.norm2.bias": "F32",
+    "decoder.up_blocks.0.resnets.2.norm2.weight": "F32",
+    "decoder.up_blocks.0.upsamplers.0.conv.bias": "F32",
+    "decoder.up_blocks.0.upsamplers.0.conv.weight": "F32",
+    "decoder.up_blocks.1.resnets.0.conv1.bias": "F32",
+    "decoder.up_blocks.1.resnets.0.conv1.weight": "F32",
+    "decoder.up_blocks.1.resnets.0.conv2.bias": "F32",
+    "decoder.up_blocks.1.resnets.0.conv2.weight": "F32",
+    "decoder.up_blocks.1.resnets.0.norm1.bias": "F32",
+    "decoder.up_blocks.1.resnets.0.norm1.weight": "F32",
+    "decoder.up_blocks.1.resnets.0.norm2.bias": "F32",
+    "decoder.up_blocks.1.resnets.0.norm2.weight": "F32",
+    "decoder.up_blocks.1.resnets.1.conv1.bias": "F32",
+    "decoder.up_blocks.1.resnets.1.conv1.weight": "F32",
+    "decoder.up_blocks.1.resnets.1.conv2.bias": "F32",
+    "decoder.up_blocks.1.resnets.1.conv2.weight": "F32",
+    "decoder.up_blocks.1.resnets.1.norm1.bias": "F32",
+    "decoder.up_blocks.1.resnets.1.norm1.weight": "F32",
+    "decoder.up_blocks.1.resnets.1.norm2.bias": "F32",
+    "decoder.up_blocks.1.resnets.1.norm2.weight": "F32",
+    "decoder.up_blocks.1.resnets.2.conv1.bias": "F32",
+    "decoder.up_blocks.1.resnets.2.conv1.weight": "F32",
+    "decoder.up_blocks.1.resnets.2.conv2.bias": "F32",
+    "decoder.up_blocks.1.resnets.2.conv2.weight": "F32",
+    "decoder.up_blocks.1.resnets.2.norm1.bias": "F32",
+    "decoder.up_blocks.1.resnets.2.norm1.weight": "F32",
+    "decoder.up_blocks.1.resnets.2.norm2.bias": "F32",
+    "decoder.up_blocks.1.resnets.2.norm2.weight": "F32",
+    "decoder.up_blocks.1.upsamplers.0.conv.bias": "F32",
+    "decoder.up_blocks.1.upsamplers.0.conv.weight": "F32",
+    "decoder.up_blocks.2.resnets.0.conv1.bias": "F32",
+    "decoder.up_blocks.2.resnets.0.conv1.weight": "F32",
+    "decoder.up_blocks.2.resnets.0.conv2.bias": "F32",
+    "decoder.up_blocks.2.resnets.0.conv2.weight": "F32",
+    "decoder.up_blocks.2.resnets.0.conv_shortcut.bias": "F32",
+    "decoder.up_blocks.2.resnets.0.conv_shortcut.weight": "F32",
+    "decoder.up_blocks.2.resnets.0.norm1.bias": "F32",
+    "decoder.up_blocks.2.resnets.0.norm1.weight": "F32",
+    "decoder.up_blocks.2.resnets.0.norm2.bias": "F32",
+    "decoder.up_blocks.2.resnets.0.norm2.weight": "F32",
+    "decoder.up_blocks.2.resnets.1.conv1.bias": "F32",
+    "decoder.up_blocks.2.resnets.1.conv1.weight": "F32",
+    "decoder.up_blocks.2.resnets.1.conv2.bias": "F32",
+    "decoder.up_blocks.2.resnets.1.conv2.weight": "F32",
+    "decoder.up_blocks.2.resnets.1.norm1.bias": "F32",
+    "decoder.up_blocks.2.resnets.1.norm1.weight": "F32",
+    "decoder.up_blocks.2.resnets.1.norm2.bias": "F32",
+    "decoder.up_blocks.2.resnets.1.norm2.weight": "F32",
+    "decoder.up_blocks.2.resnets.2.conv1.bias": "F32",
+    "decoder.up_blocks.2.resnets.2.conv1.weight": "F32",
+    "decoder.up_blocks.2.resnets.2.conv2.bias": "F32",
+    "decoder.up_blocks.2.resnets.2.conv2.weight": "F32",
+    "decoder.up_blocks.2.resnets.2.norm1.bias": "F32",
+    "decoder.up_blocks.2.resnets.2.norm1.weight": "F32",
+    "decoder.up_blocks.2.resnets.2.norm2.bias": "F32",
+    "decoder.up_blocks.2.resnets.2.norm2.weight": "F32",
+    "decoder.up_blocks.2.upsamplers.0.conv.bias": "F32",
+    "decoder.up_blocks.2.upsamplers.0.conv.weight": "F32",
+    "decoder.up_blocks.3.resnets.0.conv1.bias": "F32",
+    "decoder.up_blocks.3.resnets.0.conv1.weight": "F32",
+    "decoder.up_blocks.3.resnets.0.conv2.bias": "F32",
+    "decoder.up_blocks.3.resnets.0.conv2.weight": "F32",
+    "decoder.up_blocks.3.resnets.0.conv_shortcut.bias": "F32",
+    "decoder.up_blocks.3.resnets.0.conv_shortcut.weight": "F32",
+    "decoder.up_blocks.3.resnets.0.norm1.bias": "F32",
+    "decoder.up_blocks.3.resnets.0.norm1.weight": "F32",
+    "decoder.up_blocks.3.resnets.0.norm2.bias": "F32",
+    "decoder.up_blocks.3.resnets.0.norm2.weight": "F32",
+    "decoder.up_blocks.3.resnets.1.conv1.bias": "F32",
+    "decoder.up_blocks.3.resnets.1.conv1.weight": "F32",
+    "decoder.up_blocks.3.resnets.1.conv2.bias": "F32",
+    "decoder.up_blocks.3.resnets.1.conv2.weight": "F32",
+    "decoder.up_blocks.3.resnets.1.norm1.bias": "F32",
+    "decoder.up_blocks.3.resnets.1.norm1.weight": "F32",
+    "decoder.up_blocks.3.resnets.1.norm2.bias": "F32",
+    "decoder.up_blocks.3.resnets.1.norm2.weight": "F32",
+    "decoder.up_blocks.3.resnets.2.conv1.bias": "F32",
+    "decoder.up_blocks.3.resnets.2.conv1.weight": "F32",
+    "decoder.up_blocks.3.resnets.2.conv2.bias": "F32",
+    "decoder.up_blocks.3.resnets.2.conv2.weight": "F32",
+    "decoder.up_blocks.3.resnets.2.norm1.bias": "F32",
+    "decoder.up_blocks.3.resnets.2.norm1.weight": "F32",
+    "decoder.up_blocks.3.resnets.2.norm2.bias": "F32",
+    "decoder.up_blocks.3.resnets.2.norm2.weight": "F32",
+    "encoder.conv_in.bias": "F32",
+    "encoder.conv_in.weight": "F32",
+    "encoder.conv_norm_out.bias": "F32",
+    "encoder.conv_norm_out.weight": "F32",
+    "encoder.conv_out.bias": "F32",
+    "encoder.conv_out.weight": "F32",
+    "encoder.down_blocks.0.downsamplers.0.conv.bias": "F32",
+    "encoder.down_blocks.0.downsamplers.0.conv.weight": "F32",
+    "encoder.down_blocks.0.resnets.0.conv1.bias": "F32",
+    "encoder.down_blocks.0.resnets.0.conv1.weight": "F32",
+    "encoder.down_blocks.0.resnets.0.conv2.bias": "F32",
+    "encoder.down_blocks.0.resnets.0.conv2.weight": "F32",
+    "encoder.down_blocks.0.resnets.0.norm1.bias": "F32",
+    "encoder.down_blocks.0.resnets.0.norm1.weight": "F32",
+    "encoder.down_blocks.0.resnets.0.norm2.bias": "F32",
+    "encoder.down_blocks.0.resnets.0.norm2.weight": "F32",
+    "encoder.down_blocks.0.resnets.1.conv1.bias": "F32",
+    "encoder.down_blocks.0.resnets.1.conv1.weight": "F32",
+    "encoder.down_blocks.0.resnets.1.conv2.bias": "F32",
+    "encoder.down_blocks.0.resnets.1.conv2.weight": "F32",
+    "encoder.down_blocks.0.resnets.1.norm1.bias": "F32",
+    "encoder.down_blocks.0.resnets.1.norm1.weight": "F32",
+    "encoder.down_blocks.0.resnets.1.norm2.bias": "F32",
+    "encoder.down_blocks.0.resnets.1.norm2.weight": "F32",
+    "encoder.down_blocks.1.downsamplers.0.conv.bias": "F32",
+    "encoder.down_blocks.1.downsamplers.0.conv.weight": "F32",
+    "encoder.down_blocks.1.resnets.0.conv1.bias": "F32",
+    "encoder.down_blocks.1.resnets.0.conv1.weight": "F32",
+    "encoder.down_blocks.1.resnets.0.conv2.bias": "F32",
+    "encoder.down_blocks.1.resnets.0.conv2.weight": "F32",
+    "encoder.down_blocks.1.resnets.0.conv_shortcut.bias": "F32",
+    "encoder.down_blocks.1.resnets.0.conv_shortcut.weight": "F32",
+    "encoder.down_blocks.1.resnets.0.norm1.bias": "F32",
+    "encoder.down_blocks.1.resnets.0.norm1.weight": "F32",
+    "encoder.down_blocks.1.resnets.0.norm2.bias": "F32",
+    "encoder.down_blocks.1.resnets.0.norm2.weight": "F32",
+    "encoder.down_blocks.1.resnets.1.conv1.bias": "F32",
+    "encoder.down_blocks.1.resnets.1.conv1.weight": "F32",
+    "encoder.down_blocks.1.resnets.1.conv2.bias": "F32",
+    "encoder.down_blocks.1.resnets.1.conv2.weight": "F32",
+    "encoder.down_blocks.1.resnets.1.norm1.bias": "F32",
+    "encoder.down_blocks.1.resnets.1.norm1.weight": "F32",
+    "encoder.down_blocks.1.resnets.1.norm2.bias": "F32",
+    "encoder.down_blocks.1.resnets.1.norm2.weight": "F32",
+    "encoder.down_blocks.2.downsamplers.0.conv.bias": "F32",
+    "encoder.down_blocks.2.downsamplers.0.conv.weight": "F32",
+    "encoder.down_blocks.2.resnets.0.conv1.bias": "F32",
+    "encoder.down_blocks.2.resnets.0.conv1.weight": "F32",
+    "encoder.down_blocks.2.resnets.0.conv2.bias": "F32",
+    "encoder.down_blocks.2.resnets.0.conv2.weight": "F32",
+    "encoder.down_blocks.2.resnets.0.conv_shortcut.bias": "F32",
+    "encoder.down_blocks.2.resnets.0.conv_shortcut.weight": "F32",
+    "encoder.down_blocks.2.resnets.0.norm1.bias": "F32",
+    "encoder.down_blocks.2.resnets.0.norm1.weight": "F32",
+    "encoder.down_blocks.2.resnets.0.norm2.bias": "F32",
+    "encoder.down_blocks.2.resnets.0.norm2.weight": "F32",
+    "encoder.down_blocks.2.resnets.1.conv1.bias": "F32",
+    "encoder.down_blocks.2.resnets.1.conv1.weight": "F32",
+    "encoder.down_blocks.2.resnets.1.conv2.bias": "F32",
+    "encoder.down_blocks.2.resnets.1.conv2.weight": "F32",
+    "encoder.down_blocks.2.resnets.1.norm1.bias": "F32",
+    "encoder.down_blocks.2.resnets.1.norm1.weight": "F32",
+    "encoder.down_blocks.2.resnets.1.norm2.bias": "F32",
+    "encoder.down_blocks.2.resnets.1.norm2.weight": "F32",
+    "encoder.down_blocks.3.resnets.0.conv1.bias": "F32",
+    "encoder.down_blocks.3.resnets.0.conv1.weight": "F32",
+    "encoder.down_blocks.3.resnets.0.conv2.bias": "F32",
+    "encoder.down_blocks.3.resnets.0.conv2.weight": "F32",
+    "encoder.down_blocks.3.resnets.0.norm1.bias": "F32",
+    "encoder.down_blocks.3.resnets.0.norm1.weight": "F32",
+    "encoder.down_blocks.3.resnets.0.norm2.bias": "F32",
+    "encoder.down_blocks.3.resnets.0.norm2.weight": "F32",
+    "encoder.down_blocks.3.resnets.1.conv1.bias": "F32",
+    "encoder.down_blocks.3.resnets.1.conv1.weight": "F32",
+    "encoder.down_blocks.3.resnets.1.conv2.bias": "F32",
+    "encoder.down_blocks.3.resnets.1.conv2.weight": "F32",
+    "encoder.down_blocks.3.resnets.1.norm1.bias": "F32",
+    "encoder.down_blocks.3.resnets.1.norm1.weight": "F32",
+    "encoder.down_blocks.3.resnets.1.norm2.bias": "F32",
+    "encoder.down_blocks.3.resnets.1.norm2.weight": "F32",
+    "encoder.mid_block.attentions.0.group_norm.bias": "F32",
+    "encoder.mid_block.attentions.0.group_norm.weight": "F32",
+    "encoder.mid_block.attentions.0.to_k.bias": "F32",
+    "encoder.mid_block.attentions.0.to_k.weight": "F32",
+    "encoder.mid_block.attentions.0.to_out.0.bias": "F32",
+    "encoder.mid_block.attentions.0.to_out.0.weight": "F32",
+    "encoder.mid_block.attentions.0.to_q.bias": "F32",
+    "encoder.mid_block.attentions.0.to_q.weight": "F32",
+    "encoder.mid_block.attentions.0.to_v.bias": "F32",
+    "encoder.mid_block.attentions.0.to_v.weight": "F32",
+    "encoder.mid_block.resnets.0.conv1.bias": "F32",
+    "encoder.mid_block.resnets.0.conv1.weight": "F32",
+    "encoder.mid_block.resnets.0.conv2.bias": "F32",
+    "encoder.mid_block.resnets.0.conv2.weight": "F32",
+    "encoder.mid_block.resnets.0.norm1.bias": "F32",
+    "encoder.mid_block.resnets.0.norm1.weight": "F32",
+    "encoder.mid_block.resnets.0.norm2.bias": "F32",
+    "encoder.mid_block.resnets.0.norm2.weight": "F32",
+    "encoder.mid_block.resnets.1.conv1.bias": "F32",
+    "encoder.mid_block.resnets.1.conv1.weight": "F32",
+    "encoder.mid_block.resnets.1.conv2.bias": "F32",
+    "encoder.mid_block.resnets.1.conv2.weight": "F32",
+    "encoder.mid_block.resnets.1.norm1.bias": "F32",
+    "encoder.mid_block.resnets.1.norm1.weight": "F32",
+    "encoder.mid_block.resnets.1.norm2.bias": "F32",
+    "encoder.mid_block.resnets.1.norm2.weight": "F32",
+    "post_quant_conv.bias": "F32",
+    "post_quant_conv.weight": "F32",
+    "quant_conv.bias": "F32",
+    "quant_conv.weight": "F32"
+   },
    "name": "vae",
    "role": "vae",
    "tensors": {
@@ -9313,11 +9115,11 @@
    }
   }
  ],
- "derived_from": "sdxl-base-sharded (local:/home/fidika/.cache/cozy/pgw1587-accept/sdxl-bf16-tree)",
- "description": "SDXL, the diffusers multifolder packaging (unet / vae / text_encoder / text_encoder_2). Extracted from the served 3-shard tree, so shard-flattening is exercised by the reference itself.",
- "digest": "439af5a60f884e2dea28c935b178aa89cf99e09a9ed35b528ccc89b59a406056",
- "dtype": "BF16",
+ "derived_from": "sdxl-hub (hub:tensorhub/wai-illustrious@sha256:55c20c66004d0dfb707fadc44f7fab6f8e71eba51d001cc7ea747b3303b56aa9)",
+ "description": "SDXL with the CLIP-G text encoder in the single-file OpenCLIP fusion — the packaging a fused-qkv fine-tune arrives in, now derived from the whole-tree sdxl.diffusers@2.",
+ "digest": "fa0132b3695e674fa449167c23df3a0eeb9740659a06f65da2363f40a7d7b182",
+ "dtype": "F16",
  "format": "tensorfs-topology-v2",
- "name": "sdxl.diffusers",
- "version": 1
+ "name": "sdxl.clip-g-fused",
+ "version": 2
 }

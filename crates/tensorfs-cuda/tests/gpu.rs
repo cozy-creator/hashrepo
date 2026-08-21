@@ -21,7 +21,7 @@ use std::ffi::c_void;
 
 use tensorfs_core::layout_fill::{ChunkedSource, HostSink, TensorFill, fill};
 use tensorfs_core::layout_morphism::arrangement;
-use tensorfs_cuda::{CudaSink, CUdeviceptr, bind, driver};
+use tensorfs_cuda::{CUdeviceptr, CudaSink, bind, driver};
 
 const SANCTIONING_VARS: [&str; 2] = ["TENSORFS_GPU_WINDOW", "TENSORFS_GPU"];
 
@@ -131,7 +131,10 @@ fn both_backends_produce_the_same_bytes_for_channels_last() {
         host.bytes(),
         "the two backends of ONE transform implementation produced different bytes"
     );
-    assert_eq!(host_stats, device_stats, "the two backends measured differently");
+    assert_eq!(
+        host_stats, device_stats,
+        "the two backends measured differently"
+    );
     // Ten reps, ten transfers: the sink counts what it actually moved, which is
     // the number a bench reads and so must not be a per-call reset.
     assert_eq!(device.bytes_to_device, bytes as u64 * 10);
@@ -205,7 +208,10 @@ fn the_identity_fill_is_one_run_and_one_transfer() {
         );
         let _ = (cuda.mem_free)(destination);
     }
-    assert!(readback.iter().all(|byte| *byte == 0x5A), "the card holds other bytes");
+    assert!(
+        readback.iter().all(|byte| *byte == 0x5A),
+        "the card holds other bytes"
+    );
     assert_eq!(stats.runs, 1, "the identity is not one run");
     eprintln!(
         "tensorfs#154 identity fill: {megabytes} MiB in {:.3} ms = {:.2} GiB/s \
@@ -266,7 +272,10 @@ fn only_an_exact_1_on_a_sanctioning_variable_opens_the_gate() {
 
     // Closed by default. This is the case that matters: a bare `cargo test` on
     // the shared box must not touch the card.
-    assert!(!sanctioned(env(&[])), "an unset environment opened the gate");
+    assert!(
+        !sanctioned(env(&[])),
+        "an unset environment opened the gate"
+    );
     assert!(sanctioned(env(&[("TENSORFS_GPU_WINDOW", "1")])));
     assert!(sanctioned(env(&[("TENSORFS_GPU", "1")])));
     assert!(sanctioned(env(&[

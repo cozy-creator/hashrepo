@@ -122,11 +122,7 @@ pub fn bind(device: c_int) -> Result<(), LayoutError> {
     unsafe {
         check(cuda, (cuda.init)(0), "cuInit")?;
         let mut ordinal: c_int = 0;
-        check(
-            cuda,
-            (cuda.device_get)(&mut ordinal, device),
-            "cuDeviceGet",
-        )?;
+        check(cuda, (cuda.device_get)(&mut ordinal, device), "cuDeviceGet")?;
         let mut context: *mut c_void = std::ptr::null_mut();
         check(
             cuda,

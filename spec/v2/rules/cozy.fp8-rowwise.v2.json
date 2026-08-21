@@ -1,0 +1,76 @@
+{
+ "base_dtype": "BF16",
+ "capability_floor_sm": 89,
+ "conventions": {
+  "activation_scale": "dynamic (no stored input_scale)",
+  "amax_divisor": "448",
+  "element": "fp8_e4m3",
+  "scale": "per_channel_out",
+  "scale_dtype": "F32",
+  "scale_layout": "flat-row-major",
+  "scale_span": "one per output row"
+ },
+ "declared_dtype": "float8_e4m3fn",
+ "description": "Per-output-channel-scaled fp8 storage of the DENOISER's block Linears: the weight becomes F8_E4M3 at its own shape and grows an F32 [out] `weight_scale` DEQUANT multiplier; every other tensor, and every other component, is untouched at BF16. THE PREDICATE IS TRANSCRIBED FROM THE PRODUCER, not from a description of it: python-gen-worker `src/gen_worker/convert/writer.py:544` `w8a8_cast_eligible` — a rank-2 float `.weight`, both dims 16-aligned (torch._scaled_mm's `_DIM_ALIGN`), under a repeated-block path segment (`\\.\\d+\\.`), whose module path misses every skip pattern. The skip list is split by how the producer ANCHORS it: `embed`/`norm`/... match anywhere, while `^proj_in$`, `^proj_out$` and `^proj$` match only a module path that IS that word — which is why SDXL's `down_blocks.{i}.attentions.{i}.proj_in` DOES convert. The base dtype is BF16 and that is a CONVENTION FACT, not an accident: cozy fp8 artifacts are requantized from the bf16 source, so an fp8 tree whose passthrough tensors are F16 is a different packaging and must not wear this stamp. `input_scale` is deliberately absent: activation scales are dynamic at serve time, so the producer emits none, and a tree carrying them is a different, statically calibrated layout. v2 (tensorfs#153) ADDS `adaln_proj` to the anywhere-match skips, and the addition is a TRANSCRIPTION, not a judgement: the producer takes invoke-supplied extra skip regexes (`w8a8_skip_patterns`, jobs conversion/src/conversion/transform.py, ie#681) precisely because the shared default knows `adaln_single` and not MiniMax-H3's `adaln_proj`, and a bare H3 run quantizes 50 modulation projections that te#171's AdaLN-skip precompute then reads as bf16 — garbage. The published H3 fp8-rowwise tree (tensorhub/minimax-h3 sha256:0601b889…) was produced WITH that widening: its 312 quantized tensors are the block attn/ff Linears of the transformer AND token-refiner blocks, and every adaln_proj.linear stays bf16 — measured, 950-tensor member, 312 F8 + 312 scales. No other shipped family spells any module `adaln_proj` (anima's quantized adaln_modulation_cross_attn does not contain it; sdxl and wan have no such module), so v2 computes a layout IDENTICAL to v1 on every topology except minimax-h3.diffusers — which is also why v1 is REPLACED rather than kept: two rules computing one layout would be two names for one packaging.",
+ "digest": "47a664f39acb14558d9f0b2bfabfb1cb3a95ae0b2a309a0cbbe11df2588c5ba7",
+ "eligible": {
+  "dim_align": [
+   16,
+   16
+  ],
+  "key_suffix": ".weight",
+  "rank": 2,
+  "require_repeated_block_segment": true,
+  "skip_module_exact": [
+   "proj_in",
+   "proj_out",
+   "proj"
+  ],
+  "skip_module_substrings": [
+   "adaln_proj",
+   "adaln_single",
+   "decoder",
+   "embed",
+   "final_layer",
+   "gate_logits",
+   "norm",
+   "pooler",
+   "postprocess_conv",
+   "preprocess_conv",
+   "quantize"
+  ],
+  "source_dtypes": [
+   "F64",
+   "F32",
+   "F16",
+   "BF16"
+  ]
+ },
+ "emissions": [
+  {
+   "dtype": "F8_E4M3",
+   "key": "{module}.weight",
+   "shape": [
+    "d0",
+    "d1"
+   ]
+  },
+  {
+   "dtype": "F32",
+   "key": "{module}.weight_scale",
+   "shape": [
+    "d0"
+   ]
+  }
+ ],
+ "format": "tensorfs-quant-rule-v2",
+ "inverse": "W_bf16[r, c] = weight[r, c] * weight_scale[r]",
+ "lossy": true,
+ "name": "cozy.fp8-rowwise",
+ "reference_tolerant": true,
+ "scope_roles": [
+  "denoiser",
+  "backbone"
+ ],
+ "version": 2
+}
