@@ -95,7 +95,7 @@ fn both_backends_produce_the_same_bytes_for_channels_last() {
             "the test could not allocate its own scratch destination"
         );
     }
-    let mut device = CudaSink::new(destination, bytes).expect("pinned staging");
+    let mut device = CudaSink::new(destination, bytes, bytes).expect("pinned staging");
     // Best of 10, for the same reason the identity leg takes ten.
     let mut best = f64::INFINITY;
     let mut device_stats = Default::default();
@@ -174,7 +174,7 @@ fn the_identity_fill_is_one_run_and_one_transfer() {
     unsafe {
         assert_eq!((cuda.mem_alloc)(&mut destination, bytes), 0, "alloc");
     }
-    let mut device = CudaSink::new(destination, bytes).expect("pinned staging");
+    let mut device = CudaSink::new(destination, bytes, bytes).expect("pinned staging");
     let chunks = [&source[..]];
     // REPEATED, and the BEST is reported. This box's card drives a desktop, so
     // a single sample carries the compositor's noise: three consecutive single
@@ -234,7 +234,7 @@ fn a_tensor_larger_than_the_staging_budget_refuses() {
         return;
     }
     bind(0).expect("bind device 0");
-    let mut sink = CudaSink::new(0, 4096).expect("pinned staging");
+    let mut sink = CudaSink::new(0, 4096, 4096).expect("pinned staging");
     let source = tensor(4096); // 16 KiB, four times the staging budget
     let chunks = [&source[..]];
     let error = fill(
