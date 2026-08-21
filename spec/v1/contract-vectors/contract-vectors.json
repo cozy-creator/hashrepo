@@ -46,13 +46,13 @@
     {
       "name": "joycaption.llava-bf16.v1",
       "file": "contracts/joycaption.llava-bf16.v1.json",
-      "digest": "5dbd004a169c4a86ae1725f86f0e693507aed55c7fc37b9e12780019c43e240d",
+      "digest": "dbed1ac6ef5756f0dfe60d1c605c193c645e2bcc7d25f6825b01bd12f159f7f5",
       "stamp": "joycaption.llava-bf16@1"
     },
     {
       "name": "krea-2.diffusers-bf16.v1",
       "file": "contracts/krea-2.diffusers-bf16.v1.json",
-      "digest": "0b131eeb3e07392f109053569ae91fe3dcef967c6087dc11c262a09857007000",
+      "digest": "25309e0c2e3ce980e997d54245fde6dcd8860f85521cda7d4317946ee52b1402",
       "stamp": "krea-2.diffusers-bf16@1"
     },
     {
@@ -106,7 +106,7 @@
     {
       "name": "qwen3.6-35b-a3b.vllm-fp8.v1",
       "file": "contracts/qwen3.6-35b-a3b.vllm-fp8.v1.json",
-      "digest": "18f738e4c4a7325a97d9810c1dd7de1aca9db4e080140c822c1e7b38325c8627",
+      "digest": "63904fa86d615771cc85518064ce37d4afed1a8bf0f33905a25772ac4c933749",
       "stamp": "qwen3.6-35b-a3b.vllm-fp8@1"
     },
     {

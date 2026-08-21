@@ -688,6 +688,15 @@ fn the_shipped_library_is_pinned_by_digest() {
     // stamped snapshot reproducible. Nothing enforces it at runtime — the
     // stamp is name@version, not a digest — so it is enforced HERE. Editing a
     // shipped contract without bumping its version fails this test.
+    //
+    // THE ONE EXCEPTION, and it is narrow: a document still carrying
+    // `GENERATED CANDIDATE - NOT RATIFIED` in its own description has not been
+    // published — that marker IS the "not yet" in generate -> human-ratify ->
+    // publish (tensorfs#130). Ratifying one may move its digest, and then this
+    // pin is updated in the same commit rather than the version bumped, or the
+    // library would ship a wrong @1 forever and every `lanes=` written against
+    // it would name the hypothesis. The moment the marker is gone the document
+    // is published and this pin is a promise again.
     let expected: BTreeMap<&str, &str> = BTreeMap::from([
         (
             "anima.diffsynth-bf16@1",
@@ -719,11 +728,11 @@ fn the_shipped_library_is_pinned_by_digest() {
         ),
         (
             "joycaption.llava-bf16@1",
-            "5dbd004a169c4a86ae1725f86f0e693507aed55c7fc37b9e12780019c43e240d",
+            "dbed1ac6ef5756f0dfe60d1c605c193c645e2bcc7d25f6825b01bd12f159f7f5",
         ),
         (
             "krea-2.diffusers-bf16@1",
-            "0b131eeb3e07392f109053569ae91fe3dcef967c6087dc11c262a09857007000",
+            "25309e0c2e3ce980e997d54245fde6dcd8860f85521cda7d4317946ee52b1402",
         ),
         (
             "ltx-2-upsampler.diffusers-bf16@1",
@@ -759,7 +768,7 @@ fn the_shipped_library_is_pinned_by_digest() {
         ),
         (
             "qwen3.6-35b-a3b.vllm-fp8@1",
-            "18f738e4c4a7325a97d9810c1dd7de1aca9db4e080140c822c1e7b38325c8627",
+            "63904fa86d615771cc85518064ce37d4afed1a8bf0f33905a25772ac4c933749",
         ),
         (
             "rife.flownet-fp32@1",

@@ -19,7 +19,10 @@ Derived: the pattern set (whole-segment integers become ``{i}`` holes, and
 nothing else does), the per-declaration ``rank``/``dtypes`` constraints, and
 ``required`` — a declaration is required only when EVERY source carries it, so
 handing the generator two checkpoints of one family produces the
-one-document-two-checkpoints shape as a measurement rather than a claim.
+one-document-two-checkpoints shape as a measurement rather than a claim. A
+SHARDED source is the second axis of that same question and the caller supplies
+it (``sharded=``): matching runs per member file, so all-required over a
+multi-shard checkpoint refuses the tree it was derived from.
 
 Not derived: ``role`` (mechanically the pattern itself — a spelling-independent
 identity is a human judgement about what the bytes ARE), ``fusion`` (a fused
@@ -195,7 +198,7 @@ class Report:
             + ", ".join(f"{name} x{count}" for name, count in sorted(self.dtype_histogram.items()))
         )
         for label, entries in (
-            ("OPTIONAL (absent from some source)", self.optional),
+            ("OPTIONAL", self.optional),
             ("RANK CONFLICT (collapse refused)", self.rank_conflicts),
             ("MIXED DTYPE within one pattern", self.dtype_split),
             ("NON-CONTIGUOUS index range", self.index_gaps),
@@ -222,6 +225,7 @@ def candidate(
     summary: str = "",
     ratification: Sequence[str] = (),
     ratified: Sequence[str] = (),
+    sharded: bool = False,
 ) -> tuple[dict[str, object], Report]:
     """A v1 candidate document over ``sources`` (label -> inventory).
 
@@ -229,6 +233,17 @@ def candidate(
     source carries is ``required``; one only some carry is optional, which is
     how the format states "these two checkpoints are one layout, and here is
     the delta".
+
+    ``sharded`` says at least one source is SEVERAL member files, and it makes
+    every declaration optional. That is not a hedge, it is the matcher's rule:
+    a contract matches PER MEMBER FILE (tensorhub
+    ``internal/bindgate/bindgate.go:388`` builds one ``ArtifactFile`` per
+    ``.safetensors`` and never groups an index's shards), so an all-``required``
+    document over a sharded checkpoint demands every declaration of every shard
+    and REFUSES the tree it was derived from. tensorfs#150 found all three
+    multi-shard #130 candidates in exactly that state. ``required`` is measured
+    across SOURCES; membership is a different axis, and only the caller reading
+    the refs knows how many members it resolved.
 
     ``fragment`` marks a COMPONENT fragment (``sdxl.clip-g-*``,
     ``dit.blocks-fused-qkv``) rather than a serve lane. Only a fragment may
@@ -312,9 +327,13 @@ def candidate(
         items = [item for entries in by_label.values() for item in entries]
         dtypes = sorted({item.dtype for item in items})
         rank = items[0].rank
-        required = len(by_label) == len(sources)
+        required = len(by_label) == len(sources) and not sharded
         if not required:
-            report.optional.append(f"{pattern} (only in {sorted(by_label)})")
+            report.optional.append(
+                f"{pattern} (absent from some source: only in {sorted(by_label)})"
+                if len(by_label) != len(sources)
+                else f"{pattern} (a sharded source: matching is per member file)"
+            )
         if len(dtypes) > 1:
             report.dtype_split.append(f"{pattern}: {dtypes}")
         indices = _indices(pattern, [item.name for item in items])

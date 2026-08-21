@@ -83,6 +83,21 @@ def test_required_is_the_intersection_across_checkpoints() -> None:
     assert by_pattern["b.w"]["required"] is False
 
 
+def test_a_sharded_source_makes_every_declaration_optional() -> None:
+    """A contract matches PER MEMBER FILE, so an all-required document over a
+    multi-shard checkpoint refuses the tree it was derived from — the state
+    tensorfs#150 found all three multi-shard #130 candidates in. `required` is
+    measured across SOURCES; the member count is the caller's to report."""
+
+    entries = {"only": [Observed("a.w", "BF16", 2), Observed("b.w", "BF16", 2)]}
+    document, report = candidate(entries, name="t.demo", dtype="bfloat16", sharded=True)
+    assert all(entry["required"] is False for entry in _decls(document))
+    assert any("per member file" in line for line in report.optional)
+
+    single, _ = candidate(entries, name="t.demo", dtype="bfloat16")
+    assert all("required" not in entry for entry in _decls(single))
+
+
 # ── the dtype half: derive, or refuse; never omit ────────────────────────────
 
 

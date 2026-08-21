@@ -3,7 +3,7 @@
   "name": "krea-2.diffusers-bf16",
   "version": 1,
   "dtype": "bfloat16",
-  "description": "GENERATED CANDIDATE - NOT RATIFIED. Krea 2 Raw: the diffusers transformer, TRANSFORMER ONLY on the tensorfs#121 rule.\nMixed BF16 + F32, the F32 island being the adaptive-norm / modulation tables, which is the same\nshape ltx-2 and z-image ship. Derived from UPSTREAM krea/Krea-2-Raw (a gated repo, read with the\nfleet's own token over header ranges), NOT from tensorhub/krea-2-raw. That is sound rather than a\nshortcut, and the reason is structural: the recorded mirror defect (ie#632) is a model_index.json\nCONFIG key - text_encoder_select_layers, which upstream never carried - and a contract is\nLAYOUT-only. Config compatibility is the bind gate's other half (tensorfs#122), not this\ndocument's job, so a config-level mirror defect cannot be baked into a document that declares\nonly names, ranks and dtypes. Derived mechanically by tensorfs.generate from headers only - no tensor byte was read. raw: 430 tensors 55 declarations cover 430 tensors (18 singleton, 37 indexed) dtypes: BF16 x256, F32 x174. RATIFICATION OWED: (1) CONFIRM against the mirror when a hub is reachable: this document is derived from\nupstream headers, and the claim that the mirror's TRANSFORMER headers are byte-identical to\nupstream's is inferred from the defect being config-scoped, not measured. If the mirror's\ntransformer differs, the mirror is what the fleet serves and the document follows the bytes. (2) ROLES are mechanical (role == pattern). Rename any tensor whose bytes are the same bytes another packaging spells differently - that is the only thing that makes a cross-packaging derive possible instead of a refusal. (3) FUSIONS are undeclared. A header cannot see a fused axis, so a fused qkv/gate-up must be declared by a human reading the model's config (head count, hidden size); a wrong one is a ~90%-error split that never crashes. (4) SETS are undeclared (no subset-snapshot groups). (5) COMPONENT SCOPE is the caller's: declaring a shared encoder ties this document to every family that ships the same one (tensorfs#121).",
+  "description": "GENERATED CANDIDATE - NOT RATIFIED. Krea 2 Raw: the diffusers transformer, TRANSFORMER ONLY on the tensorfs#121 rule.\nMixed BF16 + F32, the F32 island being the adaptive-norm / modulation tables, which is the same\nshape ltx-2 and z-image ship. Derived from UPSTREAM krea/Krea-2-Raw (a gated repo, read with the\nfleet's own token over header ranges), NOT from tensorhub/krea-2-raw. That is sound rather than a\nshortcut, and the reason is structural: the recorded mirror defect (ie#632) is a model_index.json\nCONFIG key - text_encoder_select_layers, which upstream never carried - and a contract is\nLAYOUT-only. Config compatibility is the bind gate's other half (tensorfs#122), not this\ndocument's job, so a config-level mirror defect cannot be baked into a document that declares\nonly names, ranks and dtypes. Derived mechanically by tensorfs.generate from headers only - no tensor byte was read. raw: 430 tensors 55 declarations cover 430 tensors (18 singleton, 37 indexed) dtypes: BF16 x256, F32 x174 OPTIONAL (absent from some source): final_layer.linear.bias (a sharded source: matching is per member file) OPTIONAL (absent from some source): final_layer.linear.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): final_layer.norm.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): final_layer.scale_shift_table (a sharded source: matching is per member file) OPTIONAL (absent from some source): img_in.bias (a sharded source: matching is per member file) OPTIONAL (absent from some source): img_in.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.layerwise_blocks.{i}.attn.norm_k.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.layerwise_blocks.{i}.attn.norm_q.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.layerwise_blocks.{i}.attn.to_gate.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.layerwise_blocks.{i}.attn.to_k.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.layerwise_blocks.{i}.attn.to_out.0.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.layerwise_blocks.{i}.attn.to_q.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.layerwise_blocks.{i}.attn.to_v.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.layerwise_blocks.{i}.ff.down.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.layerwise_blocks.{i}.ff.gate.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.layerwise_blocks.{i}.ff.up.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.layerwise_blocks.{i}.norm1.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.layerwise_blocks.{i}.norm2.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.projector.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.refiner_blocks.{i}.attn.norm_k.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.refiner_blocks.{i}.attn.norm_q.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.refiner_blocks.{i}.attn.to_gate.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.refiner_blocks.{i}.attn.to_k.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.refiner_blocks.{i}.attn.to_out.0.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.refiner_blocks.{i}.attn.to_q.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.refiner_blocks.{i}.attn.to_v.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.refiner_blocks.{i}.ff.down.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.refiner_blocks.{i}.ff.gate.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.refiner_blocks.{i}.ff.up.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.refiner_blocks.{i}.norm1.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): text_fusion.refiner_blocks.{i}.norm2.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): time_embed.linear_1.bias (a sharded source: matching is per member file) OPTIONAL (absent from some source): time_embed.linear_1.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): time_embed.linear_2.bias (a sharded source: matching is per member file) OPTIONAL (absent from some source): time_embed.linear_2.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): time_mod_proj.bias (a sharded source: matching is per member file) OPTIONAL (absent from some source): time_mod_proj.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): transformer_blocks.{i}.attn.norm_k.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): transformer_blocks.{i}.attn.norm_q.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): transformer_blocks.{i}.attn.to_gate.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): transformer_blocks.{i}.attn.to_k.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): transformer_blocks.{i}.attn.to_out.0.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): transformer_blocks.{i}.attn.to_q.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): transformer_blocks.{i}.attn.to_v.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): transformer_blocks.{i}.ff.down.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): transformer_blocks.{i}.ff.gate.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): transformer_blocks.{i}.ff.up.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): transformer_blocks.{i}.norm1.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): transformer_blocks.{i}.norm2.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): transformer_blocks.{i}.scale_shift_table (a sharded source: matching is per member file) OPTIONAL (absent from some source): txt_in.linear_1.bias (a sharded source: matching is per member file) OPTIONAL (absent from some source): txt_in.linear_1.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): txt_in.linear_2.bias (a sharded source: matching is per member file) OPTIONAL (absent from some source): txt_in.linear_2.weight (a sharded source: matching is per member file) OPTIONAL (absent from some source): txt_in.norm.weight (a sharded source: matching is per member file). RATIFIED: (1) PROVENANCE: PARTIALLY ratified 2026-08-20 by the tensorfs#150 contract-ratification lane -\nfour of five items answered from the model's own source and the real header, ONE left open, so\nthe candidate marker STAYS. (2) SELF-REFUSAL, FIXED (not a ratification item; a defect the ratification's verdict run\nexposed). Every declaration was `required` across the transformer's three shards, so the\ndocument refused the upstream tree it was generated from (`in\ntransformer/diffusion_pytorch_model-00001-of-00003.safetensors, requires\n'final_layer.linear.bias', which no tensor satisfies`) - matching is per member file\n(tensorhub internal/bindgate/bindgate.go:388-417) and a multi-member document is all-optional\nby convention (verdict.go). Declarations are now optional, and the verdict is `satisfies`. (3) FUSIONS: NONE, and the proof is the asymmetry rather than a naming convention.\ntransformer/config.json declares num_attention_heads 48 and num_key_value_heads 12 over hidden\n6144, and the header agrees exactly: `attn.to_q`/`to_gate`/`to_out.0` are [6144, 6144] while\n`attn.to_k`/`to_v` are [1536, 6144] = 12 x 128. A fused qkv cannot exist across projections of\ndifferent sizes, and there is none to mis-split. The feed-forward is SwiGLU with `ff.gate` and\n`ff.up` as SEPARATE [16384, 6144] tensors, so no gate-up seam either. Two tensors are\nconcatenation-shaped and neither is a packaging seam: `scale_shift_table` [6, 6144] is a\nmodulation table (its rank-2 first axis IS the six-way split, not an outer-axis byte\nconcatenation) and `time_mod_proj.weight` [36864, 6144] = 6 x 6144 is the projection that\nfeeds it, chunked in place. (4) SETS: none - the transformer is one component, always whole. (5) COMPONENT SCOPE: transformer ONLY, on the tensorfs#121 rule, and the repo really does ship the\nalternatives (text_encoder, vae, plus a single-file raw.safetensors). (6) ROLES stay literal: one served packaging today. RATIFICATION OWED: (1) CONFIRM AGAINST THE MIRROR. This document is derived from UPSTREAM krea/Krea-2-Raw's headers,\nand the claim that `tensorhub/krea-2-raw`'s TRANSFORMER headers are byte-identical is still\nINFERRED from the ie#632 defect being config-scoped (`text_encoder_select_layers`, a\nmodel_index key), not measured. It was ATTEMPTED and could not be measured: no reachable stack\ncatalogues the mirror - the standing master hub answers 404 for cozy/krea-2-raw and for every\nother repo ref tried, authenticated. The act that closes it: on a hub that has the mirror,\n`GET /api/v1/repos/cozy/krea-2-raw/resolve?ref=prod` with a bearer, then a ranged read of the\nfirst 8 bytes + header of each\n`transformer/diffusion_pytorch_model-0000N-of-00003.safetensors` and a set-compare of (name,\ndtype, shape) against upstream's 430 entries. If the mirror differs, the MIRROR is what the\nfleet serves and this document follows the bytes.",
   "tensors": [
     {
       "role": "final_layer.linear.bias",
@@ -11,7 +11,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "final_layer.linear.weight",
@@ -19,7 +20,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "final_layer.norm.weight",
@@ -27,7 +29,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "final_layer.scale_shift_table",
@@ -35,7 +38,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "img_in.bias",
@@ -43,7 +47,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "img_in.weight",
@@ -51,7 +56,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.layerwise_blocks.{i}.attn.norm_k.weight",
@@ -59,7 +65,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "text_fusion.layerwise_blocks.{i}.attn.norm_q.weight",
@@ -67,7 +74,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "text_fusion.layerwise_blocks.{i}.attn.to_gate.weight",
@@ -75,7 +83,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.layerwise_blocks.{i}.attn.to_k.weight",
@@ -83,7 +92,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.layerwise_blocks.{i}.attn.to_out.0.weight",
@@ -91,7 +101,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.layerwise_blocks.{i}.attn.to_q.weight",
@@ -99,7 +110,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.layerwise_blocks.{i}.attn.to_v.weight",
@@ -107,7 +119,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.layerwise_blocks.{i}.ff.down.weight",
@@ -115,7 +128,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.layerwise_blocks.{i}.ff.gate.weight",
@@ -123,7 +137,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.layerwise_blocks.{i}.ff.up.weight",
@@ -131,7 +146,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.layerwise_blocks.{i}.norm1.weight",
@@ -139,7 +155,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "text_fusion.layerwise_blocks.{i}.norm2.weight",
@@ -147,7 +164,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "text_fusion.projector.weight",
@@ -155,7 +173,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.refiner_blocks.{i}.attn.norm_k.weight",
@@ -163,7 +182,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "text_fusion.refiner_blocks.{i}.attn.norm_q.weight",
@@ -171,7 +191,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "text_fusion.refiner_blocks.{i}.attn.to_gate.weight",
@@ -179,7 +200,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.refiner_blocks.{i}.attn.to_k.weight",
@@ -187,7 +209,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.refiner_blocks.{i}.attn.to_out.0.weight",
@@ -195,7 +218,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.refiner_blocks.{i}.attn.to_q.weight",
@@ -203,7 +227,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.refiner_blocks.{i}.attn.to_v.weight",
@@ -211,7 +236,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.refiner_blocks.{i}.ff.down.weight",
@@ -219,7 +245,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.refiner_blocks.{i}.ff.gate.weight",
@@ -227,7 +254,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.refiner_blocks.{i}.ff.up.weight",
@@ -235,7 +263,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "text_fusion.refiner_blocks.{i}.norm1.weight",
@@ -243,7 +272,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "text_fusion.refiner_blocks.{i}.norm2.weight",
@@ -251,7 +281,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "time_embed.linear_1.bias",
@@ -259,7 +290,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "time_embed.linear_1.weight",
@@ -267,7 +299,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "time_embed.linear_2.bias",
@@ -275,7 +308,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "time_embed.linear_2.weight",
@@ -283,7 +317,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "time_mod_proj.bias",
@@ -291,7 +326,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "time_mod_proj.weight",
@@ -299,7 +335,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "transformer_blocks.{i}.attn.norm_k.weight",
@@ -307,7 +344,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "transformer_blocks.{i}.attn.norm_q.weight",
@@ -315,7 +353,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "transformer_blocks.{i}.attn.to_gate.weight",
@@ -323,7 +362,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "transformer_blocks.{i}.attn.to_k.weight",
@@ -331,7 +371,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "transformer_blocks.{i}.attn.to_out.0.weight",
@@ -339,7 +380,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "transformer_blocks.{i}.attn.to_q.weight",
@@ -347,7 +389,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "transformer_blocks.{i}.attn.to_v.weight",
@@ -355,7 +398,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "transformer_blocks.{i}.ff.down.weight",
@@ -363,7 +407,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "transformer_blocks.{i}.ff.gate.weight",
@@ -371,7 +416,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "transformer_blocks.{i}.ff.up.weight",
@@ -379,7 +425,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "transformer_blocks.{i}.norm1.weight",
@@ -387,7 +434,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "transformer_blocks.{i}.norm2.weight",
@@ -395,7 +443,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "transformer_blocks.{i}.scale_shift_table",
@@ -403,7 +452,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "txt_in.linear_1.bias",
@@ -411,7 +461,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "txt_in.linear_1.weight",
@@ -419,7 +470,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "txt_in.linear_2.bias",
@@ -427,7 +479,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "txt_in.linear_2.weight",
@@ -435,7 +488,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "txt_in.norm.weight",
@@ -443,7 +497,8 @@
       "dtypes": [
         "F32"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     }
   ]
 }
