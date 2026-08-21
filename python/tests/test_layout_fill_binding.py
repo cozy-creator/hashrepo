@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import struct
-import ctypes
 from pathlib import Path
 
 import pytest
@@ -71,9 +71,7 @@ def test_morphism_is_applied_by_the_same_bound_fill(tmp_path: Path) -> None:
     reader, payload = _reader(tmp_path, shape)
     destination = bytearray(len(payload))
 
-    stats = reader.fill_host_into(
-        "weight", destination, layout="torch.channels_last-2d@1"
-    )
+    stats = reader.fill_host_into("weight", destination, layout="torch.channels_last-2d@1")
 
     expected = bytes(
         payload[((n * shape[1] + c) * shape[2] + h) * shape[3] + w]
@@ -95,23 +93,18 @@ def test_fill_refusals_cross_the_binding_typed(tmp_path: Path) -> None:
         reader.fill_host_address("weight", 0, len(payload))
     allocation = (ctypes.c_ubyte * len(payload))()
     with pytest.raises(LayoutError, match="buffer holds"):
-        reader.fill_host_address(
-            "weight", ctypes.addressof(allocation), len(payload) - 1
-        )
+        reader.fill_host_address("weight", ctypes.addressof(allocation), len(payload) - 1)
     with pytest.raises(LayoutError, match="rank-5"):
-        reader.fill_host_into(
-            "weight", bytearray(len(payload)), layout="torch.channels_last-3d@1"
-        )
+        reader.fill_host_into("weight", bytearray(len(payload)), layout="torch.channels_last-3d@1")
     with pytest.raises(LayoutError, match="no such arrangement"):
-        reader.fill_host_into(
-            "weight", bytearray(len(payload)), layout="candidate.unratified@1"
-        )
+        reader.fill_host_into("weight", bytearray(len(payload)), layout="candidate.unratified@1")
     with pytest.raises(Exception, match="no tensor named"):
         reader.fill_host_into("absent", bytearray(len(payload)))
 
 
 def test_no_torch_type_or_import_exists_at_the_fill_seam() -> None:
     import inspect
+
     import tensorfs.native as native
 
     signatures = (
@@ -120,7 +113,10 @@ def test_no_torch_type_or_import_exists_at_the_fill_seam() -> None:
         inspect.signature(native.CudaFillClient.fill),
     )
     for signature in signatures:
-        assert all(parameter.annotation is inspect.Parameter.empty for parameter in signature.parameters.values())
+        assert all(
+            parameter.annotation is inspect.Parameter.empty
+            for parameter in signature.parameters.values()
+        )
         assert signature.return_annotation is inspect.Signature.empty
         assert "tensor" not in set(signature.parameters)
     assert "torch" not in Path(native.__file__).read_text(encoding="utf-8")
