@@ -34,6 +34,14 @@
 //! so the permutation rides THAT copy and the device leg stays one contiguous
 //! DMA. `runs_per_element` in the stats is what tells an operator which case a
 //! given tensor was.
+//!
+//! MEASURED, and the limit is stated where somebody will read it: on a 4070,
+//! release, best of 10, an identity fill runs at 5.15 GiB/s and a
+//! `channels_last` fill at 0.12 GiB/s (~31 ns/element). The per-element class
+//! is NOT free today. That is tensorfs#157, filed LOW — the inductor-class win
+//! it unlocks was measured at ~1%/step on SDXL, and the kernel-library layouts
+//! that would actually benefit already fold into short runs. See
+//! `docs/fill-path.md`.
 
 use crate::layout_morphism::{LayoutError, LayoutMorphism, Plan};
 

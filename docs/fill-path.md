@@ -66,8 +66,17 @@ Both legs are the same walk. The gap between them is the whole story: an
 arrangement that folds into long runs is essentially free, and a per-element
 gather is not. **The per-element class is not yet fast enough to call the
 transform free** — extrapolated, SDXL's 635 MiB conv-weight set is ~5 s of host
-time — so a cache-blocked gather or an on-device permute is owed before anyone
-quotes a channels_last win end to end.
+time — so the design's "the permutation rides the existing H2D copy at near-zero
+marginal cost" is true for the identity, near-true for short-run arrangements,
+and not yet true for the per-element class here. Do not quote it as a measured
+fact for that class.
+
+Filed as **tensorfs#157**, and filed as LOW: the compile-levers work measured the
+inductor-class win this unlocks at only ~1%/step on SDXL, which is a bad trade
+against a one-time 5 s host cost. What motivates it is the kernel-library class
+(`cublas.blockscale-128x4@1`, `nunchaku.micro-scale@1`), where the win is real —
+and those already fold into short runs, so nothing on the fleet is blocked by
+this number today.
 
 Single samples of the identity leg spread 2.8/4.4/5.6 ms on this
 desktop-driving card, which is why the legs report best of 10 rather than one
