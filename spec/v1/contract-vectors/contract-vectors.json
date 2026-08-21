@@ -2,6 +2,12 @@
   "format": "tensorfs-contract-vectors-v1",
   "golden": [
     {
+      "name": "anima.diffsynth-bf16.v1",
+      "file": "contracts/anima.diffsynth-bf16.v1.json",
+      "digest": "f8680e192e1adf6552665bb4f76ed1ba55d564577375c9082eb0ecbbb162e4fc",
+      "stamp": "anima.diffsynth-bf16@1"
+    },
+    {
       "name": "dit.blocks-fused-qkv.v1",
       "file": "contracts/dit.blocks-fused-qkv.v1.json",
       "digest": "57f09073ca1a631bb173293c84e11f462089d0fa8cf9ce45e142fc33881a17a1",
@@ -38,6 +44,24 @@
       "stamp": "internvl-u.diffusers-bf16@1"
     },
     {
+      "name": "joycaption.llava-bf16.v1",
+      "file": "contracts/joycaption.llava-bf16.v1.json",
+      "digest": "5dbd004a169c4a86ae1725f86f0e693507aed55c7fc37b9e12780019c43e240d",
+      "stamp": "joycaption.llava-bf16@1"
+    },
+    {
+      "name": "krea-2.diffusers-bf16.v1",
+      "file": "contracts/krea-2.diffusers-bf16.v1.json",
+      "digest": "0b131eeb3e07392f109053569ae91fe3dcef967c6087dc11c262a09857007000",
+      "stamp": "krea-2.diffusers-bf16@1"
+    },
+    {
+      "name": "ltx-2-upsampler.diffusers-bf16.v1",
+      "file": "contracts/ltx-2-upsampler.diffusers-bf16.v1.json",
+      "digest": "395dc3c8ccb4acc80c69135df12bf3c965a5746c88ca2c94fd75359432427621",
+      "stamp": "ltx-2-upsampler.diffusers-bf16@1"
+    },
+    {
       "name": "ltx-2.diffusers-bf16.v1",
       "file": "contracts/ltx-2.diffusers-bf16.v1.json",
       "digest": "71038ae11883111d367077eec59a457b97c8746439c3b7bc0885555e26b7aa12",
@@ -60,6 +84,36 @@
       "file": "contracts/minimax.h3-dit-native.v1.json",
       "digest": "5f6b7b4a8cd070653607840b922c213a846838e35379737727111c4b0a8de56c",
       "stamp": "minimax.h3-dit-native@1"
+    },
+    {
+      "name": "musicgen.transformers-fp16.v1",
+      "file": "contracts/musicgen.transformers-fp16.v1.json",
+      "digest": "4d78d369020fe22b612b7403b16dc9cfd653fe0a4f918d2cc364780d3c6f8ce5",
+      "stamp": "musicgen.transformers-fp16@1"
+    },
+    {
+      "name": "qwen-image.diffusers-bf16.v1",
+      "file": "contracts/qwen-image.diffusers-bf16.v1.json",
+      "digest": "757379261ff69111f5e50a5cf2a066c6a118759f1dfe1f34b605f8a49325e673",
+      "stamp": "qwen-image.diffusers-bf16@1"
+    },
+    {
+      "name": "qwen3.6-27b-mtp.gguf-ud-q4-k-xl.v1",
+      "file": "contracts/qwen3.6-27b-mtp.gguf-ud-q4-k-xl.v1.json",
+      "digest": "e870540dc46209ffae0a881120f5152828e1236cddbb9fce73898e30a1a9e674",
+      "stamp": "qwen3.6-27b-mtp.gguf-ud-q4-k-xl@1"
+    },
+    {
+      "name": "qwen3.6-35b-a3b.vllm-fp8.v1",
+      "file": "contracts/qwen3.6-35b-a3b.vllm-fp8.v1.json",
+      "digest": "18f738e4c4a7325a97d9810c1dd7de1aca9db4e080140c822c1e7b38325c8627",
+      "stamp": "qwen3.6-35b-a3b.vllm-fp8@1"
+    },
+    {
+      "name": "rife.flownet-fp32.v1",
+      "file": "contracts/rife.flownet-fp32.v1.json",
+      "digest": "4133542da74e3738449a8681c5b38cacfbe8d66083b18f24764b4f0520ed411b",
+      "stamp": "rife.flownet-fp32@1"
     },
     {
       "name": "sd15.diffusers-bf16.v1",
@@ -98,6 +152,12 @@
       "stamp": "sdxl.diffusers-fp8-rowwise@1"
     },
     {
+      "name": "sdxl.diffusers-nvfp4-flat.v1",
+      "file": "contracts/sdxl.diffusers-nvfp4-flat.v1.json",
+      "digest": "7ec1ca7afd139e9b9a2cdc449913644f6b8db95528e65fffaae51b3ce02ad031",
+      "stamp": "sdxl.diffusers-nvfp4-flat@1"
+    },
+    {
       "name": "stable-audio.diffusers-fp16.v1",
       "file": "contracts/stable-audio.diffusers-fp16.v1.json",
       "digest": "c580a73fda845048b99b3d3f2093be9c282da4166e1e5521fea139957b454ed3",
@@ -114,12 +174,6 @@
       "file": "contracts/wan22.diffusers-bf16.v1.json",
       "digest": "91036beea9878c462311d97a878a5dc94128283182fbf0948b30118852d97bd5",
       "stamp": "wan22.diffusers-bf16@1"
-    },
-    {
-      "name": "qwen-image.diffusers-bf16.v1",
-      "file": "contracts/qwen-image.diffusers-bf16.v1.json",
-      "digest": "757379261ff69111f5e50a5cf2a066c6a118759f1dfe1f34b605f8a49325e673",
-      "stamp": "qwen-image.diffusers-bf16@1"
     },
     {
       "name": "z-image.diffusers-bf16.v1",
