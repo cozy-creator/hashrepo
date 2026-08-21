@@ -65,6 +65,18 @@ network, no pickle read. That is the same property the fp8 documents have and it
 document and the producer cannot disagree. Flat F32: save_pretrained writes the fp32 module the
 pickle loads into. NOT a diffusers architecture despite the diffusers-layout tree - the tree is
 a packaging choice save_artifact makes so the artifact is a legal SDK slot." \
+  --ratified "ROLES: role == pattern is CORRECT here rather than merely mechanical. A role
+vocabulary exists so a SECOND packaging of the same bytes can be derived instead of refused, and
+this artifact cannot acquire one: we produce it, from a pickle, with save_artifact - there is no
+other spelling in the world to reconcile with." \
+  --ratified "FUSIONS: none, and none is EXPRESSIBLE. Every declaration is a plain conv weight or
+bias, a PReLU beta, or the PixelShuffle head; IFNet has no attention and no concatenated
+projection, so no tensor's outer axis is an ordered concatenation of another packaging's runs." \
+  --ratified "SETS: none. Subset snapshots have no subject in a 5.66M-parameter net that is always
+loaded whole." \
+  --ratified "SCOPE: the whole artifact, which is one component (flownet) of a one-component
+pipeline. It ties this document to no other family because it IS this platform's artifact -
+produced, not mirrored - so the tensorfs#121 shared-component hazard has no instance here." \
   --out $OUT/rife.flownet-fp32.v1.json
 fi
 
@@ -125,6 +137,18 @@ convnet bound beside the LTX-2 DiT for the two-stage 1080p/4K recipe, flat BF16.
 LATENT_UPSAMPLER ONLY - the same repo ships a vae, and declaring it would tie this document to
 the DiT's own checkpoint. This tree shares ZERO keys with ltx-2.diffusers-bf16@1, which is the
 measurement that makes Ltx2Upsampler a separate model type rather than a variant of Ltx2." \
+  --ratified "FUSIONS: none, and none is EXPRESSIBLE. LTX2LatentUpsamplerModel is a pure 3-D
+convnet - initial_conv/initial_norm, res_blocks and post_upsample_res_blocks (conv1/conv2 +
+norm1/norm2), the upsampler head, final_conv. There is no attention and no concatenated
+projection in the header, so there is no outer-axis concatenation to declare." \
+  --ratified "SETS: none." \
+  --ratified "SCOPE: latent_upsampler only, and the exclusion is MEASURED rather than argued -
+this tree shares ZERO keys with ltx-2.diffusers-bf16@1, and the sibling vae in the same repo is
+the LTX-2 pipeline's own, so declaring it would tie this document to the DiT's checkpoint." \
+  --ratify "ROLES remain mechanical (role == pattern), and unlike rife this family CAN acquire a
+second packaging - Lightricks ships native checkpoints beside the diffusers ones. If a native
+upsampler is ever served, its roles must be reconciled with these before compose::derive can move
+between them. Nothing is wrong today; the work is owed the day a second packaging appears." \
   --out $OUT/ltx-2-upsampler.diffusers-bf16.v1.json
 fi
 
@@ -148,14 +172,26 @@ pytorch streaming load this endpoint does not perform." \
 fi
 
 TARGET=qwen-mtp; if want "$@"; then
-$GEN --name qwen3.6-27b-mtp.gguf-ud-q4-k-xl --version 1 --pin-trivial --no-dtype \
+$GEN --name qwen3.6-27b-mtp.gguf-ud-q4-k-xl --version 1 --pin-trivial \
+  --dtype q4_k --dtype-unknown-to-gen-worker \
   --source ud-q4-k-xl=hf:unsloth/Qwen3.6-27B-MTP-GGUF:Qwen3.6-27B-UD-Q4_K_XL.gguf \
   --summary "Qwen3.6-27B-MTP as the GGUF the fleet actually serves - unsloth's UD-Q4_K_XL, the
-quant the endpoint names. NO top-level dtype, and the absence is the honest answer rather than a
-gap: a serve-lane dtype is defined in TORCH spelling and a block-quant container mixing Q4_K,
-Q5_K, Q6_K, Q8_0 and F32 per tensor has none. The per-tensor dtypes are GGML type names, which
-the format admits explicitly, so the layout is fully falsifiable from the directory even though
-the load dtype is not expressible. STRUCTURE READ OUT OF THE HEADER, not out of a config: 48
+quant the endpoint names. TOP-LEVEL DTYPE IS q4_k, the ggml type name, and this document is where
+the field stops meaning 'a torch spelling' and starts meaning what it always actually was: THE
+LANE'S QUANTIZATION. The earlier reading - that a block-quant container has no torch spelling and
+therefore no declarable dtype - was true about torch and wrong about the field, and it made this
+lane UNDECLARABLE under pgw#1597's always-required lanes=, which is a refusal with no remedy
+rather than an honest absence. q4_k is the container the endpoint names (UD-Q4_K_XL) and the
+plurality of the file's own tensors; the rest are the k-quant mix an unsloth UD build makes,
+declared per tensor where the format already admits ggml type names. TWO CONSEQUENCES, RECORDED
+SO NEITHER LOOKS LIKE A BUG. (1) Contract.torch_dtype REFUSES this spelling with MissingDtype,
+which is correct: there is no torch scalar type for a k-quant block, and a typed refusal naming
+the spelling beats resolving to a wrong dtype. Nothing on this path calls it - llama.cpp
+self-loads the file and ctx.load is never invoked. (2) gen-worker's DTYPE_MIN_SM does not know
+q4_k, so capability_floor_for_dtype answers 0. Zero is the RIGHT number - llama.cpp runs k-quants
+on any card - but it is currently reached by that table's unknown-is-silent default rather than
+by a decision, so gen-worker should learn q4_k: 0 explicitly. Until it does, the right answer is
+an accident. STRUCTURE READ OUT OF THE HEADER, not out of a config: 48
 blocks carry the ssm_* tensors and a fused attn_qkv, while the others carry split
 attn_q/attn_k/attn_v with q/k norms - the full-attention interval, measured. The nextn.* block
 is the MTP head." \

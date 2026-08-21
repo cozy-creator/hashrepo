@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
 
 __all__ = [
     "GENERATED_MARKER",
+    "RATIFIED_MARKER",
+    "UndeclarableLane",
     "Observed",
     "Report",
     "candidate",
@@ -48,6 +50,11 @@ __all__ = [
 #: Every generated description opens with this. Grep for it to find every
 #: unratified document in the library.
 GENERATED_MARKER = "GENERATED CANDIDATE - NOT RATIFIED."
+
+#: What replaces it once every standing owed item has an answer. A document
+#: carries exactly one of the two, so "is this ratified?" is a grep and never a
+#: judgement about how complete the prose looks.
+RATIFIED_MARKER = "GENERATED, THEN RATIFIED."
 
 #: torch spelling for a safetensors element type, for the top-level `dtype`.
 #: GGUF block-quant containers are absent on purpose: they have no torch
@@ -68,6 +75,56 @@ _TORCH_DTYPE = {
 }
 
 _SEPARATORS = re.compile(r"([./])")
+
+
+#: The dtype spellings gen-worker's ``DTYPE_MIN_SM`` recognizes
+#: (``python-gen-worker/src/gen_worker/models/tensor_layout_contract.py``), which
+#: is the ONLY producer of a lane's sm floor.
+#:
+#: A MIRROR, and labelled as one because a second copy of someone else's table is
+#: a drift hazard by construction. What it mirrors is deliberately narrow: the SET
+#: OF SPELLINGS, never the floors. tensorfs does not decide placement and must not
+#: look like it does.
+#:
+#: It earns the duplication by closing a SILENT failure. ``capability_floor_for_dtype``
+#: answers 0 for a spelling it does not know — correct for fp32, and catastrophic for a
+#: quantized lane, which would then be offered to every card in the fleet with no floor
+#: at all. A wrong floor is loud (the pod refuses); an ABSENT floor is silent, and buys
+#: hardware that cannot run the arithmetic.
+#:
+#: Staleness is bounded and cheap: if gen-worker learns a spelling this set has not,
+#: the author passes ``allow_unknown_dtype`` once. It can never make a document wrong,
+#: only make an author say the quiet part out loud.
+_KNOWN_TO_GEN_WORKER = frozenset({
+    "float32", "float", "fp32", "tf32",
+    "float16", "half", "fp16",
+    "bfloat16", "bf16",
+    "int8", "uint8",
+    "int4", "uint4",
+    "float8_e4m3fn", "float8_e4m3fnuz", "float8_e5m2", "float8_e5m2fnuz",
+    "fp8_e4m3", "fp8_e5m2", "fp8",
+    "float4_e2m1fn", "nvfp4", "fp4", "mxfp4",
+})
+
+
+class UndeclarableLane(ValueError):
+    """A LANE document has no top-level dtype and the header cannot supply one.
+
+    Raised instead of emitting the document, because a serve lane without a
+    top-level dtype is not a document with a small gap — it is a document no
+    endpoint can declare. `lanes={contract: floor}` is required on every Model
+    subclass (pgw#1597) and the declaration reads this field, so omitting it
+    turns into a refusal with no remedy at the far end of a vendor bump, which
+    is the worst place to discover it.
+
+    The remedy is always the same and the caller always knows it: pass the
+    lane's quantization explicitly. THE LANE'S QUANTIZATION IS AUTHORED
+    KNOWLEDGE, exactly like roles and fusions — it is not a majority vote over
+    the header. `sdxl.diffusers-fp8-rowwise@1` is float8_e4m3fn with 221 of its
+    257 declarations BF16; `sdxl.diffusers-nvfp4-flat@1` is float4_e2m1fn with
+    NO declaration spelling fp4 at all, because the resident weights are packed
+    U8 pairs. Both of those a header vote gets wrong.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,9 +216,12 @@ def candidate(
     name: str | None = None,
     version: int = 1,
     dtype: str | None = None,
+    fragment: bool = False,
+    allow_unknown_dtype: bool = False,
     literals: Sequence[str] = (),
     summary: str = "",
     ratification: Sequence[str] = (),
+    ratified: Sequence[str] = (),
 ) -> tuple[dict[str, object], Report]:
     """A v1 candidate document over ``sources`` (label -> inventory).
 
@@ -169,6 +229,22 @@ def candidate(
     source carries is ``required``; one only some carry is optional, which is
     how the format states "these two checkpoints are one layout, and here is
     the delta".
+
+    ``fragment`` marks a COMPONENT fragment (``sdxl.clip-g-*``,
+    ``dit.blocks-fused-qkv``) rather than a serve lane. Only a fragment may
+    carry no top-level dtype; a lane that cannot derive one raises
+    :class:`UndeclarableLane` rather than shipping undeclarable.
+
+    ``ratified`` carries the human step's ANSWERS to the four standing owed
+    items (roles, fusions, sets, scope). Supplying it suppresses those four —
+    the author is asserting they were addressed, and each line says how. With
+    nothing left in ``ratification``, the ``GENERATED CANDIDATE`` marker comes
+    OFF: the document is ratified. Partial is expressible and useful — answer
+    what the evidence settles, leave the rest owed, keep the marker — which is
+    what shrinks a human's checklist to the items that genuinely need eyes.
+
+    :raises UndeclarableLane: a non-fragment whose dtype is neither given nor
+        uniform in the header.
     """
 
     if not sources:
@@ -272,8 +348,28 @@ def candidate(
     report.declarations = len(tensors)
     report.covered = _verify_coverage(sources, tensors)
 
+    authored_dtype = dtype is not None
     if dtype is None:
-        dtype = _dominant_dtype(report.dtype_histogram)
+        dtype = _uniform_dtype(report.dtype_histogram)
+    if dtype is None and not fragment:
+        observed = ", ".join(sorted(report.dtype_histogram))
+        raise UndeclarableLane(
+            f"{name or 'this candidate'} is a LANE document with no derivable top-level "
+            f"dtype (the header carries {observed}). A lane's dtype names its "
+            "QUANTIZATION, which is authored, not voted on: pass --dtype <spelling>. "
+            "If this is a component FRAGMENT rather than a serve lane, say so with "
+            "--fragment and it may legitimately carry none."
+        )
+    if dtype is not None and dtype not in _KNOWN_TO_GEN_WORKER and not allow_unknown_dtype:
+        raise UndeclarableLane(
+            f"top-level dtype {dtype!r} is not a spelling gen-worker's DTYPE_MIN_SM "
+            "knows, and an unknown spelling derives a floor of 0 SILENTLY - a "
+            "quantized lane offered to every card in the fleet. Use the torch-precise "
+            "spelling (float8_e4m3fn, float4_e2m1fn, bfloat16, ...), or - if this "
+            "layout genuinely has no torch scalar type, as a GGUF k-quant container "
+            "does not - TEACH DTYPE_MIN_SM the spelling and its true floor FIRST, then "
+            "pass allow_unknown_dtype to record that you did it deliberately."
+        )
 
     document: dict[str, object] = {"format": "tensorfs-contract-v1"}
     if name is not None:
@@ -281,7 +377,9 @@ def candidate(
         document["version"] = version
     if dtype is not None:
         document["dtype"] = dtype
-    document["description"] = _description(report, summary, ratification, dtype)
+    document["description"] = _description(
+        report, summary, ratification, dtype, authored_dtype, ratified
+    )
     document["tensors"] = tensors
     return document, report
 
@@ -324,19 +422,30 @@ def _verify_coverage(
     return covered
 
 
-def _dominant_dtype(histogram: Counter[str]) -> str | None:
-    """The lane's load dtype: the most common element type that has a torch
-    spelling. F32 loses a tie because norm/modulation islands are F32 in
-    otherwise-bf16 trees and the LANE dtype is what the model loads AS."""
+def _uniform_dtype(histogram: Counter[str]) -> str | None:
+    """The lane dtype ONLY when the header settles it beyond argument: one
+    element type, or one plus an F32 island.
 
-    ranked = sorted(
-        ((count, name) for name, count in histogram.items() if name in _TORCH_DTYPE),
-        key=lambda pair: (pair[0], pair[1] != "F32"),
-        reverse=True,
-    )
-    for _, name in ranked:
-        if name != "F32" or len(ranked) == 1:
-            return _TORCH_DTYPE[name]
+    Deliberately not a majority vote. A vote reads
+    `sdxl.diffusers-fp8-rowwise@1` as bfloat16 (221 of 257 declarations are)
+    and `qwen3.6-35b-a3b.vllm-fp8@1` as bfloat16 too (BF16 outnumbers F8_E4M3
+    by tensor count), and both are fp8 lanes. Where a header is mixed the
+    answer is authored, and this returns None so the caller must say so.
+
+    The F32 island is the one carve-out, and it is a fact about diffusion
+    trees rather than a fudge: adaptive-norm and modulation tables ship F32
+    inside otherwise-uniform bf16 DiTs (ltx-2, z-image, krea-2), and the LANE
+    is what the model loads AS, not what its smallest table is.
+    """
+
+    named = {name for name in histogram if name in _TORCH_DTYPE}
+    if named != set(histogram):
+        return None  # a container this table cannot spell: authored, not voted
+    body = named - {"F32"}
+    if len(body) == 1:
+        return _TORCH_DTYPE[body.pop()]
+    if not body and named == {"F32"}:
+        return _TORCH_DTYPE["F32"]
     return None
 
 
@@ -355,23 +464,42 @@ _DEFAULT_RATIFICATION = (
 
 
 def _description(
-    report: Report, summary: str, ratification: Sequence[str], dtype: str | None
+    report: Report,
+    summary: str,
+    ratification: Sequence[str],
+    dtype: str | None,
+    authored_dtype: bool = False,
+    ratified: Sequence[str] = (),
 ) -> str:
-    parts = [GENERATED_MARKER]
+    owed = tuple(ratification) + ((), _DEFAULT_RATIFICATION)[not ratified]
+    parts = [GENERATED_MARKER] if owed else [RATIFIED_MARKER]
     if summary:
         parts.append(summary)
     parts.append("Derived mechanically by tensorfs.generate from headers only - "
                  "no tensor byte was read. " + " ".join(report.lines()) + ".")
     if dtype is None:
         parts.append(
-            "NO top-level dtype: no observed element type has a torch spelling "
-            "(GGUF block-quant containers do not), so the lane's load dtype is "
-            "not derivable from this header."
+            "NO top-level dtype, which only a component FRAGMENT may carry: this "
+            "document describes part of a tree, not a serve lane, so there is no "
+            "lane load dtype for it to name."
         )
-    parts.append(
-        "RATIFICATION OWED: " + " ".join(f"({n + 1}) {item}" for n, item in
-                                         enumerate(tuple(ratification) + _DEFAULT_RATIFICATION))
-    )
+    if authored_dtype and owed:
+        owed = (
+            f"THE TOP-LEVEL DTYPE {dtype!r} WAS AUTHORED, not read: the header did not "
+            "settle it, so a human named the lane's quantization. Check it against what "
+            "the lane's bytes ARE - it is the field gen-worker derives the sm floor from, "
+            "so a wrong one is a placement claim with nothing behind it.",
+            *owed,
+        )
+    if ratified:
+        parts.append(
+            "RATIFIED: " + " ".join(f"({n + 1}) {item}" for n, item in enumerate(ratified))
+        )
+    if owed:
+        parts.append(
+            "RATIFICATION OWED: "
+            + " ".join(f"({n + 1}) {item}" for n, item in enumerate(owed))
+        )
     return " ".join(parts)
 
 

@@ -100,7 +100,7 @@
     {
       "name": "qwen3.6-27b-mtp.gguf-ud-q4-k-xl.v1",
       "file": "contracts/qwen3.6-27b-mtp.gguf-ud-q4-k-xl.v1.json",
-      "digest": "e870540dc46209ffae0a881120f5152828e1236cddbb9fce73898e30a1a9e674",
+      "digest": "246696d9f7ad089f597744aa4b44b8281c2c2ea4934c7aaa4898534eca7430e7",
       "stamp": "qwen3.6-27b-mtp.gguf-ud-q4-k-xl@1"
     },
     {
@@ -154,7 +154,7 @@
     {
       "name": "sdxl.diffusers-nvfp4-flat.v1",
       "file": "contracts/sdxl.diffusers-nvfp4-flat.v1.json",
-      "digest": "7ec1ca7afd139e9b9a2cdc449913644f6b8db95528e65fffaae51b3ce02ad031",
+      "digest": "239f70ea2c3038812460bc98b83a0818ca042b7d06d27b333b1657aafaca0283",
       "stamp": "sdxl.diffusers-nvfp4-flat@1"
     },
     {
