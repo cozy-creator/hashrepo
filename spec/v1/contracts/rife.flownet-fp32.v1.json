@@ -1,0 +1,353 @@
+{
+  "format": "tensorfs-contract-v1",
+  "name": "rife.flownet-fp32",
+  "version": 1,
+  "dtype": "float32",
+  "description": "GENERATED CANDIDATE - NOT RATIFIED. RIFE v4.25 flownet: the auxiliary frame interpolator bound beside wan-2.2,\nltx-video-2.3 and minimax-h3. ONE DOCUMENT FOR THREE CLASSES - today the same gen-worker Rife\ntype is declared three different ways across the fleet (lanes=() on wan-2.2 and ltx, eager_only=\non minimax-h3), which is the drift pgw#1597 cites; this is the document all three now name.\ntensorhub/rife-4.25 is NOT a mirror: it is produced pod-side by cozy_rife.save_artifact from\nhzwer Practical-RIFE 4.25's flownet.pkl, so the layout's authority is the producing module and\nthis document is derived from RifeFlowNet's own state_dict on a META device - zero weights, zero\nnetwork, no pickle read. That is the same property the fp8 documents have and it is why the\ndocument and the producer cannot disagree. Flat F32: save_pretrained writes the fp32 module the\npickle loads into. NOT a diffusers architecture despite the diffusers-layout tree - the tree is\na packaging choice save_artifact makes so the artifact is a legal SDK slot. Derived mechanically by tensorfs.generate from headers only - no tensor byte was read. v4.25: 158 tensors 43 declarations cover 158 tensors (18 singleton, 25 indexed) dtypes: F32 x158. RATIFICATION OWED: (1) ROLES are mechanical (role == pattern). Rename any tensor whose bytes are the same bytes another packaging spells differently - that is the only thing that makes a cross-packaging derive possible instead of a refusal. (2) FUSIONS are undeclared. A header cannot see a fused axis, so a fused qkv/gate-up must be declared by a human reading the model's config (head count, hidden size); a wrong one is a ~90%-error split that never crashes. (3) SETS are undeclared (no subset-snapshot groups). (4) COMPONENT SCOPE is the caller's: declaring a shared encoder ties this document to every family that ships the same one (tensorfs#121).",
+  "tensors": [
+    {
+      "role": "net.block0.conv0.{i}.0.bias",
+      "pattern": "net.block0.conv0.{i}.0.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block0.conv0.{i}.0.weight",
+      "pattern": "net.block0.conv0.{i}.0.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block0.convblock.{i}.beta",
+      "pattern": "net.block0.convblock.{i}.beta",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block0.convblock.{i}.conv.bias",
+      "pattern": "net.block0.convblock.{i}.conv.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block0.convblock.{i}.conv.weight",
+      "pattern": "net.block0.convblock.{i}.conv.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block0.lastconv.0.bias",
+      "pattern": "net.block0.lastconv.0.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block0.lastconv.0.weight",
+      "pattern": "net.block0.lastconv.0.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block1.conv0.{i}.0.bias",
+      "pattern": "net.block1.conv0.{i}.0.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block1.conv0.{i}.0.weight",
+      "pattern": "net.block1.conv0.{i}.0.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block1.convblock.{i}.beta",
+      "pattern": "net.block1.convblock.{i}.beta",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block1.convblock.{i}.conv.bias",
+      "pattern": "net.block1.convblock.{i}.conv.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block1.convblock.{i}.conv.weight",
+      "pattern": "net.block1.convblock.{i}.conv.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block1.lastconv.0.bias",
+      "pattern": "net.block1.lastconv.0.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block1.lastconv.0.weight",
+      "pattern": "net.block1.lastconv.0.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block2.conv0.{i}.0.bias",
+      "pattern": "net.block2.conv0.{i}.0.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block2.conv0.{i}.0.weight",
+      "pattern": "net.block2.conv0.{i}.0.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block2.convblock.{i}.beta",
+      "pattern": "net.block2.convblock.{i}.beta",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block2.convblock.{i}.conv.bias",
+      "pattern": "net.block2.convblock.{i}.conv.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block2.convblock.{i}.conv.weight",
+      "pattern": "net.block2.convblock.{i}.conv.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block2.lastconv.0.bias",
+      "pattern": "net.block2.lastconv.0.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block2.lastconv.0.weight",
+      "pattern": "net.block2.lastconv.0.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block3.conv0.{i}.0.bias",
+      "pattern": "net.block3.conv0.{i}.0.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block3.conv0.{i}.0.weight",
+      "pattern": "net.block3.conv0.{i}.0.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block3.convblock.{i}.beta",
+      "pattern": "net.block3.convblock.{i}.beta",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block3.convblock.{i}.conv.bias",
+      "pattern": "net.block3.convblock.{i}.conv.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block3.convblock.{i}.conv.weight",
+      "pattern": "net.block3.convblock.{i}.conv.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block3.lastconv.0.bias",
+      "pattern": "net.block3.lastconv.0.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block3.lastconv.0.weight",
+      "pattern": "net.block3.lastconv.0.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block4.conv0.{i}.0.bias",
+      "pattern": "net.block4.conv0.{i}.0.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block4.conv0.{i}.0.weight",
+      "pattern": "net.block4.conv0.{i}.0.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block4.convblock.{i}.beta",
+      "pattern": "net.block4.convblock.{i}.beta",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block4.convblock.{i}.conv.bias",
+      "pattern": "net.block4.convblock.{i}.conv.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block4.convblock.{i}.conv.weight",
+      "pattern": "net.block4.convblock.{i}.conv.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.block4.lastconv.0.bias",
+      "pattern": "net.block4.lastconv.0.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.block4.lastconv.0.weight",
+      "pattern": "net.block4.lastconv.0.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.encode.cnn0.bias",
+      "pattern": "net.encode.cnn0.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.encode.cnn0.weight",
+      "pattern": "net.encode.cnn0.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.encode.cnn1.bias",
+      "pattern": "net.encode.cnn1.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.encode.cnn1.weight",
+      "pattern": "net.encode.cnn1.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.encode.cnn2.bias",
+      "pattern": "net.encode.cnn2.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.encode.cnn2.weight",
+      "pattern": "net.encode.cnn2.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "net.encode.cnn3.bias",
+      "pattern": "net.encode.cnn3.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.encode.cnn3.weight",
+      "pattern": "net.encode.cnn3.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 4
+    }
+  ]
+}

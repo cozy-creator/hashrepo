@@ -98,6 +98,29 @@ and its two packagings still share every attention byte. Byte ORDER never
 moves — only cut points do. `docs/dedup-invariance.md` §4 is the design, and
 `spec/v1/contracts/README.md` the format.
 
+Authoring one is cheap: `scripts/generate-contract.py` derives a ratifiable
+candidate from a checkpoint's headers over HTTP ranges, reading no weight byte.
+Generate → human-ratify → publish; see the format README.
+
+### The bind verdict
+
+*Does this checkpoint bind to this lane, and if not, what would fix it?*
+`satisfies | derivable | incompatible` — the middle answer is mandatory, not a
+convenience: refusing a checkpoint that only needs a cast is the
+over-constraint tensorfs#122 forbids. A `derivable` verdict names the
+conversion, and the recipe comes from the TARGET document's declarations
+(tcg#53), so the job a gate offers is the job the producer will run.
+
+ONE implementation, three languages:
+`crates/tensorfs-core/src/verdict.rs` is the rule, Go (`verdict.go` +
+`match.go`) is its line-for-line twin, and Python reaches it through pyo3 —
+`contract.verdict({path: [(name, dtype, shape), ...]})`. That matters because a
+verdict decides an ADMIT, and a second implementation is a second chance to
+admit a bind that should have been refused, which stays invisible until a pod
+500s. `scripts/prove-verdict-parity.sh` runs both over one corpus, diffs the
+RENDERED verdicts, and fails unless a deliberately mutated recipe makes the
+diff go red.
+
 ## The Python distribution
 
 `tensorfs` is **one** PyPI distribution carrying two things:

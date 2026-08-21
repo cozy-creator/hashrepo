@@ -1,0 +1,393 @@
+{
+  "format": "tensorfs-contract-v1",
+  "name": "joycaption.llava-bf16",
+  "version": 1,
+  "dtype": "bfloat16",
+  "description": "GENERATED CANDIDATE - NOT RATIFIED. JoyCaption Beta One: a LLaVA image captioner (LlavaForConditionalGeneration) as one\ntransformers snapshot - SigLIP vision tower, multi_modal_projector and Llama language model,\nfour shards, flat BF16. WHOLE TREE, because there is no core to separate from the encoders here:\nthe endpoint binds the snapshot with one from_pretrained and the three sub-trees are one\ncheckpoint. Derived mechanically by tensorfs.generate from headers only - no tensor byte was read. beta-one: 743 tensors 48 declarations cover 743 tensors (23 singleton, 25 indexed) dtypes: BF16 x743. RATIFICATION OWED: (1) SCOPE CHECK owed against tensorfs#121: 'vision_tower.*' is a stock SigLIP spelling and\n'language_model.*' a stock Llama one, so the discriminating fact is the COMBINATION plus\n'multi_modal_projector.*'. Confirm no other served family ships the same three-prefix tree before\nthis document joins the global matcher set. (2) ROLES are mechanical (role == pattern). Rename any tensor whose bytes are the same bytes another packaging spells differently - that is the only thing that makes a cross-packaging derive possible instead of a refusal. (3) FUSIONS are undeclared. A header cannot see a fused axis, so a fused qkv/gate-up must be declared by a human reading the model's config (head count, hidden size); a wrong one is a ~90%-error split that never crashes. (4) SETS are undeclared (no subset-snapshot groups). (5) COMPONENT SCOPE is the caller's: declaring a shared encoder ties this document to every family that ships the same one (tensorfs#121).",
+  "tensors": [
+    {
+      "role": "language_model.lm_head.weight",
+      "pattern": "language_model.lm_head.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "language_model.model.embed_tokens.weight",
+      "pattern": "language_model.model.embed_tokens.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "language_model.model.layers.{i}.input_layernorm.weight",
+      "pattern": "language_model.model.layers.{i}.input_layernorm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "language_model.model.layers.{i}.mlp.down_proj.weight",
+      "pattern": "language_model.model.layers.{i}.mlp.down_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "language_model.model.layers.{i}.mlp.gate_proj.weight",
+      "pattern": "language_model.model.layers.{i}.mlp.gate_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "language_model.model.layers.{i}.mlp.up_proj.weight",
+      "pattern": "language_model.model.layers.{i}.mlp.up_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "language_model.model.layers.{i}.post_attention_layernorm.weight",
+      "pattern": "language_model.model.layers.{i}.post_attention_layernorm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "language_model.model.layers.{i}.self_attn.k_proj.weight",
+      "pattern": "language_model.model.layers.{i}.self_attn.k_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "language_model.model.layers.{i}.self_attn.o_proj.weight",
+      "pattern": "language_model.model.layers.{i}.self_attn.o_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "language_model.model.layers.{i}.self_attn.q_proj.weight",
+      "pattern": "language_model.model.layers.{i}.self_attn.q_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "language_model.model.layers.{i}.self_attn.v_proj.weight",
+      "pattern": "language_model.model.layers.{i}.self_attn.v_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "language_model.model.norm.weight",
+      "pattern": "language_model.model.norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "multi_modal_projector.linear_1.bias",
+      "pattern": "multi_modal_projector.linear_1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "multi_modal_projector.linear_1.weight",
+      "pattern": "multi_modal_projector.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "multi_modal_projector.linear_2.bias",
+      "pattern": "multi_modal_projector.linear_2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "multi_modal_projector.linear_2.weight",
+      "pattern": "multi_modal_projector.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "vision_tower.vision_model.embeddings.patch_embedding.bias",
+      "pattern": "vision_tower.vision_model.embeddings.patch_embedding.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.embeddings.patch_embedding.weight",
+      "pattern": "vision_tower.vision_model.embeddings.patch_embedding.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 4
+    },
+    {
+      "role": "vision_tower.vision_model.embeddings.position_embedding.weight",
+      "pattern": "vision_tower.vision_model.embeddings.position_embedding.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.layer_norm1.bias",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.layer_norm1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.layer_norm1.weight",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.layer_norm1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.layer_norm2.bias",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.layer_norm2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.layer_norm2.weight",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.layer_norm2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.mlp.fc1.bias",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.mlp.fc1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.mlp.fc1.weight",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.mlp.fc1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.mlp.fc2.bias",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.mlp.fc2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.mlp.fc2.weight",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.mlp.fc2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.bias",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.weight",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.out_proj.bias",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.self_attn.out_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.out_proj.weight",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.self_attn.out_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.q_proj.bias",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.self_attn.q_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.q_proj.weight",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.self_attn.q_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.v_proj.bias",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.self_attn.v_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.v_proj.weight",
+      "pattern": "vision_tower.vision_model.encoder.layers.{i}.self_attn.v_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "vision_tower.vision_model.head.attention.in_proj_bias",
+      "pattern": "vision_tower.vision_model.head.attention.in_proj_bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.head.attention.in_proj_weight",
+      "pattern": "vision_tower.vision_model.head.attention.in_proj_weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "vision_tower.vision_model.head.attention.out_proj.bias",
+      "pattern": "vision_tower.vision_model.head.attention.out_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.head.attention.out_proj.weight",
+      "pattern": "vision_tower.vision_model.head.attention.out_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "vision_tower.vision_model.head.layernorm.bias",
+      "pattern": "vision_tower.vision_model.head.layernorm.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.head.layernorm.weight",
+      "pattern": "vision_tower.vision_model.head.layernorm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.head.mlp.fc1.bias",
+      "pattern": "vision_tower.vision_model.head.mlp.fc1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.head.mlp.fc1.weight",
+      "pattern": "vision_tower.vision_model.head.mlp.fc1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "vision_tower.vision_model.head.mlp.fc2.bias",
+      "pattern": "vision_tower.vision_model.head.mlp.fc2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.head.mlp.fc2.weight",
+      "pattern": "vision_tower.vision_model.head.mlp.fc2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "vision_tower.vision_model.head.probe",
+      "pattern": "vision_tower.vision_model.head.probe",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 3
+    },
+    {
+      "role": "vision_tower.vision_model.post_layernorm.bias",
+      "pattern": "vision_tower.vision_model.post_layernorm.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "vision_tower.vision_model.post_layernorm.weight",
+      "pattern": "vision_tower.vision_model.post_layernorm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    }
+  ]
+}

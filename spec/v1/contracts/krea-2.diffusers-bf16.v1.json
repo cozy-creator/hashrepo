@@ -1,0 +1,449 @@
+{
+  "format": "tensorfs-contract-v1",
+  "name": "krea-2.diffusers-bf16",
+  "version": 1,
+  "dtype": "bfloat16",
+  "description": "GENERATED CANDIDATE - NOT RATIFIED. Krea 2 Raw: the diffusers transformer, TRANSFORMER ONLY on the tensorfs#121 rule.\nMixed BF16 + F32, the F32 island being the adaptive-norm / modulation tables, which is the same\nshape ltx-2 and z-image ship. Derived from UPSTREAM krea/Krea-2-Raw (a gated repo, read with the\nfleet's own token over header ranges), NOT from tensorhub/krea-2-raw. That is sound rather than a\nshortcut, and the reason is structural: the recorded mirror defect (ie#632) is a model_index.json\nCONFIG key - text_encoder_select_layers, which upstream never carried - and a contract is\nLAYOUT-only. Config compatibility is the bind gate's other half (tensorfs#122), not this\ndocument's job, so a config-level mirror defect cannot be baked into a document that declares\nonly names, ranks and dtypes. Derived mechanically by tensorfs.generate from headers only - no tensor byte was read. raw: 430 tensors 55 declarations cover 430 tensors (18 singleton, 37 indexed) dtypes: BF16 x256, F32 x174. RATIFICATION OWED: (1) CONFIRM against the mirror when a hub is reachable: this document is derived from\nupstream headers, and the claim that the mirror's TRANSFORMER headers are byte-identical to\nupstream's is inferred from the defect being config-scoped, not measured. If the mirror's\ntransformer differs, the mirror is what the fleet serves and the document follows the bytes. (2) ROLES are mechanical (role == pattern). Rename any tensor whose bytes are the same bytes another packaging spells differently - that is the only thing that makes a cross-packaging derive possible instead of a refusal. (3) FUSIONS are undeclared. A header cannot see a fused axis, so a fused qkv/gate-up must be declared by a human reading the model's config (head count, hidden size); a wrong one is a ~90%-error split that never crashes. (4) SETS are undeclared (no subset-snapshot groups). (5) COMPONENT SCOPE is the caller's: declaring a shared encoder ties this document to every family that ships the same one (tensorfs#121).",
+  "tensors": [
+    {
+      "role": "final_layer.linear.bias",
+      "pattern": "final_layer.linear.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "final_layer.linear.weight",
+      "pattern": "final_layer.linear.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "final_layer.norm.weight",
+      "pattern": "final_layer.norm.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "final_layer.scale_shift_table",
+      "pattern": "final_layer.scale_shift_table",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "img_in.bias",
+      "pattern": "img_in.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "img_in.weight",
+      "pattern": "img_in.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.layerwise_blocks.{i}.attn.norm_k.weight",
+      "pattern": "text_fusion.layerwise_blocks.{i}.attn.norm_k.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "text_fusion.layerwise_blocks.{i}.attn.norm_q.weight",
+      "pattern": "text_fusion.layerwise_blocks.{i}.attn.norm_q.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "text_fusion.layerwise_blocks.{i}.attn.to_gate.weight",
+      "pattern": "text_fusion.layerwise_blocks.{i}.attn.to_gate.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.layerwise_blocks.{i}.attn.to_k.weight",
+      "pattern": "text_fusion.layerwise_blocks.{i}.attn.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.layerwise_blocks.{i}.attn.to_out.0.weight",
+      "pattern": "text_fusion.layerwise_blocks.{i}.attn.to_out.0.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.layerwise_blocks.{i}.attn.to_q.weight",
+      "pattern": "text_fusion.layerwise_blocks.{i}.attn.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.layerwise_blocks.{i}.attn.to_v.weight",
+      "pattern": "text_fusion.layerwise_blocks.{i}.attn.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.layerwise_blocks.{i}.ff.down.weight",
+      "pattern": "text_fusion.layerwise_blocks.{i}.ff.down.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.layerwise_blocks.{i}.ff.gate.weight",
+      "pattern": "text_fusion.layerwise_blocks.{i}.ff.gate.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.layerwise_blocks.{i}.ff.up.weight",
+      "pattern": "text_fusion.layerwise_blocks.{i}.ff.up.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.layerwise_blocks.{i}.norm1.weight",
+      "pattern": "text_fusion.layerwise_blocks.{i}.norm1.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "text_fusion.layerwise_blocks.{i}.norm2.weight",
+      "pattern": "text_fusion.layerwise_blocks.{i}.norm2.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "text_fusion.projector.weight",
+      "pattern": "text_fusion.projector.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.refiner_blocks.{i}.attn.norm_k.weight",
+      "pattern": "text_fusion.refiner_blocks.{i}.attn.norm_k.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "text_fusion.refiner_blocks.{i}.attn.norm_q.weight",
+      "pattern": "text_fusion.refiner_blocks.{i}.attn.norm_q.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "text_fusion.refiner_blocks.{i}.attn.to_gate.weight",
+      "pattern": "text_fusion.refiner_blocks.{i}.attn.to_gate.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.refiner_blocks.{i}.attn.to_k.weight",
+      "pattern": "text_fusion.refiner_blocks.{i}.attn.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.refiner_blocks.{i}.attn.to_out.0.weight",
+      "pattern": "text_fusion.refiner_blocks.{i}.attn.to_out.0.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.refiner_blocks.{i}.attn.to_q.weight",
+      "pattern": "text_fusion.refiner_blocks.{i}.attn.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.refiner_blocks.{i}.attn.to_v.weight",
+      "pattern": "text_fusion.refiner_blocks.{i}.attn.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.refiner_blocks.{i}.ff.down.weight",
+      "pattern": "text_fusion.refiner_blocks.{i}.ff.down.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.refiner_blocks.{i}.ff.gate.weight",
+      "pattern": "text_fusion.refiner_blocks.{i}.ff.gate.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.refiner_blocks.{i}.ff.up.weight",
+      "pattern": "text_fusion.refiner_blocks.{i}.ff.up.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_fusion.refiner_blocks.{i}.norm1.weight",
+      "pattern": "text_fusion.refiner_blocks.{i}.norm1.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "text_fusion.refiner_blocks.{i}.norm2.weight",
+      "pattern": "text_fusion.refiner_blocks.{i}.norm2.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "time_embed.linear_1.bias",
+      "pattern": "time_embed.linear_1.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "time_embed.linear_1.weight",
+      "pattern": "time_embed.linear_1.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "time_embed.linear_2.bias",
+      "pattern": "time_embed.linear_2.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "time_embed.linear_2.weight",
+      "pattern": "time_embed.linear_2.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "time_mod_proj.bias",
+      "pattern": "time_mod_proj.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "time_mod_proj.weight",
+      "pattern": "time_mod_proj.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "transformer_blocks.{i}.attn.norm_k.weight",
+      "pattern": "transformer_blocks.{i}.attn.norm_k.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "transformer_blocks.{i}.attn.norm_q.weight",
+      "pattern": "transformer_blocks.{i}.attn.norm_q.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "transformer_blocks.{i}.attn.to_gate.weight",
+      "pattern": "transformer_blocks.{i}.attn.to_gate.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "transformer_blocks.{i}.attn.to_k.weight",
+      "pattern": "transformer_blocks.{i}.attn.to_k.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "transformer_blocks.{i}.attn.to_out.0.weight",
+      "pattern": "transformer_blocks.{i}.attn.to_out.0.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "transformer_blocks.{i}.attn.to_q.weight",
+      "pattern": "transformer_blocks.{i}.attn.to_q.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "transformer_blocks.{i}.attn.to_v.weight",
+      "pattern": "transformer_blocks.{i}.attn.to_v.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "transformer_blocks.{i}.ff.down.weight",
+      "pattern": "transformer_blocks.{i}.ff.down.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "transformer_blocks.{i}.ff.gate.weight",
+      "pattern": "transformer_blocks.{i}.ff.gate.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "transformer_blocks.{i}.ff.up.weight",
+      "pattern": "transformer_blocks.{i}.ff.up.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "transformer_blocks.{i}.norm1.weight",
+      "pattern": "transformer_blocks.{i}.norm1.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "transformer_blocks.{i}.norm2.weight",
+      "pattern": "transformer_blocks.{i}.norm2.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "transformer_blocks.{i}.scale_shift_table",
+      "pattern": "transformer_blocks.{i}.scale_shift_table",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "txt_in.linear_1.bias",
+      "pattern": "txt_in.linear_1.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "txt_in.linear_1.weight",
+      "pattern": "txt_in.linear_1.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "txt_in.linear_2.bias",
+      "pattern": "txt_in.linear_2.bias",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "txt_in.linear_2.weight",
+      "pattern": "txt_in.linear_2.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "txt_in.norm.weight",
+      "pattern": "txt_in.norm.weight",
+      "dtypes": [
+        "F32"
+      ],
+      "rank": 1
+    }
+  ]
+}

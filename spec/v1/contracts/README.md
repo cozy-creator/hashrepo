@@ -118,6 +118,62 @@ Fusions that are **not** expressible here, by construction: inner-axis fusions
 runs of the other packaging. Those are view-expressible, not chunk-shareable,
 and route to the adapter vocabulary.
 
+## Generating a candidate: cheap, not optional
+
+`lanes={contract: floor}` is REQUIRED on every gen-worker Model subclass
+(pgw#1597), real documents only. That is only survivable if authoring a
+document is cheap, so it is: a contract describes a HEADER, and
+`tensorfs.generate` derives one from headers alone —
+`scripts/generate-contract.py`, HTTP range reads, kilobytes per file, **zero
+weight bytes**.
+
+```
+scripts/generate-contract.py --name musicgen.transformers-fp16 --version 1 \
+    --source stereo-medium=hf:facebook/musicgen-stereo-medium \
+    --pin-trivial --out spec/v1/contracts/musicgen.transformers-fp16.v1.json
+```
+
+**Generate → human-ratify → publish.** The generator writes a CANDIDATE whose
+description opens `GENERATED CANDIDATE - NOT RATIFIED.` and ends with a
+RATIFICATION OWED list. Grep that marker to find every unratified document;
+only a human removes it.
+
+What is derived: the pattern set (only a WHOLE-SEGMENT integer becomes `{i}`,
+so `conv1`/`conv2` stay two declarations), `rank`, `dtypes`, and `required` —
+a declaration is required only when EVERY source carries it, so
+"one document, two checkpoints" is a measurement. What is NOT derived, because
+guessing is worse than owing: `role` (mechanically the pattern), `fusion` (a
+header cannot see a fused axis; a wrong one is the ~90%-error split that never
+crashes) and `sets`.
+
+Coverage is VERIFIED, not asserted: every pattern is expanded back over every
+source and must partition it exactly. The report also names its own weak
+spots — a DEGENERATE hole (one value, i.e. an `nn.Sequential` position rather
+than a layer stack), a non-contiguous index range, a rank conflict.
+`--literal 'layers.{i}.attn.to_out.0.weight'` pins a chosen hole back;
+`--pin-trivial` does it for every 0/1-valued hole.
+
+**The falsification.** Re-deriving `ernie.diffusers-bf16@1` — a hand-authored,
+shipped document — from `baidu/ERNIE-Image`'s real header reproduces its
+pattern, rank and dtype set EXACTLY, 24 declarations over 409 tensors, with
+three pins. `scripts/generate-the-130-set.sh` keeps that check as its first
+step, beside the commands that derived every document below it.
+
+## No document, and why (`hunyuan3d-2.1`)
+
+The one owed document that cannot be generated. `tencent/Hunyuan3D-2.1` carries
+exactly ONE `.safetensors` — an image encoder, the family-plural class this
+library never declares. Every core model is a pickle: the shape DiT is
+`hunyuan3d-dit-v2-1/model.fp16.ckpt`, the paint UNet and both VAEs are `.bin`.
+A tensorfs document describes a safetensors header and there is none to read.
+
+The fix is a REPACK, never teaching this format to describe pickles: a
+conversion-endpoint invoke, pod-side (weights-locality), `torch.load(...,
+weights_only=True)` per member into `save_file` under the upstream key
+spellings, published to `tensorhub/hunyuan3d-2.1`; then this generator runs
+against the repacked header like any other. Until that lands the class has no
+document, and it says so rather than pointing `lanes=` at a guess.
+
 ## Matching and tie-break
 
 Identification reads the header inventory only (names, shapes, dtypes; no

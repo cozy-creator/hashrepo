@@ -1,0 +1,361 @@
+{
+  "format": "tensorfs-contract-v1",
+  "name": "anima.diffsynth-bf16",
+  "version": 1,
+  "dtype": "bfloat16",
+  "description": "GENERATED CANDIDATE - NOT RATIFIED. Anima: a Cosmos-Predict2-2B-backbone DiT served through DiffSynth from a SPLIT\ncheckpoint - one flat safetensors per release, no diffusers component folders. Derived from\ncirclestone-labs/Anima split_files/diffusion_models/anima-base-v1.0.safetensors, which is the\nfile tensorhub/anima binds. DIT ONLY: the repo's qwen_3_06b_base text encoder and\nqwen_image_vae are the qwen-image family's own components, so declaring either would tie this\ndocument to a different family's checkpoints (tensorfs#121). ONE PACKAGING PER DOCUMENT, and\nthis was MEASURED rather than assumed: anima-turbo-v1.0 and anima-aesthetic-v1.1 carry the same\n685-tensor network under a 'model.diffusion_model.' prefix where base carries 'net.', so a\nsingle document over all three makes EVERY declaration optional - a contract that can never\nrefuse anything, which is the implicit-coverage class this issue exists to remove. The prefixed\nreleases need their own document or a rekey derive; this one describes the served packaging. Derived mechanically by tensorfs.generate from headers only - no tensor byte was read. base: 685 tensors 44 declarations cover 685 tensors (9 singleton, 35 indexed) dtypes: BF16 x685 NON-CONTIGUOUS index range: net.blocks.{i}.adaln_modulation_cross_attn.{i}.weight hole 1: [1, 2]... (2 of 0..2) NON-CONTIGUOUS index range: net.blocks.{i}.adaln_modulation_mlp.{i}.weight hole 1: [1, 2]... (2 of 0..2) NON-CONTIGUOUS index range: net.blocks.{i}.adaln_modulation_self_attn.{i}.weight hole 1: [1, 2]... (2 of 0..2) NON-CONTIGUOUS index range: net.final_layer.adaln_modulation.{i}.weight hole 0: [1, 2]... (2 of 0..2) NON-CONTIGUOUS index range: net.llm_adapter.blocks.{i}.mlp.{i}.bias hole 1: [0, 2]... (2 of 0..2) NON-CONTIGUOUS index range: net.llm_adapter.blocks.{i}.mlp.{i}.weight hole 1: [0, 2]... (2 of 0..2). RATIFICATION OWED: (1) The 'model.diffusion_model.*' packaging (anima-turbo-v1.0, anima-aesthetic-v1.0/v1.0b/v1.1,\nanima-preview*) is NOT covered here. Its document is a pure rekey of this one, so compose::derive\ncan answer it - author it, do not widen this one. (2) ROLES are mechanical (role == pattern). Rename any tensor whose bytes are the same bytes another packaging spells differently - that is the only thing that makes a cross-packaging derive possible instead of a refusal. (3) FUSIONS are undeclared. A header cannot see a fused axis, so a fused qkv/gate-up must be declared by a human reading the model's config (head count, hidden size); a wrong one is a ~90%-error split that never crashes. (4) SETS are undeclared (no subset-snapshot groups). (5) COMPONENT SCOPE is the caller's: declaring a shared encoder ties this document to every family that ships the same one (tensorfs#121).",
+  "tensors": [
+    {
+      "role": "net.blocks.{i}.adaln_modulation_cross_attn.{i}.weight",
+      "pattern": "net.blocks.{i}.adaln_modulation_cross_attn.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.blocks.{i}.adaln_modulation_mlp.{i}.weight",
+      "pattern": "net.blocks.{i}.adaln_modulation_mlp.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.blocks.{i}.adaln_modulation_self_attn.{i}.weight",
+      "pattern": "net.blocks.{i}.adaln_modulation_self_attn.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.blocks.{i}.cross_attn.k_norm.weight",
+      "pattern": "net.blocks.{i}.cross_attn.k_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.blocks.{i}.cross_attn.k_proj.weight",
+      "pattern": "net.blocks.{i}.cross_attn.k_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.blocks.{i}.cross_attn.output_proj.weight",
+      "pattern": "net.blocks.{i}.cross_attn.output_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.blocks.{i}.cross_attn.q_norm.weight",
+      "pattern": "net.blocks.{i}.cross_attn.q_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.blocks.{i}.cross_attn.q_proj.weight",
+      "pattern": "net.blocks.{i}.cross_attn.q_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.blocks.{i}.cross_attn.v_proj.weight",
+      "pattern": "net.blocks.{i}.cross_attn.v_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.blocks.{i}.mlp.layer1.weight",
+      "pattern": "net.blocks.{i}.mlp.layer1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.blocks.{i}.mlp.layer2.weight",
+      "pattern": "net.blocks.{i}.mlp.layer2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.blocks.{i}.self_attn.k_norm.weight",
+      "pattern": "net.blocks.{i}.self_attn.k_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.blocks.{i}.self_attn.k_proj.weight",
+      "pattern": "net.blocks.{i}.self_attn.k_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.blocks.{i}.self_attn.output_proj.weight",
+      "pattern": "net.blocks.{i}.self_attn.output_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.blocks.{i}.self_attn.q_norm.weight",
+      "pattern": "net.blocks.{i}.self_attn.q_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.blocks.{i}.self_attn.q_proj.weight",
+      "pattern": "net.blocks.{i}.self_attn.q_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.blocks.{i}.self_attn.v_proj.weight",
+      "pattern": "net.blocks.{i}.self_attn.v_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.final_layer.adaln_modulation.{i}.weight",
+      "pattern": "net.final_layer.adaln_modulation.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.final_layer.linear.weight",
+      "pattern": "net.final_layer.linear.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.cross_attn.k_norm.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.cross_attn.k_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.cross_attn.k_proj.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.cross_attn.k_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.cross_attn.o_proj.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.cross_attn.o_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.cross_attn.q_norm.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.cross_attn.q_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.cross_attn.q_proj.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.cross_attn.q_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.cross_attn.v_proj.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.cross_attn.v_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.mlp.{i}.bias",
+      "pattern": "net.llm_adapter.blocks.{i}.mlp.{i}.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.mlp.{i}.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.mlp.{i}.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.norm_cross_attn.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.norm_cross_attn.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.norm_mlp.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.norm_mlp.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.norm_self_attn.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.norm_self_attn.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.self_attn.k_norm.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.self_attn.k_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.self_attn.k_proj.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.self_attn.k_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.self_attn.o_proj.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.self_attn.o_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.self_attn.q_norm.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.self_attn.q_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.self_attn.q_proj.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.self_attn.q_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.llm_adapter.blocks.{i}.self_attn.v_proj.weight",
+      "pattern": "net.llm_adapter.blocks.{i}.self_attn.v_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.llm_adapter.embed.weight",
+      "pattern": "net.llm_adapter.embed.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.llm_adapter.norm.weight",
+      "pattern": "net.llm_adapter.norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.llm_adapter.out_proj.bias",
+      "pattern": "net.llm_adapter.out_proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.llm_adapter.out_proj.weight",
+      "pattern": "net.llm_adapter.out_proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.t_embedder.1.linear_1.weight",
+      "pattern": "net.t_embedder.1.linear_1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.t_embedder.1.linear_2.weight",
+      "pattern": "net.t_embedder.1.linear_2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "net.t_embedding_norm.weight",
+      "pattern": "net.t_embedding_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "net.x_embedder.proj.1.weight",
+      "pattern": "net.x_embedder.proj.1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    }
+  ]
+}

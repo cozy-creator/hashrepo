@@ -53,6 +53,10 @@ pub const MAX_CONTRACT_NAME_BYTES: usize = 64;
 /// are the language-neutral copy any other implementation reads.
 pub const BUILTIN: &[(&str, &str)] = &[
     (
+        "anima.diffsynth-bf16.v1.json",
+        include_str!("../../../spec/v1/contracts/anima.diffsynth-bf16.v1.json"),
+    ),
+    (
         "dit.blocks-fused-qkv.v1.json",
         include_str!("../../../spec/v1/contracts/dit.blocks-fused-qkv.v1.json"),
     ),
@@ -77,6 +81,18 @@ pub const BUILTIN: &[(&str, &str)] = &[
         include_str!("../../../spec/v1/contracts/internvl-u.diffusers-bf16.v1.json"),
     ),
     (
+        "joycaption.llava-bf16.v1.json",
+        include_str!("../../../spec/v1/contracts/joycaption.llava-bf16.v1.json"),
+    ),
+    (
+        "krea-2.diffusers-bf16.v1.json",
+        include_str!("../../../spec/v1/contracts/krea-2.diffusers-bf16.v1.json"),
+    ),
+    (
+        "ltx-2-upsampler.diffusers-bf16.v1.json",
+        include_str!("../../../spec/v1/contracts/ltx-2-upsampler.diffusers-bf16.v1.json"),
+    ),
+    (
         "ltx-2.diffusers-bf16.v1.json",
         include_str!("../../../spec/v1/contracts/ltx-2.diffusers-bf16.v1.json"),
     ),
@@ -93,8 +109,24 @@ pub const BUILTIN: &[(&str, &str)] = &[
         include_str!("../../../spec/v1/contracts/minimax.h3-dit-native.v1.json"),
     ),
     (
+        "musicgen.transformers-fp16.v1.json",
+        include_str!("../../../spec/v1/contracts/musicgen.transformers-fp16.v1.json"),
+    ),
+    (
         "qwen-image.diffusers-bf16.v1.json",
         include_str!("../../../spec/v1/contracts/qwen-image.diffusers-bf16.v1.json"),
+    ),
+    (
+        "qwen3.6-27b-mtp.gguf-ud-q4-k-xl.v1.json",
+        include_str!("../../../spec/v1/contracts/qwen3.6-27b-mtp.gguf-ud-q4-k-xl.v1.json"),
+    ),
+    (
+        "qwen3.6-35b-a3b.vllm-fp8.v1.json",
+        include_str!("../../../spec/v1/contracts/qwen3.6-35b-a3b.vllm-fp8.v1.json"),
+    ),
+    (
+        "rife.flownet-fp32.v1.json",
+        include_str!("../../../spec/v1/contracts/rife.flownet-fp32.v1.json"),
     ),
     (
         "sd15.diffusers-bf16.v1.json",
@@ -119,6 +151,10 @@ pub const BUILTIN: &[(&str, &str)] = &[
     (
         "sdxl.diffusers-fp8-rowwise.v1.json",
         include_str!("../../../spec/v1/contracts/sdxl.diffusers-fp8-rowwise.v1.json"),
+    ),
+    (
+        "sdxl.diffusers-nvfp4-flat.v1.json",
+        include_str!("../../../spec/v1/contracts/sdxl.diffusers-nvfp4-flat.v1.json"),
     ),
     (
         "stable-audio.diffusers-fp16.v1.json",
@@ -803,6 +839,18 @@ impl TensorPattern {
     #[must_use]
     pub fn pattern(&self) -> &Pattern {
         &self.pattern
+    }
+
+    /// The accepted element-type spellings; empty accepts any.
+    #[must_use]
+    pub fn dtypes(&self) -> &[String] {
+        &self.dtypes
+    }
+
+    /// The declared number of axes, if the declaration constrains it.
+    #[must_use]
+    pub const fn rank(&self) -> Option<usize> {
+        self.rank
     }
 
     /// Whether a file must carry this declaration to implement the contract.
