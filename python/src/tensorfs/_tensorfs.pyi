@@ -211,6 +211,30 @@ class StreamTensor:
     @property
     def nbytes(self) -> int: ...
 
+class FillStats:
+    @property
+    def source_bytes(self) -> int: ...
+    @property
+    def destination_bytes(self) -> int: ...
+    @property
+    def padding_bytes(self) -> int: ...
+    @property
+    def runs(self) -> int: ...
+    @property
+    def chunks(self) -> int: ...
+
+class CudaFillClient:
+    def __init__(self, staging_bytes: int, device: int = 0) -> None: ...
+    def fill(
+        self,
+        reader: TensorStreamReader,
+        name: str,
+        destination_ptr: int,
+        destination_bytes: int,
+        destination_offset: int = 0,
+        layout: str = "torch.contiguous@1",
+    ) -> FillStats: ...
+
 class TensorStreamReader:
     def __init__(
         self,
@@ -232,6 +256,13 @@ class TensorStreamReader:
     def read_tensor_into(
         self, name: str, buffer: bytearray | memoryview
     ) -> int: ...
+    def fill_host_into(
+        self,
+        name: str,
+        buffer: bytearray | memoryview,
+        destination_offset: int = 0,
+        layout: str = "torch.contiguous@1",
+    ) -> FillStats: ...
 
 class RecordsReader:
     def __init__(self, store: ObjectStore, records: Sequence[FileRecord]) -> None: ...

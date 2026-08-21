@@ -1,6 +1,6 @@
 //! `tensorfs._tensorfs` — the compiled half of the `tensorfs` distribution.
 //!
-//! Three surfaces, chosen because they are the ones a direct tensor read
+//! Four surfaces, chosen because they are the ones a direct tensor read
 //! needs and the ones Python cannot do at native speed:
 //!
 //! 1. **The CAS** (`ObjectStore`): admit, read, verify. Hashing and the
@@ -12,19 +12,22 @@
 //!    records read as a bounded random-access byte source, plus the canonical
 //!    planner over that same source. Together they are exactly "give me the
 //!    bytes of one tensor without materializing the file".
+//! 4. **The fill path** (`TensorStreamReader.fill_host_into`,
+//!    `CudaFillClient`): source records plus plain destination address data
+//!    drive tensorfs's one layout plan/transform. No torch type crosses it.
 //!
 //! `#![forbid(unsafe_code)]` is deliberately absent here, unlike every other
 //! crate in this workspace: the PyO3 attribute macros expand to `unsafe impl`s
-//! in this crate. The only hand-written `unsafe` is [`PyMappedObject`]'s
-//! buffer-protocol export, which is the one thing that cannot be written in
-//! safe Rust -- filling a `Py_buffer` is a raw-pointer contract with CPython.
+//! in this crate. The hand-written `unsafe` is confined to memory-map/buffer
+//! protocol export and the checked borrowed destination span; both are raw
+//! pointer contracts with CPython and cannot be expressed in safe Rust.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::ffi::{c_int, c_void};
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pyo3::create_exception;
@@ -35,6 +38,8 @@ use pyo3::types::PyBytes;
 use tensorfs_core::compose;
 use tensorfs_core::contract;
 use tensorfs_core::layout::{self, Layout, Removal, STUB_MAGIC};
+use tensorfs_core::layout_fill::{self, ChunkedSource, FillSink, TensorFill};
+use tensorfs_core::layout_morphism;
 use tensorfs_core::object::{self, ObjectDigest};
 use tensorfs_core::planner::{self, ByteSource, PlannerId, RegionKind};
 use tensorfs_core::source::FileByteSource;
@@ -42,6 +47,7 @@ use tensorfs_core::store::ObjectStore;
 use tensorfs_core::tfm1::{self, Entry, FileRecord as CoreFileRecord, SnapshotId};
 use tensorfs_core::tfp1;
 use tensorfs_core::workspace_source::RecordsSource;
+use tensorfs_cuda::CudaSink;
 
 create_exception!(
     "tensorfs._tensorfs",
@@ -94,6 +100,10 @@ fn store_error(error: tensorfs_core::store::StoreError) -> PyErr {
 
 fn layout_error(error: layout::LayoutError) -> PyErr {
     LayoutError::new_err(describe(&error))
+}
+
+fn fill_error(error: layout_morphism::LayoutError) -> PyErr {
+    LayoutError::new_err(error.to_string())
 }
 
 fn compose_error(error: compose::ComposeError) -> PyErr {
@@ -1184,6 +1194,251 @@ impl PyStreamTensor {
     }
 }
 
+/// The fill's measured facts, returned unchanged across the Python seam.
+#[pyclass(frozen, get_all, module = "tensorfs._tensorfs", name = "FillStats")]
+pub struct PyFillStats {
+    source_bytes: u64,
+    destination_bytes: u64,
+    padding_bytes: u64,
+    runs: u64,
+    chunks: u64,
+}
+
+impl From<layout_fill::FillStats> for PyFillStats {
+    fn from(stats: layout_fill::FillStats) -> Self {
+        Self {
+            source_bytes: stats.source_bytes,
+            destination_bytes: stats.destination_bytes,
+            padding_bytes: stats.padding_bytes,
+            runs: stats.runs,
+            chunks: stats.chunks,
+        }
+    }
+}
+
+enum SourceSegment {
+    Data {
+        map: memmap2::Mmap,
+        start: usize,
+        end: usize,
+    },
+    Hole(Vec<u8>),
+}
+
+impl SourceSegment {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Data { map, start, end } => &map[*start..*end],
+            Self::Hole(bytes) => bytes,
+        }
+    }
+}
+
+/// Maps exactly one tensor's source pieces out of the committed record run.
+/// The mappings own their file descriptors' inodes for the duration of the
+/// fill; no tensor-sized source buffer is assembled first.
+fn source_segments(
+    store: &ObjectStore,
+    records: &[CoreFileRecord],
+    offset: u64,
+    length: u64,
+) -> PyResult<Vec<SourceSegment>> {
+    let finish = offset
+        .checked_add(length)
+        .ok_or_else(|| LayoutError::new_err("tensor source range overflows u64"))?;
+    let mut position = 0_u64;
+    let mut segments = Vec::new();
+    let mut covered = 0_u64;
+    for record in records {
+        let record_end = position + record_length(record);
+        if record_end <= offset {
+            position = record_end;
+            continue;
+        }
+        if position >= finish {
+            break;
+        }
+        let from = offset.max(position);
+        let to = finish.min(record_end);
+        let within = usize::try_from(from - position)
+            .map_err(|_| LayoutError::new_err("tensor source offset does not fit usize"))?;
+        let count = usize::try_from(to - from)
+            .map_err(|_| LayoutError::new_err("tensor source length does not fit usize"))?;
+        match record {
+            CoreFileRecord::Hole { .. } => segments.push(SourceSegment::Hole(vec![0; count])),
+            CoreFileRecord::Data { digest, .. } => {
+                let file = store.open_object(digest).map_err(store_error)?;
+                // SAFETY: store objects are immutable after admission. The
+                // mapping owns the inode while SourceSegment is alive.
+                let map = unsafe { memmap2::Mmap::map(&file) }.map_err(io_error)?;
+                let end = within
+                    .checked_add(count)
+                    .ok_or_else(|| LayoutError::new_err("tensor source slice overflows usize"))?;
+                if end > map.len() {
+                    return Err(LayoutError::new_err(format!(
+                        "object {} holds {} bytes, tensor fill asks for byte {}",
+                        digest,
+                        map.len(),
+                        end,
+                    )));
+                }
+                segments.push(SourceSegment::Data {
+                    map,
+                    start: within,
+                    end,
+                });
+            }
+        }
+        covered += to - from;
+        position = record_end;
+    }
+    if covered != length {
+        return Err(LayoutError::new_err(format!(
+            "tensor source range holds {covered} bytes, fill requires {length}"
+        )));
+    }
+    Ok(segments)
+}
+
+struct BufferSink {
+    address: usize,
+    capacity: usize,
+}
+
+impl FillSink for BufferSink {
+    fn staging(
+        &mut self,
+        bytes: usize,
+        device_offset: u64,
+    ) -> Result<&mut [u8], layout_morphism::LayoutError> {
+        let at =
+            usize::try_from(device_offset).map_err(|_| layout_morphism::LayoutError::Buffer {
+                got: self.capacity,
+                want: usize::MAX,
+            })?;
+        let end = at
+            .checked_add(bytes)
+            .ok_or(layout_morphism::LayoutError::Buffer {
+                got: self.capacity,
+                want: usize::MAX,
+            })?;
+        if end > self.capacity {
+            return Err(layout_morphism::LayoutError::Buffer {
+                got: self.capacity,
+                want: end,
+            });
+        }
+        // SAFETY: the Py_buffer retained by fill_host_into keeps this writable
+        // contiguous allocation alive for the whole call, and the bounds were
+        // checked against its reported capacity above.
+        Ok(unsafe { std::slice::from_raw_parts_mut((self.address + at) as *mut u8, bytes) })
+    }
+
+    fn commit(&mut self) -> Result<(), layout_morphism::LayoutError> {
+        Ok(())
+    }
+}
+
+fn fill_tensor<S: FillSink>(
+    reader: &PyTensorStreamReader,
+    name: &str,
+    destination_offset: u64,
+    layout: &str,
+    sink: &mut S,
+) -> PyResult<PyFillStats> {
+    let tensor = reader
+        .tensors
+        .iter()
+        .map(Py::get)
+        .find(|tensor| tensor.name == name)
+        .ok_or_else(|| {
+            TensorfsError::new_err(format!("this container holds no tensor named {name:?}"))
+        })?;
+    let elements = tensor
+        .shape
+        .iter()
+        .try_fold(1_u64, |total, dim| total.checked_mul(*dim))
+        .ok_or_else(|| LayoutError::new_err(format!("{name:?}: logical shape overflows u64")))?;
+    if elements == 0 || tensor.nbytes % elements != 0 {
+        return Err(LayoutError::new_err(format!(
+            "{name:?}: {} bytes do not divide over shape {:?}",
+            tensor.nbytes, tensor.shape,
+        )));
+    }
+    let element_bytes = usize::try_from(tensor.nbytes / elements)
+        .map_err(|_| LayoutError::new_err("element size does not fit usize"))?;
+    let segments = source_segments(
+        reader.store.as_ref(),
+        &reader.records,
+        tensor.offset,
+        tensor.nbytes,
+    )?;
+    let slices = segments
+        .iter()
+        .map(SourceSegment::bytes)
+        .collect::<Vec<_>>();
+    let source = ChunkedSource::new(&slices);
+    let arrangement = layout_morphism::arrangement(layout).map_err(fill_error)?;
+    let stats = layout_fill::fill(
+        &source,
+        &TensorFill {
+            layout: arrangement,
+            shape: tensor.shape.clone(),
+            element_bytes,
+            device_offset: destination_offset,
+        },
+        sink,
+    )
+    .map_err(fill_error)?;
+    Ok(stats.into())
+}
+
+/// One reusable pinned staging allocation for a whole destination map.
+#[pyclass(module = "tensorfs._tensorfs", name = "CudaFillClient")]
+pub struct PyCudaFillClient {
+    sink: Mutex<CudaSink>,
+}
+
+#[pymethods]
+impl PyCudaFillClient {
+    #[new]
+    #[pyo3(signature = (staging_bytes, device = 0))]
+    fn new(staging_bytes: usize, device: i32) -> PyResult<Self> {
+        if staging_bytes == 0 {
+            return Err(LayoutError::new_err("CUDA fill staging must hold bytes"));
+        }
+        tensorfs_cuda::bind(device).map_err(fill_error)?;
+        let sink = CudaSink::new(0, 0, staging_bytes).map_err(fill_error)?;
+        Ok(Self {
+            sink: Mutex::new(sink),
+        })
+    }
+
+    #[pyo3(signature = (reader, name, destination_ptr, destination_bytes, destination_offset = 0, layout = "torch.contiguous@1"))]
+    fn fill(
+        &self,
+        reader: &PyTensorStreamReader,
+        name: &str,
+        destination_ptr: u64,
+        destination_bytes: usize,
+        destination_offset: u64,
+        layout: &str,
+    ) -> PyResult<PyFillStats> {
+        if destination_ptr == 0 {
+            return Err(LayoutError::new_err(
+                "CUDA fill destination pointer is null",
+            ));
+        }
+        let mut sink = self
+            .sink
+            .lock()
+            .map_err(|_| LayoutError::new_err("CUDA fill client was poisoned by a prior panic"))?;
+        sink.retarget(destination_ptr, destination_bytes)
+            .map_err(fill_error)?;
+        fill_tensor(reader, name, destination_offset, layout, &mut *sink)
+    }
+}
+
 /// A committed tensor container's streamed read surface: FILE-ORDER tensor
 /// iteration and GIL-released bulk `readinto` into caller-owned buffers.
 ///
@@ -1203,6 +1458,8 @@ impl PyStreamTensor {
 /// free, and the extra memcpy pipelines behind disk DMA.
 #[pyclass(frozen, module = "tensorfs._tensorfs", name = "TensorStreamReader")]
 pub struct PyTensorStreamReader {
+    store: Arc<ObjectStore>,
+    records: Vec<CoreFileRecord>,
     reader: tensorfs_core::stream::StreamReader<Arc<ObjectStore>>,
     format: String,
     tensors: Vec<Py<PyStreamTensor>>,
@@ -1254,6 +1511,8 @@ impl PyTensorStreamReader {
             })
             .collect::<PyResult<Vec<_>>>()?;
         Ok(Self {
+            store: Arc::clone(&store.inner),
+            records,
             reader,
             format: match inventory.format() {
                 planner::TensorFormat::SafetensorsV1 => "safetensors-v1".to_owned(),
@@ -1330,6 +1589,25 @@ impl PyTensorStreamReader {
                 TensorfsError::new_err(format!("this container holds no tensor named {name:?}"))
             })?;
         self.readinto(py, found.offset, found.nbytes, buffer)
+    }
+
+    /// Fill one tensor into a caller-owned host buffer through tensorfs's one
+    /// plan/transform implementation. The buffer protocol is the whole seam:
+    /// no numpy or torch type crosses it.
+    #[pyo3(signature = (name, buffer, destination_offset = 0, layout = "torch.contiguous@1"))]
+    fn fill_host_into(
+        &self,
+        name: &str,
+        buffer: pyo3::buffer::PyBuffer<u8>,
+        destination_offset: u64,
+        layout: &str,
+    ) -> PyResult<PyFillStats> {
+        let address = writable_span(&buffer, 0)?;
+        let mut sink = BufferSink {
+            address,
+            capacity: buffer.len_bytes(),
+        };
+        fill_tensor(self, name, destination_offset, layout, &mut sink)
     }
 
     fn __repr__(&self) -> String {
@@ -1869,6 +2147,8 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyRecordsReader>()?;
     module.add_class::<PyContractInfo>()?;
     module.add_class::<PyStreamTensor>()?;
+    module.add_class::<PyFillStats>()?;
+    module.add_class::<PyCudaFillClient>()?;
     module.add_class::<PyTensorStreamReader>()?;
 
     module.add_function(wrap_pyfunction!(decode_snapshot, module)?)?;

@@ -32,6 +32,7 @@ extension-module = ["pyo3/extension-module"]
 tensorfs-core = { path = "../tensorfs-core", default-features = false, features = [
     "store",
 ] }
+tensorfs-cuda = { path = "../tensorfs-cuda" }
 
 # abi3-py311: ONE wheel per platform for every CPython from 3.11 up, instead
 # of one per interpreter version.

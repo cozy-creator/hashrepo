@@ -149,8 +149,9 @@ fn check(_cuda: &Driver, status: CUresult, call: &str) -> Result<(), LayoutError
 /// from is an address space two owners are paging.
 pub struct CudaSink {
     base: CUdeviceptr,
-    capacity: usize,
+    destination_bytes: usize,
     staging: *mut c_void,
+    staging_bytes: usize,
     staged: usize,
     /// Byte offset of the staged tensor within `base`.
     offset: u64,
@@ -166,7 +167,11 @@ impl CudaSink {
     /// Host memory, not device memory: the pinned staging buffer is the thing
     /// tensorfs is allowed to own, because it is the buffer the transform
     /// writes into on its way past.
-    pub fn new(base: CUdeviceptr, staging_bytes: usize) -> Result<Self, LayoutError> {
+    pub fn new(
+        base: CUdeviceptr,
+        destination_bytes: usize,
+        staging_bytes: usize,
+    ) -> Result<Self, LayoutError> {
         let cuda = driver()?;
         let mut pointer: *mut c_void = std::ptr::null_mut();
         unsafe {
@@ -178,8 +183,9 @@ impl CudaSink {
         }
         Ok(Self {
             base,
-            capacity: staging_bytes,
+            destination_bytes,
             staging: pointer,
+            staging_bytes,
             staged: 0,
             offset: 0,
             bytes_to_device: 0,
@@ -188,20 +194,54 @@ impl CudaSink {
 
     /// The pinned staging capacity, in bytes.
     pub fn capacity(&self) -> usize {
-        self.capacity
+        self.staging_bytes
+    }
+
+    /// Point the reusable staging allocation at a new caller-owned address.
+    ///
+    /// Retargeting moves no bytes and allocates nothing. A client can fill a
+    /// whole destination map through one pinned slab while varena remains the
+    /// sole owner of every destination address.
+    pub fn retarget(
+        &mut self,
+        base: CUdeviceptr,
+        destination_bytes: usize,
+    ) -> Result<(), LayoutError> {
+        if self.staged != 0 {
+            return Err(LayoutError::Record {
+                handle: "cuda".into(),
+                detail: "cannot retarget while a staged transfer is pending".into(),
+            });
+        }
+        self.base = base;
+        self.destination_bytes = destination_bytes;
+        Ok(())
     }
 }
 
 impl FillSink for CudaSink {
     fn staging(&mut self, bytes: usize, device_offset: u64) -> Result<&mut [u8], LayoutError> {
-        if bytes > self.capacity {
+        if bytes > self.staging_bytes {
             // A tensor bigger than the staging buffer is a REFUSAL, not a
             // silent split: splitting it here would put a second chunking
             // policy in a crate that already has one, and the caller sized this
             // buffer against a budget it owns.
             return Err(LayoutError::Buffer {
-                got: self.capacity,
+                got: self.staging_bytes,
                 want: bytes,
+            });
+        }
+        let end = usize::try_from(device_offset)
+            .ok()
+            .and_then(|offset| offset.checked_add(bytes))
+            .ok_or(LayoutError::Buffer {
+                got: self.destination_bytes,
+                want: usize::MAX,
+            })?;
+        if end > self.destination_bytes {
+            return Err(LayoutError::Buffer {
+                got: self.destination_bytes,
+                want: end,
             });
         }
         self.staged = bytes;
