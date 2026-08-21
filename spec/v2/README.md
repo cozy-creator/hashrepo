@@ -36,11 +36,31 @@ Regenerate with `go run ./scripts/build_v2_corpus`, which reads
 describe a checkpoint that may not exist, and the derivation test fails on the
 digest.
 
+**A topology is the WHOLE published checkpoint tree** (tensorfs#153, Paul's
+ruling). Seven records were once extracted from one member of the reference
+(`hf:…:unet`) while the stamp is computed over everything a checkpoint carries,
+and the fleet's own trees refused their own lanes — production stamped 12 of
+501 under a green suite. Three guards now hold the line: `bank-headers.py`
+REFUSES an hf source that covers a strict subset of the repo's tensor-bearing
+subfolders unless the row says `SUB-NETWORK` (or names its exclusions with
+`EXCLUDES …`) on purpose; every extracted record's `derived_from` must name its
+SOURCES.tsv id; and the partial-tree fence re-derives every multi-member source
+with each member dropped and fails if the committed digest is reproducible from
+less than the whole tree. A deliberately partial bank (a morphism anchor, a
+regression fixture) is legal and SAYS SO — silence is what is banned.
+
 `role` comes from the reference tree's own directory name (`unet` /
 `transformer` / `dit` -> denoiser, `vae` -> vae, `text_encoder*` -> text
 encoder, a flat checkpoint -> backbone). It exists so a quant rule can scope
 itself — `cozy.fp8-rowwise` transforms the denoiser and passes the rest
 through.
+
+`dtype` is the DENOISER components' byte-weighted dominant element type (the
+whole tree's when no denoiser-role directory exists; key-count when no lengths
+are banked). Both scopings matter on real trees: LTX-2.3's and Z-Image's F32
+text encoders outweigh their denoisers in bytes, and minimax-h3's F32
+autoencoders outnumber its 66 GB bf16 transformer in keys — the denoiser is
+what a serve lane executes, so its dtype is what the lane's spelling means.
 
 `dtype` and `islands` are REFERENCE FACTS, not part of what the topology means.
 They exist so a `plain.<dtype>` rule can be reference-tolerant: a key the

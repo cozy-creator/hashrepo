@@ -7,10 +7,10 @@ document would be testing this file against itself.
 
 Two pairs, chosen for what they are entitled to prove:
 
-* `ltx2-upsampler.diffusers@1+plain.bf16@1` -- an identity rule. Every key
+* `ltx2-upsampler.diffusers@2+plain.bf16@1` -- an identity rule. Every key
   keeps its shape, `transformed` is 0, and the whole component carries one
   element type.
-* `ernie.diffusers@1+cozy.fp8-rowwise@1` -- a transforming rule. 253 weights
+* `ernie.diffusers@2+cozy.fp8-rowwise@2` -- a transforming rule. 253 weights
   became F8_E4M3 and grew an F32 `weight_scale` twin, and the quant block
   carries the dequant identity and the sm floor a serving loader needs.
 """
@@ -42,8 +42,8 @@ def rowwise() -> ExpectedHeader:
 
 
 def test_an_identity_layout_reads_back_whole(plain: ExpectedHeader) -> None:
-    assert plain.stamp == "ltx2-upsampler.diffusers@1+plain.bf16@1"
-    assert plain.topology == "ltx2-upsampler.diffusers@1"
+    assert plain.stamp == "ltx2-upsampler.diffusers@2+plain.bf16@1"
+    assert plain.topology == "ltx2-upsampler.diffusers@2"
     assert len(plain.topology_digest) == 64
     assert plain.quant.handle == "plain.bf16@1"
     assert plain.quant.family == "plain.bf16"
@@ -52,10 +52,13 @@ def test_an_identity_layout_reads_back_whole(plain: ExpectedHeader) -> None:
     assert plain.quant.lossy is False
     assert plain.quant.transformed == 0
     assert plain.quant.inverse == ""
-    assert plain.components.keys() == {"latent_upsampler"}
+    # tensorfs#153: the lane is the WHOLE published tree — the upsampler ships
+    # with its VAE, so the identity layout carries both components.
+    assert plain.components.keys() == {"latent_upsampler", "vae"}
     assert plain.roles["latent_upsampler"] == "other"
+    assert plain.roles["vae"] == "vae"
 
-    tensors = plain.tensors()
+    tensors = plain.component("latent_upsampler")
     assert len(tensors) == 72
     assert tensors["initial_conv.weight"] == LayoutTensor(("BF16",), (1024, 128, 3, 3, 3))
     # An identity rule stamps ONE element type across the whole component, so
@@ -66,7 +69,7 @@ def test_an_identity_layout_reads_back_whole(plain: ExpectedHeader) -> None:
 def test_a_transforming_layout_carries_the_scales_and_the_dequant(
     rowwise: ExpectedHeader,
 ) -> None:
-    assert rowwise.quant.handle == "cozy.fp8-rowwise@1"
+    assert rowwise.quant.handle == "cozy.fp8-rowwise@2"
     assert rowwise.quant.declared_dtype == "float8_e4m3fn"
     assert rowwise.quant.capability_floor_sm == 89
     assert rowwise.quant.lossy is True
@@ -103,7 +106,9 @@ def test_reference_tolerance_is_visible_as_several_accepted_dtypes() -> None:
 def test_naming_a_component_is_required_when_there_are_several(
     plain: ExpectedHeader, rowwise: ExpectedHeader
 ) -> None:
-    assert plain.tensors() is plain.component("latent_upsampler")
+    with pytest.raises(KeyError, match="name one of"):
+        plain.tensors()
+    assert plain.component("latent_upsampler") is not None
     with pytest.raises(KeyError, match="no component 'unet'"):
         rowwise.component("unet")
 
@@ -146,12 +151,12 @@ def test_rules_replace_the_dtype_keyed_sm_table() -> None:
     tell them apart, and loses the floor entirely for a third spelling."""
 
     corpus = rules(_SPEC)
-    assert corpus["cozy.fp8-rowwise@1"].capability_floor_sm == 89
+    assert corpus["cozy.fp8-rowwise@2"].capability_floor_sm == 89
     assert corpus["plain.f32@1"].capability_floor_sm == 0
     assert corpus["bfl.nvfp4-preswizzled@1"].capability_floor_sm == 100
 
     storage = corpus["cozy.fp8-storage@1"]
-    rowwise = corpus["cozy.fp8-rowwise@1"]
+    rowwise = corpus["cozy.fp8-rowwise@2"]
     assert storage.declared_dtype == rowwise.declared_dtype == "float8_e4m3fn"
     assert storage.capability_floor_sm == rowwise.capability_floor_sm
     assert storage.conventions["scale"] == "none"
@@ -176,8 +181,8 @@ def test_a_topology_is_shapes_and_no_dtype(plain: ExpectedHeader) -> None:
     """`quant(topology)` splits the two halves: the topology says what keys
     exist and how big they are, the rule says what they are made of."""
 
-    shapes = topologies(_SPEC)["ltx2-upsampler.diffusers@1"]["latent_upsampler"]
-    computed = plain.tensors()
+    shapes = topologies(_SPEC)["ltx2-upsampler.diffusers@2"]["latent_upsampler"]
+    computed = plain.component("latent_upsampler")
     assert shapes.keys() == computed.keys()
     for key, shape in shapes.items():
         assert computed[key].shape == shape

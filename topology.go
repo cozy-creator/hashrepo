@@ -45,7 +45,19 @@ const (
 // something new lands in RoleOther and the extractor SAYS SO, so an unknown
 // spelling is a visible fact rather than a silent misclassification.
 func roleOfDirectory(directory string) ComponentRole {
-	switch base := strings.ToLower(path.Base(directory)); {
+	// Wan 2.2 ships TWO denoisers as transformer/ and transformer_2/ — a
+	// numbered sibling is the same kind of thing as its base, so a trailing
+	// _<digits> is stripped before the role is read. Without this the second
+	// denoiser is RoleOther, and a quant rule scoped to denoisers transforms
+	// half the network.
+	base := strings.ToLower(path.Base(directory))
+	if at := strings.LastIndex(base, "_"); at > 0 {
+		digits := base[at+1:]
+		if digits != "" && strings.Trim(digits, "0123456789") == "" {
+			base = base[:at]
+		}
+	}
+	switch {
 	case base == "unet" || base == "transformer" || base == "denoiser" ||
 		base == "diffusion_models" || base == "dit":
 		return RoleDenoiser
@@ -315,18 +327,26 @@ func TopologyFromHeaders(name string, version uint32, derivedFrom string, files 
 		}
 		grouped[directory] = append(grouped[directory], file)
 	}
-	// The dominant dtype is counted over the WHOLE checkpoint, not per
-	// component, because a real tree routinely mixes them: LTX-2.3 ships a bf16
-	// denoiser beside a 1065-tensor fp32 text encoder. Per-component counting
-	// would make that tree stampable by no single plain rule at all.
-	dtypes := map[string]int{}
-	for _, file := range files {
-		for _, tensor := range file.Tensors {
-			dtypes[tensor.Dtype]++
-		}
+	// The dominant dtype is the DENOISER'S, because the denoiser is what a
+	// serve lane executes and what its dtype spelling has always meant. Whole-
+	// tree tallies lie in both directions on real trees: LTX-2.3 and Z-Image
+	// carry F32 text encoders that outweigh their bf16 denoisers in BYTES, and
+	// minimax-h3's serving tree carries F32 autoencoders that outnumber its
+	// 66 GB bf16 transformer in KEYS. Within the chosen scope bytes decide
+	// (a 4 KB norm table is not the peer of a 500 MB weight), with a key-count
+	// fallback for members that bank no lengths (GGUF directories carry none).
+	// A tree with no denoiser-role directory measures over everything, as
+	// before. Whatever wins, every key elsewhere that disagrees is an island —
+	// which is exactly how a reference-tolerant plain rule stays able to admit
+	// the reference itself.
+	dtype := dominantDtype(files, func(directory string) bool {
+		return roleOfDirectory(directory) == RoleDenoiser
+	})
+	if dtype == "" {
+		dtype = dominantDtype(files, func(string) bool { return true })
 	}
 	topology := &Topology{handle: handle, derivedFrom: derivedFrom,
-		dtype: dominantDtype(dtypes), byName: map[string]*TopologyComponent{}}
+		dtype: dtype, byName: map[string]*TopologyComponent{}}
 	for _, directory := range sortedMapKeys(grouped) {
 		parts := partitionMembers(grouped[directory])
 		for _, part := range parts {
@@ -470,11 +490,34 @@ func componentName(directory string) string {
 	return path.Base(directory)
 }
 
-func dominantDtype(counts map[string]int) string {
-	best, bestCount := "", -1
-	for _, dtype := range sortedMapKeys(counts) {
-		if counts[dtype] > bestCount {
-			best, bestCount = dtype, counts[dtype]
+func dominantDtype(files []ArtifactFile, inScope func(directory string) bool) string {
+	bytes := map[string]uint64{}
+	keys := map[string]uint64{}
+	total := uint64(0)
+	for _, file := range files {
+		directory := path.Dir(file.Path)
+		if directory == "." {
+			directory = ""
+		}
+		if !inScope(directory) {
+			continue
+		}
+		for _, tensor := range file.Tensors {
+			bytes[tensor.Dtype] += tensor.Length
+			keys[tensor.Dtype]++
+			total += tensor.Length
+		}
+	}
+	weights := bytes
+	if total == 0 {
+		weights = keys
+	}
+	best := ""
+	bestWeight := uint64(0)
+	first := true
+	for _, dtype := range sortedMapKeys(weights) {
+		if first || weights[dtype] > bestWeight {
+			best, bestWeight, first = dtype, weights[dtype], false
 		}
 	}
 	return best

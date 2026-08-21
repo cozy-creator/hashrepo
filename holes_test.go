@@ -42,29 +42,36 @@ func TestHoleA_SdxlInpaintingRefusesOnShape(t *testing.T) {
 
 	loaded := catalog(t)
 	headers := loadBankedHeaders(t)
-	lane := mustLayoutID(t, "sdxl.diffusers@1+plain.bf16@1")
-	decision := loaded.Admit(headers["sdxl-inpainting-bf16"].artifact(),
+	// The probe is the WHOLE inpainting tree re-typed bf16 (tensorfs#153):
+	// the lane is the whole published tree now, and so is the hole.
+	lane := mustLayoutID(t, "sdxl.diffusers@2+plain.bf16@1")
+	decision := loaded.Admit(headers["sdxl-inpainting-tree-bf16"].artifact(),
 		[]tensorfs.LayoutID{lane})
 
 	if decision.Kind != tensorfs.DecisionRefuse {
-		t.Fatalf("v2 answered %s; the 9-channel conv_in must refuse", decision.Kind)
+		t.Fatalf("v2 answered %s; the inpainting tree must refuse the SDXL lane", decision.Kind)
 	}
 	refusal := decision.Refusal
-	if refusal.Tensor != "conv_in.weight" {
-		t.Errorf("the refusal names %q; it must name conv_in.weight", refusal.Tensor)
+	// At whole-tree scale the best refusal is member-level (the two trees'
+	// text encoders differ before the unet is reached), and the sharpest fact
+	// is in the stamp suffix: the candidate IS the inpainting topology, by
+	// name. The conv_in discrimination itself is asserted on the records.
+	if !strings.Contains(refusal.String(), "sdxl-inpainting.diffusers@2") {
+		t.Errorf("the refusal does not say what the candidate IS: %s", refusal)
 	}
-	if refusal.Reason != tensorfs.RefusalShape {
-		t.Errorf("the refusal reason is %q, want shape", refusal.Reason)
-	}
-	if !strings.Contains(refusal.Observed, "9") || !strings.Contains(refusal.Declared, "4") {
-		t.Errorf("the refusal must show both shapes; got observed %q declared %q",
-			refusal.Observed, refusal.Declared)
+	inpainting := loaded.Topology(tensorfs.Handle{Name: "sdxl-inpainting.diffusers", Version: 2})
+	sdxl := loaded.Topology(tensorfs.Handle{Name: "sdxl.diffusers", Version: 2})
+	convIn := inpainting.Component("unet").Tensors()["conv_in.weight"]
+	sdxlConvIn := sdxl.Component("unet").Tensors()["conv_in.weight"]
+	if convIn.String() != "[320, 9, 3, 3]" || sdxlConvIn.String() != "[320, 4, 3, 3]" {
+		t.Errorf("the discriminator moved: inpainting conv_in %s, sdxl conv_in %s",
+			convIn, sdxlConvIn)
 	}
 	// The whole point of shapes being kept: the two topologies are separate
 	// records, so the confusion is not merely caught, it is unrepresentable.
 	if _, err := loaded.Layout(mustLayoutID(t,
-		"sdxl-inpainting.diffusers@1+plain.bf16@1")); err != nil {
-		t.Fatalf("the inpainting UNet has no topology of its own: %v", err)
+		"sdxl-inpainting.diffusers@2+plain.bf16@1")); err != nil {
+		t.Fatalf("the inpainting tree has no topology of its own: %v", err)
 	}
 	t.Logf("v1: %s", v1.Rendered)
 	t.Logf("v2: %s", refusal)
@@ -88,31 +95,27 @@ func TestHoleB_Sd15AndSd2SeparateOnShapes(t *testing.T) {
 
 	loaded := catalog(t)
 	headers := loadBankedHeaders(t)
+	// Since tensorfs#153 the lanes are WHOLE published trees, and the two
+	// families' trees differ grossly (different text encoders, sd15 carries a
+	// safety_checker) — so the cross-admission refusals are member-level and
+	// the surgical proj_in/proj_out discrimination is asserted directly on the
+	// records' unet components below, where it lives.
 	for _, probe := range []struct{ checkpoint, lane string }{
-		{"sd15", "sd2.diffusers@1+plain.f32@1"},
-		{"sd-turbo", "sd15.diffusers@1+plain.f32@1"},
+		{"sd15-hub", "sd2.diffusers@2+plain.bf16@1"},
+		{"sd-turbo-hub", "sd15.diffusers@2+plain.bf16@1"},
 	} {
 		decision := loaded.Admit(headers[probe.checkpoint].artifact(),
 			[]tensorfs.LayoutID{mustLayoutID(t, probe.lane)})
 		if decision.Kind != tensorfs.DecisionRefuse {
 			t.Fatalf("%s into %s answered %s", probe.checkpoint, probe.lane, decision.Kind)
 		}
-		refusal := decision.Refusal
-		if !strings.Contains(refusal.Tensor, "proj_in") &&
-			!strings.Contains(refusal.Tensor, "proj_out") {
-			t.Errorf("%s: the refusal names %q; the discriminator is proj_in/proj_out",
-				probe.checkpoint, refusal.Tensor)
-		}
-		if refusal.Reason != tensorfs.RefusalShape {
-			t.Errorf("%s: reason %q, want shape", probe.checkpoint, refusal.Reason)
-		}
-		t.Logf("%s -> %s: %s", probe.checkpoint, probe.lane, refusal)
+		t.Logf("%s -> %s: %s", probe.checkpoint, probe.lane, decision.Refusal)
 	}
-	// And the key SETS really are identical — otherwise this proves nothing
-	// about shapes, only about names.
-	sd15 := loaded.Topology(tensorfs.Handle{Name: "sd15.diffusers", Version: 1})
-	sd2 := loaded.Topology(tensorfs.Handle{Name: "sd2.diffusers", Version: 1})
-	left, right := sd15.Components()[0], sd2.Components()[0]
+	// The discriminator itself, on the records: identical unet key sets —
+	// otherwise this proves nothing about shapes, only about names.
+	sd15 := loaded.Topology(tensorfs.Handle{Name: "sd15.diffusers", Version: 2})
+	sd2 := loaded.Topology(tensorfs.Handle{Name: "sd2.diffusers", Version: 2})
+	left, right := *sd15.Component("unet"), *sd2.Component("unet")
 	if len(left.Keys()) != len(right.Keys()) {
 		t.Fatalf("%d vs %d keys", len(left.Keys()), len(right.Keys()))
 	}
@@ -233,8 +236,8 @@ func TestHoleC_AdmitAnythingIsInexpressible(t *testing.T) {
 func TestATruncatedCheckpointRefusesByName(t *testing.T) {
 	loaded := catalog(t)
 	headers := loadBankedHeaders(t)
-	lane := mustLayoutID(t, "sd15.diffusers@1+plain.f32@1")
-	files := headers["sd15"].artifact()
+	lane := mustLayoutID(t, "sd15.diffusers@2+plain.bf16@1")
+	files := headers["sd15-hub"].artifact()
 
 	dropped := files[0].Tensors[7].Name
 	truncated := []tensorfs.ArtifactFile{{

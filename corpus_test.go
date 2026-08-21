@@ -210,3 +210,85 @@ func TestEveryDeclaredSourceWasActuallyBanked(t *testing.T) {
 			len(declared), len(banked))
 	}
 }
+
+// TestATopologyNamesItsSourceAndAPartialTreeCannotReproduceIt is the
+// tensorfs#153 fence, and both halves exist because the defect it closes was
+// INVISIBLE to every other gate in this file.
+//
+// Seven records were extracted from a SUB-TREE of the reference (`hf:…:unet`
+// where the fleet binds unet+vae+text_encoder+…), the extraction reproduced
+// them perfectly, and production stamped 12 of 501 while this suite was green
+// — because the re-derivation test checks the record against its BANKED
+// source, and the banked source was itself the sub-tree. The completeness of
+// the source is not provable offline, so the fence pins what IS provable:
+//
+//  1. every extracted record DECLARES the packaging tree that produced it —
+//     `derived_from` names a SOURCES.tsv id, so an operator can always ask
+//     "extracted from WHAT?" and get an answer the bank can re-fetch; and
+//  2. the extraction is MEMBER-SENSITIVE: for every multi-member source,
+//     re-deriving from a deliberately-partial copy (each member dropped in
+//     turn) must NOT reproduce the committed digest. A silent sub-tree
+//     re-extraction therefore cannot masquerade as the committed record —
+//     the digest moves the moment a member goes missing.
+func TestATopologyNamesItsSourceAndAPartialTreeCannotReproduceIt(t *testing.T) {
+	loaded := catalog(t)
+	headers := loadBankedHeaders(t)
+	raw, err := os.ReadFile(filepath.Join("spec", "v2", "CORPUS.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fenced := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		name, version, source := fields[0], fields[1], fields[2]
+		if !strings.HasPrefix(source, "headers:") {
+			continue
+		}
+		identifier := strings.TrimPrefix(source, "headers:")
+		handle, err := tensorfs.ParseHandle(name + "@" + version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		committed := loaded.Topology(handle)
+		if committed == nil {
+			continue // the derivation test already reports this
+		}
+		if !strings.HasPrefix(committed.DerivedFrom(), identifier+" (") {
+			t.Errorf("%s: derived_from is %q, which does not name its source %q — "+
+				"a record that hides its packaging tree cannot be audited for "+
+				"completeness", handle, committed.DerivedFrom(), identifier)
+		}
+		banked, found := headers[identifier]
+		if !found || len(banked.Files) < 2 {
+			continue // single-member sources have no partial form to fence
+		}
+		for drop := range banked.Files {
+			partial := make([]tensorfs.ArtifactFile, 0, len(banked.Files)-1)
+			for at, member := range banked.artifact() {
+				if at == drop {
+					continue
+				}
+				partial = append(partial, member)
+			}
+			again, err := tensorfs.TopologyFromHeaders(name, uint32(handle.Version),
+				committed.DerivedFrom(), partial)
+			if err != nil {
+				continue // refusing the partial tree outright is also a pass
+			}
+			if again.Digest() == committed.Digest() {
+				t.Errorf("%s: dropping member %q re-derives to the SAME digest — "+
+					"the extraction is not member-sensitive and a sub-tree "+
+					"source could land silently",
+					handle, banked.Files[drop].Path)
+			}
+		}
+		fenced++
+	}
+	if fenced == 0 {
+		t.Fatal("no multi-member source was fenced; this test proved nothing")
+	}
+	t.Logf("%d extracted records fenced against partial-tree re-derivation", fenced)
+}

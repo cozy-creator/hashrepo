@@ -135,7 +135,7 @@ func TestTheStampIsUnique(t *testing.T) {
 // enumerated below rather than waved through.
 func TestLayoutIsComputedAndMatchesTheRatifiedExample(t *testing.T) {
 	loaded := catalog(t)
-	id := mustLayoutID(t, "sdxl.diffusers@1+cozy.fp8-rowwise@1")
+	id := mustLayoutID(t, "sdxl.diffusers@2+cozy.fp8-rowwise@2")
 	layout, err := loaded.Layout(id)
 	if err != nil {
 		t.Fatal(err)
@@ -382,7 +382,7 @@ func TestDisplayNamesAreNamesAndNothingElse(t *testing.T) {
 	// A pair with no display name renders as itself, never as empty or as a
 	// guess: a missing name must degrade to the identity, not to silence.
 	unnamed := tensorfs.LayoutID{
-		Topology: tensorfs.Handle{Name: "sdxl.clip-g-fused", Version: 1},
+		Topology: tensorfs.Handle{Name: "sdxl.clip-g-fused", Version: 2},
 		Quant:    tensorfs.Handle{Name: "plain.f16", Version: 1},
 	}
 	if loaded.DisplayName(unnamed) != unnamed.String() {
