@@ -21,6 +21,10 @@ pub mod layout;
 /// makes "machine-verifiable data" mean something. Pure bytes and pure
 /// arithmetic — no filesystem, no store, no card.
 pub mod layout_morphism;
+/// The fill path: chunks to a destination address with the morphism applied on
+/// the way. The destination is a trait the CALLER implements — varena owns the
+/// address space, tensorfs fills what it is handed.
+pub mod layout_fill;
 pub mod object;
 pub mod planner;
 pub mod source;
