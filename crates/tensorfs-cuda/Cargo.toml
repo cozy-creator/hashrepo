@@ -1,0 +1,29 @@
+[package]
+name = "tensorfs-cuda"
+version = "0.1.0"
+description = "The GPU leg of the TensorFS fill path: pinned staging and one H2D into a caller-owned device pointer"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+# WHY THIS IS ITS OWN CRATE. `tensorfs-core` is `#![forbid(unsafe_code)]` and
+# stays that way: it is the crate that decides which byte goes where, and a
+# whole-crate proof that it contains no unsafe block is worth more than the
+# convenience of putting an FFI module next to it. All of this program's
+# `unsafe` is here, in one small crate whose entire job is to call six driver
+# symbols.
+#
+# It is also not on the default path. `cargo test` at the workspace root builds
+# it, and nothing in it runs without a card and a sanctioned window.
+
+# NO FEATURES. The driver is dlopen'd at first use, so this crate builds with no
+# CUDA toolkit present and a box with no card gets a typed, recoverable error at
+# run time. A `driver` feature would only buy a configuration that does not
+# compile, which is worse than no configuration at all; a consumer that does not
+# want the device leg does not depend on this crate.
+
+[dependencies]
+tensorfs-core = { path = "../tensorfs-core", default-features = false }
+libloading = "0.9"

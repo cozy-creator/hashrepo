@@ -262,6 +262,7 @@ impl LayoutMorphism {
         // `within` is the multiplier of a sub-axis coordinate inside its logical
         // axis: the product of the factors that follow it in the same axis.
         let mut within = vec![1u64; extents.len()];
+        let mut padded_axis = vec![false; shape.len()];
         let mut padded = false;
         let mut at = 0usize;
         while at < axes.len() {
@@ -292,6 +293,7 @@ impl LayoutMorphism {
             }
             if running > shape[axis] {
                 padded = true;
+                padded_axis[axis] = true;
             }
             at = end;
         }
@@ -301,6 +303,9 @@ impl LayoutMorphism {
         } else {
             self.permutation.clone()
         };
+        let src_stride: Vec<u64> = (0..extents.len())
+            .map(|at| within[at] * logical_stride[axes[at]])
+            .collect();
         let dest_elements = extents.iter().product();
         Ok(Plan {
             handle,
@@ -310,6 +315,8 @@ impl LayoutMorphism {
             within,
             permutation,
             logical_stride,
+            src_stride,
+            padded_axis,
             source_elements,
             dest_elements,
             padded,
@@ -331,6 +338,14 @@ pub struct Plan {
     /// `permutation[p]` is the declaration index at storage position `p`.
     permutation: Vec<usize>,
     logical_stride: Vec<u64>,
+    /// The source-linear stride of each sub-axis coordinate, in declaration
+    /// order: `within[j] * logical_stride[axes[j]]`. This is what decides
+    /// whether a run of sub-axes is CONTIGUOUS in the source.
+    src_stride: Vec<u64>,
+    /// Per logical axis: does its factorization overshoot the dim? A padded
+    /// axis cannot be folded into a contiguous run, because the run would span
+    /// elements that have no source.
+    padded_axis: Vec<bool>,
     source_elements: u64,
     dest_elements: u64,
     padded: bool,
@@ -359,21 +374,57 @@ impl Plan {
         self.permutation.iter().map(|&at| self.extents[at]).collect()
     }
 
-    /// THE WALK. Visits every destination element once, in destination order,
-    /// with the source element it comes from — or `None` where the destination
-    /// is padding and no source element exists.
+    /// THE WALK, in maximal contiguous RUNS: `(destination element, source
+    /// element or padding, run length)`, visiting every destination element
+    /// exactly once across all runs, in destination order.
     ///
-    /// Everything else in this module is a caller of this function. The forward
-    /// copy reads `src[from]` into `dst[to]`; the inverse copy reads `dst[to]`
-    /// back into `src[from]`; the verifier counts what it visited. One map, one
-    /// walk, no second opinion about which byte goes where.
-    pub fn for_each(&self, mut visit: impl FnMut(u64, Option<u64>)) {
+    /// This is the primitive, and it is computed ANALYTICALLY rather than by
+    /// visiting elements and noticing that some were adjacent. The difference
+    /// is not a micro-optimisation: a plan that is one run has to COST one run.
+    /// Measured on a card, an element-by-element walk moved 16 MiB in 765 ms —
+    /// 0.02 GiB/s for what is a single `memcpy` plus a single DMA — because it
+    /// stepped an odometer four million times to discover a fact the strides
+    /// already stated.
+    ///
+    /// The fact they state: fold trailing STORAGE positions into one run for as
+    /// long as each sub-axis's source stride equals the run length accumulated
+    /// so far. Then only the outer positions need an odometer.
+    ///
+    ///  * `torch.contiguous@1` folds every position — one run, no odometer, a
+    ///    whole tensor as one DMA at any rank or shape.
+    ///  * `cublas.blockscale-128x4@1` folds its innermost 4 — runs of four
+    ///    elements.
+    ///  * `torch.channels_last-2d@1` folds nothing: its innermost storage axis
+    ///    is the channel, whose source stride is H*W. One run per element, and
+    ///    that is the arrangement's own shape, not an artefact.
+    ///
+    /// A PADDED axis is never folded. Padding has no source element, so a run
+    /// spanning it would have to be part copy and part zero; keeping padded
+    /// axes in the odometer makes every run wholly one or wholly the other.
+    ///
+    /// The decomposition is STRUCTURAL. Two runs it emits may still happen to
+    /// be adjacent in both buffers — at an image boundary, `channels_last`'s
+    /// last element really does sit next to the next image's first — and this
+    /// does not merge them. That is deliberate: the structural count is a
+    /// property of the arrangement, and a count that drifted with the shape's
+    /// accidental adjacencies would be a number nobody could re-derive.
+    pub fn for_each_run(&self, mut visit: impl FnMut(u64, Option<u64>, u64)) {
         let n = self.extents.len();
+        let mut run = 1u64;
+        let mut outer = n;
+        for position in (0..n).rev() {
+            let at = self.permutation[position];
+            if self.padded_axis[self.axes[at]] || self.src_stride[at] != run {
+                break;
+            }
+            run *= self.extents[at];
+            outer = position;
+        }
+
         let mut counters = vec![0u64; n];
-        // `coord[k]` is the logical coordinate on axis k, maintained
-        // incrementally by the odometer below.
         let mut coord = vec![0u64; self.shape.len()];
-        for destination in 0..self.dest_elements {
+        let runs = self.dest_elements / run.max(1);
+        for step in 0..runs {
             let mut source = Some(0u64);
             for (axis, &position) in coord.iter().enumerate() {
                 if position >= self.shape[axis] {
@@ -384,10 +435,10 @@ impl Plan {
                     *offset += position * self.logical_stride[axis];
                 }
             }
-            visit(destination, source);
+            visit(step * run, source, run);
 
-            // Odometer over STORAGE positions, innermost first.
-            for position in (0..n).rev() {
+            // Odometer over the OUTER storage positions only.
+            for position in (0..outer).rev() {
                 let at = self.permutation[position];
                 counters[at] += 1;
                 coord[self.axes[at]] += self.within[at];
@@ -398,6 +449,24 @@ impl Plan {
                 counters[at] = 0;
             }
         }
+    }
+
+    /// The walk one element at a time. Expands [`Plan::for_each_run`] rather
+    /// than re-deriving anything: the verifier wants per-element granularity,
+    /// and every mover wants runs.
+    pub fn for_each(&self, mut visit: impl FnMut(u64, Option<u64>)) {
+        self.for_each_run(|to, from, length| {
+            for step in 0..length {
+                visit(to + step, from.map(|index| index + step));
+            }
+        });
+    }
+
+    /// How many runs this plan decomposes into. Measured, never guessed.
+    pub fn run_count(&self) -> u64 {
+        let mut runs = 0;
+        self.for_each_run(|_, _, _| runs += 1);
+        runs
     }
 
     fn sized(&self, src: usize, dst: usize, element: usize) -> Result<(), LayoutError> {
@@ -425,14 +494,15 @@ impl Plan {
     /// into pinned staging; there is no second implementation of the map.
     pub fn apply(&self, source: &[u8], destination: &mut [u8], element: usize) -> Result<(), LayoutError> {
         self.sized(source.len(), destination.len(), element)?;
-        self.for_each(|to, from| {
+        self.for_each_run(|to, from, length| {
             let at = to as usize * element;
+            let span = length as usize * element;
             match from {
                 Some(index) => {
                     let start = index as usize * element;
-                    destination[at..at + element].copy_from_slice(&source[start..start + element]);
+                    destination[at..at + span].copy_from_slice(&source[start..start + span]);
                 }
-                None => destination[at..at + element].fill(0),
+                None => destination[at..at + span].fill(0),
             }
         });
         Ok(())
@@ -449,11 +519,12 @@ impl Plan {
         element: usize,
     ) -> Result<(), LayoutError> {
         self.sized(source.len(), destination.len(), element)?;
-        self.for_each(|to, from| {
+        self.for_each_run(|to, from, length| {
             if let Some(index) = from {
                 let at = to as usize * element;
+                let span = length as usize * element;
                 let start = index as usize * element;
-                source[start..start + element].copy_from_slice(&destination[at..at + element]);
+                source[start..start + span].copy_from_slice(&destination[at..at + span]);
             }
         });
         Ok(())
