@@ -195,9 +195,9 @@ impl LayoutMorphism {
         }
         let mut seen = vec![false; self.permutation.len()];
         for &to in &self.permutation {
-            let slot = seen.get_mut(to).ok_or_else(|| {
-                bad(format!("permutes to position {to}, which does not exist"))
-            })?;
+            let slot = seen
+                .get_mut(to)
+                .ok_or_else(|| bad(format!("permutes to position {to}, which does not exist")))?;
             if *slot {
                 return Err(bad(format!(
                     "sends two sub-axes to storage position {to}. A layout that \
@@ -371,7 +371,10 @@ impl Plan {
     }
     /// Sub-axis extents in STORAGE order — the destination's own shape.
     pub fn storage_extents(&self) -> Vec<u64> {
-        self.permutation.iter().map(|&at| self.extents[at]).collect()
+        self.permutation
+            .iter()
+            .map(|&at| self.extents[at])
+            .collect()
     }
 
     /// THE WALK, in maximal contiguous RUNS: `(destination element, source
@@ -492,7 +495,12 @@ impl Plan {
     ///
     /// This is the materialization backend. The GPU fill runs the same walk
     /// into pinned staging; there is no second implementation of the map.
-    pub fn apply(&self, source: &[u8], destination: &mut [u8], element: usize) -> Result<(), LayoutError> {
+    pub fn apply(
+        &self,
+        source: &[u8],
+        destination: &mut [u8],
+        element: usize,
+    ) -> Result<(), LayoutError> {
         self.sized(source.len(), destination.len(), element)?;
         self.for_each_run(|to, from, length| {
             let at = to as usize * element;
@@ -671,7 +679,9 @@ pub fn ratify(record: &LayoutMorphism) -> Result<Ratification, LayoutError> {
 /// rather than fails on a refused shape.
 pub fn probe_shapes(record: &LayoutMorphism) -> Vec<Vec<u64>> {
     if record.is_identity() {
-        return (1..=4).map(|rank| (0..rank).map(|at| at + 2).collect()).collect();
+        return (1..=4)
+            .map(|rank| (0..rank).map(|at| at + 2).collect())
+            .collect();
     }
     let mut alignment = vec![1u64; record.rank];
     for sub in &record.sub_axes {
@@ -794,9 +804,12 @@ fn eval_chain(text: &str, shape: &[u64], ceiling: bool) -> Result<u64, String> {
                 let axis: usize = digits
                     .parse()
                     .map_err(|_| format!("{token:?} is not an axis"))?;
-                *shape
-                    .get(axis)
-                    .ok_or_else(|| format!("{text:?} reads axis {axis} of a rank-{} tensor", shape.len()))?
+                *shape.get(axis).ok_or_else(|| {
+                    format!(
+                        "{text:?} reads axis {axis} of a rank-{} tensor",
+                        shape.len()
+                    )
+                })?
             } else {
                 let literal: u64 = token
                     .parse()
@@ -815,7 +828,7 @@ fn eval_chain(text: &str, shape: &[u64], ceiling: bool) -> Result<u64, String> {
             if ceiling {
                 value = value.div_ceil(operand);
             } else {
-                if value % operand != 0 {
+                if !value.is_multiple_of(operand) {
                     return Err(format!(
                         "{text:?} divides {value} by {operand}, which is not exact"
                     ));

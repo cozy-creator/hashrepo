@@ -33,7 +33,9 @@ jobs:
       - run: cargo check -p tensorfs-core --no-default-features --features store --lib
       - run: cargo test --workspace --all-features --exclude tensorfs-py
       # PyO3 has no wasm target, so the extension crate is excluded here too.
-      - run: cargo check --workspace --all-targets --all-features --exclude tensorfs-py --target wasm32-unknown-unknown
+      # tensorfs-cuda is a dlopen shim over the CUDA driver (libloading); it
+      # has no wasm form, for the same reason tensorfs-py is excluded here.
+      - run: cargo check --workspace --all-targets --all-features --exclude tensorfs-py --exclude tensorfs-cuda --target wasm32-unknown-unknown
 
   # macOS and Windows build ONE crate on purpose.
   #
