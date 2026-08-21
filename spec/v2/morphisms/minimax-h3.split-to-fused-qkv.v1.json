@@ -1,0 +1,65 @@
+{
+ "description": "MiniMax-H3's diffusers repackaging (split to_q/to_k/to_v, what the hub ships) and its native/DiffSynth spelling (one fused qkv_proj per block). The seam is HEAD-INTERLEAVED — 56 head-major (q, k, v) triples, not three stacked blocks — so it is T3: the bytes have to be materialized once, and only one packaging is stored.",
+ "digest": "18ed116c4100945f87287ae0c17647a033def28c755e4daf1ff3b6d7799ec63d",
+ "format": "tensorfs-morphism-v2",
+ "from": "minimax-h3.diffusers@1",
+ "invertible": true,
+ "name": "minimax-h3.split-to-fused-qkv",
+ "provenance": [
+  "THE te#185 INCIDENT IS WHAT THIS FILE IS FOR. DiffSynth's MiniMaxH3DiT accepts the native key set; every minimax-h3 artifact the platform holds is the diffusers one. Under v1 that disagreement was found at load, after the 66 GB download. It is a header fact, and here it is decided from headers: either DERIVABLE through this seam, or REFUSED by name, before a byte moves.",
+  "MEASURED KEY COUNTS (this change, from the real banked header of MiniMaxAI/MiniMax-H3:transformer): the diffusers packaging carries 638 tensors and 50 transformer_blocks fuse three ways, so the native topology this morphism computes carries 538. The often-quoted 535 is the upstream native checkpoint's own count; the three-key difference is not measured here and is not claimed."
+ ],
+ "rekey": [
+  {
+   "from_key": "transformer_blocks.{i}.attn.to_out.0.weight",
+   "to_key": "blocks.{i}.attn.out_proj.weight"
+  },
+  {
+   "from_key": "transformer_blocks.{i}.attn.norm_q.weight",
+   "to_key": "blocks.{i}.attn.q_norm.weight"
+  },
+  {
+   "from_key": "transformer_blocks.{i}.attn.norm_k.weight",
+   "to_key": "blocks.{i}.attn.k_norm.weight"
+  },
+  {
+   "from_key": "transformer_blocks.{i}.ff.net.0.proj.weight",
+   "to_key": "blocks.{i}.mlp.fc1.weight"
+  },
+  {
+   "from_key": "transformer_blocks.{i}.ff.net.2.weight",
+   "to_key": "blocks.{i}.mlp.fc2.weight"
+  },
+  {
+   "from_prefix": "transformer_blocks.",
+   "to_prefix": "blocks."
+  }
+ ],
+ "seams": [
+  {
+   "groups": 56,
+   "parts": [
+    {
+     "key": "transformer_blocks.{i}.attn.to_q.weight",
+     "role": "q",
+     "share": 1
+    },
+    {
+     "key": "transformer_blocks.{i}.attn.to_k.weight",
+     "role": "k",
+     "share": 1
+    },
+    {
+     "key": "transformer_blocks.{i}.attn.to_v.weight",
+     "role": "v",
+     "share": 1
+    }
+   ],
+   "provenance": "RATIFIED, transplanted from `minimax.h3-dit-native@1` and `minimax.h3-dit-diffusers@1` (the v1 documents this morphism replaces). 56 HEAD-MAJOR TRIPLES, and the group count is the load-bearing fact: a flat three-way split is right for head 0 and wrong for the other 55. Measured against the real header: each of to_q/to_k/to_v is [7168, 5376] and 7168 = 56 x 128, so the fused axis is 21504 = 56 groups x (q+k+v) x 128. Each diffusers projection is declared as 56 head slices precisely so its runs ARE the native contract's interleaved seam runs — the two packagings share every attention byte while reading them in different orders.",
+   "target": "blocks.{i}.attn.qkv_proj.weight"
+  }
+ ],
+ "tier": 3,
+ "to": "minimax-h3.native@1",
+ "version": 1
+}

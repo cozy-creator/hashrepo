@@ -1,0 +1,16 @@
+{
+ "base_dtype": "BF16",
+ "capability_floor_sm": 80,
+ "conventions": {
+  "element": "bfloat16",
+  "scale": "none"
+ },
+ "declared_dtype": "bfloat16",
+ "description": "IDENTITY + DTYPE STAMP. A plain rule transforms nothing: every tensor keeps its name and its shape and the whole checkpoint carries one element type. REFERENCE-TOLERANT: a key the reference packaging itself shipped in a wider type (an F32 logit_scale on a bf16 tree, an I64 position-id table) is accepted at EITHER type, because refusing it would refuse the reference checkpoint the topology was derived from.",
+ "digest": "b425b4963c4a333abb0482d5187fe9150b7d7b4626a66cfcdee8fe5b757ecf0b",
+ "format": "tensorfs-quant-rule-v2",
+ "lossy": false,
+ "name": "plain.bf16",
+ "reference_tolerant": true,
+ "version": 1
+}

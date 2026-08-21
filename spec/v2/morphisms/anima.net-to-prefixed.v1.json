@@ -1,0 +1,22 @@
+{
+ "description": "Anima's two packagings of ONE 685-tensor network: `net.*` and `model.diffusion_model.*`. A pure rename, so T1 — a new manifest over the same chunks and zero new bytes in CAS.",
+ "digest": "d495a127770d4c75805aa543cc4b58e3983390447554d7b73f045d3152b117ca",
+ "format": "tensorfs-morphism-v2",
+ "from": "anima.net@1",
+ "invertible": true,
+ "name": "anima.net-to-prefixed",
+ "provenance": [
+  "RATIFIED 2026-08-20 (tensorfs#150), transplanted from the `anima.diffsynth-bf16@1` document's ratification block. MEASURED, not assumed: all eight releases in circlestone-labs/Anima carry the same 685-tensor network. The `net.` packaging is anima-base-v1.0, anima-preview, anima-preview2 and anima-preview3-base (key-identical sets, all BF16); the `model.diffusion_model.` packaging is anima-turbo-v1.0 and anima-aesthetic-v1.0/v1.0b/v1.1.",
+  "THIS MORPHISM IS WHY ONE DOCUMENT PER PACKAGING IS CORRECT. Under v1 the alternative was a single contract over both, which makes EVERY declaration optional — a contract that can never refuse anything. Two topologies plus this rekey say the same thing without giving up refusal, and the derive is free.",
+  "ROLE VOCABULARY: the two packagings share a role vocabulary key for key, which is what makes this a derive rather than a refusal. The rename is the whole difference; nothing is reordered, resized or retyped."
+ ],
+ "rekey": [
+  {
+   "from_prefix": "net.",
+   "to_prefix": "model.diffusion_model."
+  }
+ ],
+ "tier": 1,
+ "to": "anima.diffusion-model@1",
+ "version": 1
+}

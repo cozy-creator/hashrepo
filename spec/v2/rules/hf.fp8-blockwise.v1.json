@@ -1,0 +1,74 @@
+{
+ "base_dtype": "BF16",
+ "capability_floor_sm": 89,
+ "conventions": {
+  "element": "fp8_e4m3",
+  "scale": "block_128x128",
+  "scale_dtype": "F32",
+  "scale_layout": "flat-row-major",
+  "scale_leaf": "weight_scale_inv"
+ },
+ "declared_dtype": "float8_e4m3fn",
+ "description": "transformers' FineGrainedFP8 / DeepSeek-style packaging: the same element type and the same activation scheme as `cozy.fp8-rowwise`, and a DIFFERENT SCALE LEAF, RANK AND SPAN — `weight_scale_inv` is F32 [ceil(out/128), ceil(in/128)], one scale per 128x128 block, where the cozy rule has one F32 per output row. A reader that took either for the other would divide by the wrong numbers in the wrong places, which is why the two are separate identities rather than one handle with a flag.",
+ "digest": "6b0976ee2bb5d0739b9109ffbcb62322799d92e07bb05e94beb3fb6bbbe52e56",
+ "eligible": {
+  "dim_align": [
+   16,
+   16
+  ],
+  "key_suffix": ".weight",
+  "rank": 2,
+  "require_repeated_block_segment": true,
+  "skip_module_exact": [
+   "proj_in",
+   "proj_out",
+   "proj"
+  ],
+  "skip_module_substrings": [
+   "embed",
+   "norm",
+   "pooler",
+   "adaln_single",
+   "final_layer",
+   "quantize",
+   "decoder",
+   "preprocess_conv",
+   "postprocess_conv",
+   "gate_logits"
+  ],
+  "source_dtypes": [
+   "F64",
+   "F32",
+   "F16",
+   "BF16"
+  ]
+ },
+ "emissions": [
+  {
+   "dtype": "F8_E4M3",
+   "key": "{module}.weight",
+   "shape": [
+    "d0",
+    "d1"
+   ]
+  },
+  {
+   "dtype": "F32",
+   "key": "{module}.weight_scale_inv",
+   "shape": [
+    "ceil(d0/128)",
+    "ceil(d1/128)"
+   ]
+  }
+ ],
+ "format": "tensorfs-quant-rule-v2",
+ "inverse": "W_bf16[r, c] = weight[r, c] * weight_scale_inv[r/128, c/128]",
+ "lossy": true,
+ "name": "hf.fp8-blockwise",
+ "reference_tolerant": true,
+ "scope_roles": [
+  "denoiser",
+  "backbone"
+ ],
+ "version": 1
+}

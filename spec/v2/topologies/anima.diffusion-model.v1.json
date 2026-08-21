@@ -1,0 +1,2588 @@
+{
+ "components": [
+  {
+   "name": "diffusion_models",
+   "role": "denoiser",
+   "tensors": {
+    "model.diffusion_model.blocks.0.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.0.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.0.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.0.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.0.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.0.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.0.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.0.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.0.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.0.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.0.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.0.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.0.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.0.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.0.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.0.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.0.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.0.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.0.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.0.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.1.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.1.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.1.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.1.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.1.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.1.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.1.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.1.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.1.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.1.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.1.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.1.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.1.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.1.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.1.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.1.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.1.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.1.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.1.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.1.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.10.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.10.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.10.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.10.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.10.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.10.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.10.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.10.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.10.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.10.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.10.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.10.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.10.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.10.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.10.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.10.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.10.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.10.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.10.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.10.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.11.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.11.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.11.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.11.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.11.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.11.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.11.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.11.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.11.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.11.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.11.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.11.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.11.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.11.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.11.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.11.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.11.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.11.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.11.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.11.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.12.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.12.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.12.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.12.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.12.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.12.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.12.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.12.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.12.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.12.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.12.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.12.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.12.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.12.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.12.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.12.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.12.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.12.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.12.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.12.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.13.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.13.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.13.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.13.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.13.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.13.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.13.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.13.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.13.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.13.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.13.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.13.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.13.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.13.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.13.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.13.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.13.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.13.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.13.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.13.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.14.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.14.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.14.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.14.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.14.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.14.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.14.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.14.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.14.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.14.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.14.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.14.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.14.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.14.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.14.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.14.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.14.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.14.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.14.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.14.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.15.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.15.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.15.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.15.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.15.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.15.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.15.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.15.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.15.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.15.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.15.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.15.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.15.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.15.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.15.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.15.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.15.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.15.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.15.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.15.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.16.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.16.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.16.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.16.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.16.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.16.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.16.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.16.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.16.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.16.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.16.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.16.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.16.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.16.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.16.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.16.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.16.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.16.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.16.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.16.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.17.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.17.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.17.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.17.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.17.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.17.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.17.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.17.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.17.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.17.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.17.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.17.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.17.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.17.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.17.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.17.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.17.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.17.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.17.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.17.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.18.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.18.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.18.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.18.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.18.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.18.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.18.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.18.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.18.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.18.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.18.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.18.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.18.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.18.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.18.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.18.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.18.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.18.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.18.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.18.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.19.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.19.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.19.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.19.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.19.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.19.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.19.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.19.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.19.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.19.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.19.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.19.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.19.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.19.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.19.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.19.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.19.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.19.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.19.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.19.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.2.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.2.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.2.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.2.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.2.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.2.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.2.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.2.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.2.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.2.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.2.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.2.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.2.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.2.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.2.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.2.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.2.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.2.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.2.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.2.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.20.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.20.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.20.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.20.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.20.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.20.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.20.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.20.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.20.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.20.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.20.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.20.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.20.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.20.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.20.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.20.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.20.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.20.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.20.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.20.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.21.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.21.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.21.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.21.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.21.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.21.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.21.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.21.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.21.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.21.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.21.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.21.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.21.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.21.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.21.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.21.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.21.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.21.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.21.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.21.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.22.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.22.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.22.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.22.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.22.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.22.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.22.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.22.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.22.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.22.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.22.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.22.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.22.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.22.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.22.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.22.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.22.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.22.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.22.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.22.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.23.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.23.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.23.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.23.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.23.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.23.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.23.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.23.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.23.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.23.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.23.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.23.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.23.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.23.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.23.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.23.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.23.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.23.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.23.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.23.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.24.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.24.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.24.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.24.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.24.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.24.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.24.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.24.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.24.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.24.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.24.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.24.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.24.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.24.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.24.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.24.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.24.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.24.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.24.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.24.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.25.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.25.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.25.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.25.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.25.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.25.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.25.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.25.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.25.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.25.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.25.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.25.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.25.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.25.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.25.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.25.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.25.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.25.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.25.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.25.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.26.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.26.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.26.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.26.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.26.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.26.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.26.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.26.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.26.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.26.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.26.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.26.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.26.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.26.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.26.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.26.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.26.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.26.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.26.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.26.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.27.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.27.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.27.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.27.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.27.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.27.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.27.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.27.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.27.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.27.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.27.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.27.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.27.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.27.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.27.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.27.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.27.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.27.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.27.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.27.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.3.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.3.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.3.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.3.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.3.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.3.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.3.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.3.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.3.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.3.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.3.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.3.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.3.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.3.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.3.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.3.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.3.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.3.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.3.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.3.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.4.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.4.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.4.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.4.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.4.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.4.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.4.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.4.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.4.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.4.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.4.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.4.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.4.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.4.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.4.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.4.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.4.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.4.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.4.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.4.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.5.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.5.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.5.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.5.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.5.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.5.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.5.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.5.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.5.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.5.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.5.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.5.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.5.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.5.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.5.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.5.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.5.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.5.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.5.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.5.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.6.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.6.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.6.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.6.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.6.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.6.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.6.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.6.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.6.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.6.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.6.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.6.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.6.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.6.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.6.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.6.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.6.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.6.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.6.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.6.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.7.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.7.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.7.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.7.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.7.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.7.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.7.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.7.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.7.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.7.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.7.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.7.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.7.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.7.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.7.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.7.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.7.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.7.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.7.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.7.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.8.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.8.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.8.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.8.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.8.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.8.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.8.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.8.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.8.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.8.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.8.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.8.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.8.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.8.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.8.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.8.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.8.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.8.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.8.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.8.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.9.adaln_modulation_cross_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.9.adaln_modulation_cross_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.9.adaln_modulation_mlp.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.9.adaln_modulation_mlp.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.9.adaln_modulation_self_attn.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.blocks.9.adaln_modulation_self_attn.2.weight": [
+     6144,
+     256
+    ],
+    "model.diffusion_model.blocks.9.cross_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.9.cross_attn.k_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.9.cross_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.9.cross_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.9.cross_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.9.cross_attn.v_proj.weight": [
+     2048,
+     1024
+    ],
+    "model.diffusion_model.blocks.9.mlp.layer1.weight": [
+     8192,
+     2048
+    ],
+    "model.diffusion_model.blocks.9.mlp.layer2.weight": [
+     2048,
+     8192
+    ],
+    "model.diffusion_model.blocks.9.self_attn.k_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.9.self_attn.k_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.9.self_attn.output_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.9.self_attn.q_norm.weight": [
+     128
+    ],
+    "model.diffusion_model.blocks.9.self_attn.q_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.blocks.9.self_attn.v_proj.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.final_layer.adaln_modulation.1.weight": [
+     256,
+     2048
+    ],
+    "model.diffusion_model.final_layer.adaln_modulation.2.weight": [
+     4096,
+     256
+    ],
+    "model.diffusion_model.final_layer.linear.weight": [
+     64,
+     2048
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.cross_attn.k_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.cross_attn.k_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.cross_attn.o_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.cross_attn.q_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.cross_attn.q_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.cross_attn.v_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.mlp.0.bias": [
+     4096
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.mlp.0.weight": [
+     4096,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.mlp.2.bias": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.mlp.2.weight": [
+     1024,
+     4096
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.norm_cross_attn.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.norm_mlp.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.norm_self_attn.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.self_attn.k_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.self_attn.k_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.self_attn.o_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.self_attn.q_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.self_attn.q_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.0.self_attn.v_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.cross_attn.k_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.cross_attn.k_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.cross_attn.o_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.cross_attn.q_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.cross_attn.q_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.cross_attn.v_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.mlp.0.bias": [
+     4096
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.mlp.0.weight": [
+     4096,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.mlp.2.bias": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.mlp.2.weight": [
+     1024,
+     4096
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.norm_cross_attn.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.norm_mlp.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.norm_self_attn.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.self_attn.k_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.self_attn.k_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.self_attn.o_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.self_attn.q_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.self_attn.q_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.1.self_attn.v_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.cross_attn.k_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.cross_attn.k_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.cross_attn.o_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.cross_attn.q_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.cross_attn.q_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.cross_attn.v_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.mlp.0.bias": [
+     4096
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.mlp.0.weight": [
+     4096,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.mlp.2.bias": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.mlp.2.weight": [
+     1024,
+     4096
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.norm_cross_attn.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.norm_mlp.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.norm_self_attn.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.self_attn.k_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.self_attn.k_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.self_attn.o_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.self_attn.q_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.self_attn.q_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.2.self_attn.v_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.cross_attn.k_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.cross_attn.k_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.cross_attn.o_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.cross_attn.q_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.cross_attn.q_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.cross_attn.v_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.mlp.0.bias": [
+     4096
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.mlp.0.weight": [
+     4096,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.mlp.2.bias": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.mlp.2.weight": [
+     1024,
+     4096
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.norm_cross_attn.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.norm_mlp.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.norm_self_attn.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.self_attn.k_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.self_attn.k_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.self_attn.o_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.self_attn.q_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.self_attn.q_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.3.self_attn.v_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.cross_attn.k_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.cross_attn.k_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.cross_attn.o_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.cross_attn.q_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.cross_attn.q_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.cross_attn.v_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.mlp.0.bias": [
+     4096
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.mlp.0.weight": [
+     4096,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.mlp.2.bias": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.mlp.2.weight": [
+     1024,
+     4096
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.norm_cross_attn.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.norm_mlp.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.norm_self_attn.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.self_attn.k_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.self_attn.k_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.self_attn.o_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.self_attn.q_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.self_attn.q_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.4.self_attn.v_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.cross_attn.k_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.cross_attn.k_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.cross_attn.o_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.cross_attn.q_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.cross_attn.q_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.cross_attn.v_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.mlp.0.bias": [
+     4096
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.mlp.0.weight": [
+     4096,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.mlp.2.bias": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.mlp.2.weight": [
+     1024,
+     4096
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.norm_cross_attn.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.norm_mlp.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.norm_self_attn.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.self_attn.k_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.self_attn.k_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.self_attn.o_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.self_attn.q_norm.weight": [
+     64
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.self_attn.q_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.blocks.5.self_attn.v_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.embed.weight": [
+     32128,
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.norm.weight": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.out_proj.bias": [
+     1024
+    ],
+    "model.diffusion_model.llm_adapter.out_proj.weight": [
+     1024,
+     1024
+    ],
+    "model.diffusion_model.t_embedder.1.linear_1.weight": [
+     2048,
+     2048
+    ],
+    "model.diffusion_model.t_embedder.1.linear_2.weight": [
+     6144,
+     2048
+    ],
+    "model.diffusion_model.t_embedding_norm.weight": [
+     2048
+    ],
+    "model.diffusion_model.x_embedder.proj.1.weight": [
+     2048,
+     68
+    ]
+   }
+  }
+ ],
+ "derived_from": "anima-base (hf:circlestone-labs/Anima:split_files/diffusion_models/anima-base-v1.0.safetensors)",
+ "description": "The same 685-tensor network under `model.diffusion_model.`, computed from the ratified rekey rather than extracted twice.",
+ "digest": "aeb9fc1ffe67c0be77d9f38d672ba7abf4b44cfdcdd8f0d98d632906bc6c51e0",
+ "dtype": "BF16",
+ "format": "tensorfs-topology-v2",
+ "name": "anima.diffusion-model",
+ "version": 1
+}

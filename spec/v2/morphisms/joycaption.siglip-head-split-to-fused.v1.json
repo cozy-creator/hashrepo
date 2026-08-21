@@ -1,0 +1,60 @@
+{
+ "description": "JoyCaption's SigLIP attention-pooling head is a `torch.nn.MultiheadAttention`, whose parameter is ONE fused q|k|v `in_proj_weight` (and `in_proj_bias`). Contiguous thirds, so T2: manifest range-slicing over the same chunks.",
+ "digest": "3946f5d86409b42f90cfbd32ba90849a8382013fe991de6e461f0283b063be4d",
+ "format": "tensorfs-morphism-v2",
+ "from": "joycaption.llava-split-head@1",
+ "invertible": true,
+ "name": "joycaption.siglip-head-split-to-fused",
+ "provenance": [
+  "One of the two fused axes tensorfs#150 FOUND rather than inherited — it was invisible to every generated candidate because a header cannot show a fusion. Silent-error class: a reader that split this head's q|k|v any other way gets every name, dtype and shape right and every number wrong."
+ ],
+ "seams": [
+  {
+   "groups": 1,
+   "parts": [
+    {
+     "key": "vision_tower.vision_model.head.attention.q_proj.weight",
+     "role": "q",
+     "share": 1
+    },
+    {
+     "key": "vision_tower.vision_model.head.attention.k_proj.weight",
+     "role": "k",
+     "share": 1
+    },
+    {
+     "key": "vision_tower.vision_model.head.attention.v_proj.weight",
+     "role": "v",
+     "share": 1
+    }
+   ],
+   "provenance": "RATIFIED 2026-08-20 (tensorfs#150), transplanted from `joycaption.llava-bf16@1`. Proved twice: from the module definition — the pooling head is `torch.nn.MultiheadAttention`, which stores q, k and v as one `in_proj_weight` — and from the measured shape, [3456, 1152] = 3 x 1152 with the SigLIP hidden size 1152. Equal thirds, contiguous, in q, k, v order: that is MultiheadAttention's own layout and not a choice made here.",
+   "target": "vision_tower.vision_model.head.attention.in_proj_weight"
+  },
+  {
+   "groups": 1,
+   "parts": [
+    {
+     "key": "vision_tower.vision_model.head.attention.q_proj.bias",
+     "role": "q",
+     "share": 1
+    },
+    {
+     "key": "vision_tower.vision_model.head.attention.k_proj.bias",
+     "role": "k",
+     "share": 1
+    },
+    {
+     "key": "vision_tower.vision_model.head.attention.v_proj.bias",
+     "role": "v",
+     "share": 1
+    }
+   ],
+   "provenance": "RATIFIED with the weight seam above (tensorfs#150): the bias travels with the weight and splits the same way, [3456] = 3 x 1152, in q, k, v order. Same citation — torch.nn.MultiheadAttention's own in_proj layout.",
+   "target": "vision_tower.vision_model.head.attention.in_proj_bias"
+  }
+ ],
+ "tier": 2,
+ "to": "joycaption.llava@1",
+ "version": 1
+}

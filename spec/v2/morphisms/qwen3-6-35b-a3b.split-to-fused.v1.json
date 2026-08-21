@@ -1,0 +1,55 @@
+{
+ "description": "The two fused axes of Qwen3.6-35B-A3B, both silent-error class, both found by reading the model's own implementation rather than its header.",
+ "digest": "8e7e47c3c88779368f11024eb9609672cc6d05c72c75a47eaef470cd6d3bc4a2",
+ "format": "tensorfs-morphism-v2",
+ "from": "qwen3-6-35b-a3b.transformers-split@1",
+ "invertible": true,
+ "name": "qwen3-6-35b-a3b.split-to-fused",
+ "provenance": [
+  "Both facts are LIVE CONSTRAINTS, not annotations: forcing the wrong shares makes the derived topology disagree with the catalog's record and the corpus refuses to load."
+ ],
+ "seams": [
+  {
+   "groups": 16,
+   "parts": [
+    {
+     "key": "model.language_model.layers.{i}.self_attn.q_only.weight",
+     "role": "q",
+     "share": 1
+    },
+    {
+     "key": "model.language_model.layers.{i}.self_attn.q_gate.weight",
+     "role": "gate",
+     "share": 1
+    }
+   ],
+   "provenance": "RATIFIED 2026-08-20 (tensorfs#150), transplanted from `qwen3.6-35b-a3b.vllm-fp8@1`. `self_attn.q_proj` is Linear(hidden, num_heads * head_dim * 2) and the doubling is a per-head GATE, split HEAD-MAJOR into (q, gate) — 16 groups, not one flat two-way cut. THE GROUP COUNT IS THE FACT: a flat split is right for head 0 and wrong for the other 15. Measured shape [8192, 2048].",
+   "target": "model.language_model.layers.{i}.self_attn.q_proj.weight"
+  },
+  {
+   "groups": 1,
+   "parts": [
+    {
+     "key": "model.language_model.layers.{i}.linear_attn.in_proj_q.weight",
+     "role": "q",
+     "share": 1
+    },
+    {
+     "key": "model.language_model.layers.{i}.linear_attn.in_proj_k.weight",
+     "role": "k",
+     "share": 1
+    },
+    {
+     "key": "model.language_model.layers.{i}.linear_attn.in_proj_v.weight",
+     "role": "v",
+     "share": 2
+    }
+   ],
+   "provenance": "RATIFIED 2026-08-20 (tensorfs#150), transplanted from `qwen3.6-35b-a3b.vllm-fp8@1`. `linear_attn.in_proj_qkv` is q|k|v at 1:1:2 — NOT equal thirds. Measured [8192, 2048]: 8192 / 4 = 2048, so q and k are 2048 rows each and v is 4096. Equal thirds does not even divide, which is the only reason this one is loud rather than silent.",
+   "target": "model.language_model.layers.{i}.linear_attn.in_proj_qkv.weight"
+  }
+ ],
+ "tier": 3,
+ "to": "qwen3-6-35b-a3b.transformers@1",
+ "version": 1
+}

@@ -79,47 +79,64 @@ its bytes — so there is no manifest namespace. Trees are projections: zero
 bytes copied, derivable from the manifest, disposable, and they pin nothing.
 `docs/mixed-cas-layout.md` is the design.
 
-## Tensor layout contracts
+## Tensor layout: topologies, quant rules, morphisms
 
-`spec/v1/contracts/` holds versioned JSON documents describing how a
-checkpoint family is spelled on disk: tensor patterns, the fusion seams inside
-fused tensors, and named removable tensor sets. They are DATA, not planner
-code.
+`spec/v2/` holds three kinds of document and one engine reads all three.
 
-At ingestion a file is identified from its **header alone** — names, shapes,
-dtypes; no tensor byte is read — against the registry, with a total tie-break
-(most specific, then highest version, then name). The winning contract cuts
-fused tensors at their seams *before* the 64 MiB grid, so a fused packaging
-and its split twin share every data object, and the snapshot records
-`contract@version` so identity stays self-describing.
+**TOPOLOGY** (`spec/v2/topologies/`) — a finite map `{key -> logical shape}`,
+per component, dtype-free and shard-flattened. Derived MECHANICALLY from a
+reference checkpoint's safetensors headers (`scripts/build_v2_corpus`, over
+headers banked by `scripts/bank-headers.py` — kilobytes, no weight byte),
+then named and digest-pinned. Never hand-authored, and a record that no longer
+re-derives to its committed digest fails CI.
 
-Seams may be interleaved (`fusion.groups`): MiniMax-H3 fuses qkv head-major,
-and its two packagings still share every attention byte. Byte ORDER never
-moves — only cut points do. `docs/dedup-invariance.md` §4 is the design, and
-`spec/v1/contracts/README.md` the format.
+**QUANT RULE** (`spec/v2/rules/`) — a function on topologies, written once per
+FORMAT: an eligibility predicate computable from shapes, per-tensor emissions
+whose shapes are pure functions of the source dims, and the dequant equation
+that makes derivability computable. Convention facts — nibble order, scale
+layout, scale span — are rule IDENTITY and live in the digest, which is why
+`cozy.nvfp4-flat` and `bfl.nvfp4-preswizzled` can never alias (conflating them
+measured LPIPS 1.11: every name, dtype and shape correct, every pixel wrong).
 
-Authoring one is cheap: `scripts/generate-contract.py` derives a ratifiable
-candidate from a checkpoint's headers over HTTP ranges, reading no weight byte.
-Generate → human-ratify → publish; see the format README.
+**MORPHISM** (`spec/v2/morphisms/`) — a topology -> topology map: rekey tables
+and fusion seams. With quant rules, the only hand-authored artifacts, and each
+carries the ratified evidence that proved it — a `[8192, 2048]` tensor cannot
+say whether it is q|k|v at 1:1:2 or in equal thirds, and getting it wrong is
+silent. The catalog loader re-applies every morphism at load and refuses if the
+result and the committed record disagree.
 
-### The bind verdict
+**LAYOUT = quant(topology)** — the computed expected header. ALWAYS computed,
+never stored: N topologies + M rules replace the N x M documents the v1 library
+needed. `go run ./scripts/compute_layout '<topology>@1+<quant>@1'` prints one.
+
+Seams still direct chunking, and byte ORDER never moves — only cut points do
+(`docs/dedup-invariance.md` §4). What changed is where the seams come from: the
+caller supplies them, because identifying a checkpoint is no longer something
+this crate does.
+
+### Admission
 
 *Does this checkpoint bind to this lane, and if not, what would fix it?*
-`satisfies | derivable | incompatible` — the middle answer is mandatory, not a
+`admit | derivable | refuse` — the middle answer is mandatory, not a
 convenience: refusing a checkpoint that only needs a cast is the
-over-constraint tensorfs#122 forbids. A `derivable` verdict names the
-conversion, and the recipe comes from the TARGET document's declarations
-(tcg#53), so the job a gate offers is the job the producer will run.
+over-constraint tensorfs#122 forbids. A `derivable` decision carries the
+STEPS, each priced by its storage tier (T1 rekey, zero new bytes; T2
+contiguous seam; T3 interleaved seam, materialized once; T4 quant, lossy and
+gated), and a `refuse` NAMES the first disagreeing tensor with both shapes,
+from headers alone — before a byte is downloaded.
 
-ONE implementation, three languages:
-`crates/tensorfs-core/src/verdict.rs` is the rule, Go (`verdict.go` +
-`match.go`) is its line-for-line twin, and Python reaches it through pyo3 —
-`contract.verdict({path: [(name, dtype, shape), ...]})`. That matters because a
-verdict decides an ADMIT, and a second implementation is a second chance to
-admit a bind that should have been refused, which stays invisible until a pod
-500s. `scripts/prove-verdict-parity.sh` runs both over one corpus, diffs the
-RENDERED verdicts, and fails unless a deliberately mutated recipe makes the
-diff go red.
+**ONE implementation, in Go** (`engine.go`). v1 had three — Rust, Go, and the
+conversion planner's Python claim rule — and three copies of a rule that
+decides an ADMIT are three chances to admit a bind that should have been
+refused, invisible until a pod 500s. The verdict is the hub's; workers consume
+it binding-carried and read identity facts (a rule's declared dtype and
+capability floor) from the vendored documents.
+
+The engine is FAIL-CLOSED. A candidate must BE the layout: every non-optional
+key present, at its declared shape, with an accepted dtype and nothing left
+over. `spec/v2/baselines/` holds the v1 engine's own 630 answers, banked before
+it was deleted, and the regression reproduces every one of them or enumerates
+the difference with its reason.
 
 ## The Python distribution
 

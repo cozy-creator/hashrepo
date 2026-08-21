@@ -68,9 +68,10 @@ refuses). Zero lengths and adjacent holes refuse. A data record never exceeds
 64 MiB — the tensor chunk grid constant, which bounds nothing but tensor
 records; holes are unbounded. An empty tensor file has zero records.
 
-The contract stamp records WHICH tensor-layout contract directed this file's
-chunking. A `name@version` stamp names a document in the curated library
-(`spec/v1/contracts/`); a digest stamp identifies a custom (nameless)
+The contract stamp records WHICH tensor layout directed this file's
+chunking. A `name@version` stamp names a pinned document — under the v2
+contract that is a record in `spec/v2/`, digest-pinned and regenerated from
+real headers; a digest stamp identifies a custom (nameless)
 contract by content — it identifies exactly but describes nothing, and the
 document is recovered out of band (the release derive document, the org's
 extracted-contract set). An empty name with version 0 is

@@ -1,0 +1,28 @@
+# The v2 topology corpus. name <TAB> version <TAB> source <TAB> description
+#
+# `headers:<id>`  extract MECHANICALLY from spec/v2/headers/<id>.json.gz
+# `morphism:<h>`  derive by applying a ratified morphism to its `from` topology
+# `morphism-inverse:<h>`  derive by applying that morphism BACKWARDS to its `to`
+#
+# Rebuild with: go run ./scripts/build_v2_corpus
+sdxl.diffusers	1	headers:sdxl-base-sharded	SDXL, the diffusers multifolder packaging (unet / vae / text_encoder / text_encoder_2). Extracted from the served 3-shard tree, so shard-flattening is exercised by the reference itself.
+sdxl-inpainting.diffusers	1	headers:sdxl-inpainting	SDXL-inpainting's UNet. A SEPARATE topology, and this is the whole point: its conv_in is [320, 9, 3, 3] where SDXL's is [320, 4, 3, 3]. v1 was shapeless and admitted it into the SDXL lane; here it cannot be confused with SDXL by construction.
+sd15.diffusers	1	headers:sd15	Stable Diffusion 1.x UNet. Its proj_in/proj_out are rank-4 1x1 convs.
+sd2.diffusers	1	headers:sd-turbo	Stable Diffusion 2.x / SD-Turbo UNet. The SAME 686 keys as SD1.x, and use_linear_projection makes 32 of them rank-2 Linears where SD1.x has rank-4 convs. Two topologies, separated on shapes.
+anima.net	1	headers:anima-base	Anima's DiT under the `net.` spelling — what tensorhub/anima binds.
+anima.diffusion-model	1	morphism:anima.net-to-prefixed@1	The same 685-tensor network under `model.diffusion_model.`, computed from the ratified rekey rather than extracted twice.
+joycaption.llava	1	headers:joycaption	JoyCaption beta-one, 4 shards flattened into one component.
+joycaption.llava-split-head	1	morphism-inverse:joycaption.siglip-head-split-to-fused@1	The same checkpoint with the SigLIP pooling head's MultiheadAttention q|k|v split — computed by inverting the ratified seam.
+musicgen.transformers	1	headers:musicgen	MusicGen stereo-medium, one flat fp16 file.
+ltx2-upsampler.diffusers	1	headers:ltx-2-upsampler	The LTX-2.3 spatial latent upsampler.
+ltx2.diffusers	1	headers:ltx-2	LTX-2.3 distilled, six components (transformer / vae / audio_vae / connectors / text_encoder / vocoder).
+ernie.diffusers	1	headers:ernie	ERNIE-Image's transformer, 2 shards.
+minimax-h3.diffusers	1	headers:minimax-h3-diffusers	MiniMax-H3's DiT, diffusers repackaging (638 tensors, split to_q/to_k/to_v) — what the hub ships.
+minimax-h3.native	1	morphism:minimax-h3.split-to-fused-qkv@1	The native/DiffSynth spelling, one head-interleaved qkv_proj per block, computed from the ratified seam.
+qwen3-6-35b-a3b.transformers	1	headers:qwen3.6-35b-a3b	Qwen3.6-35B-A3B, bf16, 26 shards flattened.
+qwen3-6-35b-a3b.transformers-split	1	morphism-inverse:qwen3-6-35b-a3b.split-to-fused@1	The same network with self_attn.q_proj's head-major q|gate and linear_attn.in_proj_qkv's 1:1:2 q|k|v split out.
+sdxl.clip-g-fused	1	morphism:sdxl.clip-g-split-to-fused@1	SDXL with the CLIP-G text encoder in the single-file OpenCLIP fusion — the packaging a fused-qkv fine-tune arrives in.
+flux2-klein.diffusers	1	headers:flux2-klein	FLUX.2 klein-4B.
+hidream-o1.diffusers	1	headers:hidream-o1	HiDream-O1-Image-Dev, 8 shards at the repo root.
+wan22.diffusers	1	headers:wan22	Wan 2.2 T2V A14B — two denoisers, transformer and transformer_2.
+z-image.diffusers	1	headers:z-image	Z-Image Turbo.

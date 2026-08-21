@@ -37,9 +37,10 @@ pub mod stream;
 pub mod sync;
 pub mod tfm1;
 pub mod tfp1;
-/// The bind verdict: does this checkpoint satisfy this lane, and if not, is
-/// the gap a conversion? A Go-identical port of `verdict.go` + `match.go`.
-pub mod verdict;
+// `verdict` IS DELETED (tensorfs#151). The bind verdict was a Go-identical
+// port of `verdict.go` + `match.go`, and v2's ruling is that ONE
+// implementation answers it — the Go decision engine, called by the hub.
+// Workers consume the verdict binding-carried; this crate moves bytes.
 /// Workspace metadata rides the Turso engine beside the object store, so it
 /// shares the store's real-filesystem platform gate.
 #[cfg(all(feature = "workspace", any(unix, windows)))]
