@@ -1301,6 +1301,51 @@ fn source_segments(
     Ok(segments)
 }
 
+/// Map immutable file ranges and materialize declared holes. This is the
+/// checkpoint-swap source shape: pgw owns the manifest decision, while
+/// tensorfs owns every byte read and transform after that decision.
+fn file_segments(records: &[(Option<PathBuf>, u64, usize)]) -> PyResult<(Vec<SourceSegment>, u64)> {
+    let mut segments = Vec::with_capacity(records.len());
+    let mut total = 0_u64;
+    for (path, offset, length) in records {
+        if *length == 0 {
+            continue;
+        }
+        total = total
+            .checked_add(*length as u64)
+            .ok_or_else(|| LayoutError::new_err("source segment lengths overflow u64"))?;
+        match path {
+            None => {
+                if *offset != 0 {
+                    return Err(LayoutError::new_err("a source hole must carry offset 0"));
+                }
+                segments.push(SourceSegment::Hole(vec![0; *length]));
+            }
+            Some(path) => {
+                let file = std::fs::File::open(path).map_err(io_error)?;
+                // SAFETY: the mapping owns the opened inode for this
+                // synchronous fill. The checked slice below is the only view.
+                let map = unsafe { memmap2::Mmap::map(&file) }.map_err(io_error)?;
+                let start = usize::try_from(*offset).map_err(|_| {
+                    LayoutError::new_err("source segment offset does not fit usize")
+                })?;
+                let end = start
+                    .checked_add(*length)
+                    .ok_or_else(|| LayoutError::new_err("source segment extent overflows usize"))?;
+                if end > map.len() {
+                    return Err(LayoutError::new_err(format!(
+                        "{} holds {} bytes, source segment asks for byte {end}",
+                        path.display(),
+                        map.len(),
+                    )));
+                }
+                segments.push(SourceSegment::Data { map, start, end });
+            }
+        }
+    }
+    Ok((segments, total))
+}
+
 struct BufferSink {
     address: usize,
     capacity: usize,
@@ -1340,6 +1385,14 @@ impl FillSink for BufferSink {
     }
 }
 
+struct FillSpec<'a> {
+    shape: &'a [u64],
+    element_bytes: usize,
+    destination_offset: u64,
+    layout: &'a str,
+    where_: &'a str,
+}
+
 fn fill_tensor<S: FillSink>(
     reader: &PyTensorStreamReader,
     name: &str,
@@ -1374,24 +1427,185 @@ fn fill_tensor<S: FillSink>(
         tensor.offset,
         tensor.nbytes,
     )?;
+    fill_segments(
+        &segments,
+        tensor.nbytes,
+        FillSpec {
+            shape: &tensor.shape,
+            element_bytes,
+            destination_offset,
+            layout,
+            where_: name,
+        },
+        sink,
+    )
+}
+
+fn fill_segments<S: FillSink>(
+    segments: &[SourceSegment],
+    source_bytes: u64,
+    spec: FillSpec<'_>,
+    sink: &mut S,
+) -> PyResult<PyFillStats> {
     let slices = segments
         .iter()
         .map(SourceSegment::bytes)
         .collect::<Vec<_>>();
-    let source = ChunkedSource::new(&slices);
-    let arrangement = layout_morphism::arrangement(layout).map_err(fill_error)?;
+    fill_slices(&slices, source_bytes, spec, sink)
+}
+
+fn fill_slices<S: FillSink>(
+    slices: &[&[u8]],
+    source_bytes: u64,
+    spec: FillSpec<'_>,
+    sink: &mut S,
+) -> PyResult<PyFillStats> {
+    let elements = spec
+        .shape
+        .iter()
+        .try_fold(1_u64, |total, dim| total.checked_mul(*dim))
+        .ok_or_else(|| {
+            LayoutError::new_err(format!("{:?}: logical shape overflows u64", spec.where_))
+        })?;
+    let expected = elements
+        .checked_mul(spec.element_bytes as u64)
+        .ok_or_else(|| {
+            LayoutError::new_err(format!("{:?}: byte extent overflows u64", spec.where_))
+        })?;
+    if elements == 0 || source_bytes != expected {
+        return Err(LayoutError::new_err(format!(
+            "{:?}: source holds {source_bytes} bytes but shape {:?} at {} byte(s) per element requires {expected}",
+            spec.where_, spec.shape, spec.element_bytes,
+        )));
+    }
+    let source = ChunkedSource::new(slices);
+    let arrangement = layout_morphism::arrangement(spec.layout).map_err(fill_error)?;
     let stats = layout_fill::fill(
         &source,
         &TensorFill {
             layout: arrangement,
-            shape: tensor.shape.clone(),
-            element_bytes,
-            device_offset: destination_offset,
+            shape: spec.shape.to_vec(),
+            element_bytes: spec.element_bytes,
+            device_offset: spec.destination_offset,
         },
         sink,
     )
     .map_err(fill_error)?;
     Ok(stats.into())
+}
+
+fn fill_address<S: FillSink>(
+    source_ptr: u64,
+    source_bytes: usize,
+    spec: FillSpec<'_>,
+    sink: &mut S,
+) -> PyResult<PyFillStats> {
+    if source_ptr == 0 {
+        return Err(LayoutError::new_err("fill source pointer is null"));
+    }
+    let address = usize::try_from(source_ptr)
+        .map_err(|_| LayoutError::new_err("fill source pointer does not fit usize"))?;
+    // SAFETY: the caller owns this synchronous raw-pointer contract and must
+    // keep `source_bytes` readable until the call returns.
+    let source = unsafe { std::slice::from_raw_parts(address as *const u8, source_bytes) };
+    fill_slices(&[source], source_bytes as u64, spec, sink)
+}
+
+fn fill_files<S: FillSink>(
+    records: &[(Option<PathBuf>, u64, usize)],
+    spec: FillSpec<'_>,
+    sink: &mut S,
+) -> PyResult<PyFillStats> {
+    let (segments, source_bytes) = file_segments(records)?;
+    fill_segments(&segments, source_bytes, spec, sink)
+}
+
+/// The generic host backend for caller-owned source and destination maps.
+#[pyclass(frozen, module = "tensorfs._tensorfs", name = "HostFillClient")]
+pub struct PyHostFillClient;
+
+#[pymethods]
+impl PyHostFillClient {
+    #[new]
+    fn new() -> Self {
+        Self
+    }
+
+    #[pyo3(signature = (source_ptr, source_bytes, destination_ptr, destination_bytes, shape, element_bytes, destination_offset = 0, layout = "torch.contiguous@1"))]
+    #[allow(clippy::too_many_arguments)]
+    fn fill_address(
+        &self,
+        source_ptr: u64,
+        source_bytes: usize,
+        destination_ptr: u64,
+        destination_bytes: usize,
+        shape: Vec<u64>,
+        element_bytes: usize,
+        destination_offset: u64,
+        layout: &str,
+    ) -> PyResult<PyFillStats> {
+        if destination_ptr == 0 {
+            return Err(LayoutError::new_err(
+                "host fill destination pointer is null",
+            ));
+        }
+        let address = usize::try_from(destination_ptr).map_err(|_| {
+            LayoutError::new_err("host fill destination pointer does not fit usize")
+        })?;
+        let mut sink = BufferSink {
+            address,
+            capacity: destination_bytes,
+        };
+        fill_address(
+            source_ptr,
+            source_bytes,
+            FillSpec {
+                shape: &shape,
+                element_bytes,
+                destination_offset,
+                layout,
+                where_: "source address",
+            },
+            &mut sink,
+        )
+    }
+
+    #[pyo3(signature = (records, destination_ptr, destination_bytes, shape, element_bytes, destination_offset = 0, layout = "torch.contiguous@1"))]
+    #[allow(clippy::too_many_arguments)]
+    fn fill_files(
+        &self,
+        records: Vec<(Option<PathBuf>, u64, usize)>,
+        destination_ptr: u64,
+        destination_bytes: usize,
+        shape: Vec<u64>,
+        element_bytes: usize,
+        destination_offset: u64,
+        layout: &str,
+    ) -> PyResult<PyFillStats> {
+        if destination_ptr == 0 {
+            return Err(LayoutError::new_err(
+                "host fill destination pointer is null",
+            ));
+        }
+        let address = usize::try_from(destination_ptr).map_err(|_| {
+            LayoutError::new_err("host fill destination pointer does not fit usize")
+        })?;
+        let mut sink = BufferSink {
+            address,
+            capacity: destination_bytes,
+        };
+        fill_files(
+            &records,
+            FillSpec {
+                shape: &shape,
+                element_bytes,
+                destination_offset,
+                layout,
+                where_: "source segments",
+            },
+            &mut sink,
+        )
+    }
 }
 
 /// One reusable pinned staging allocation for a whole destination map.
@@ -1434,9 +1648,89 @@ impl PyCudaFillClient {
             .sink
             .lock()
             .map_err(|_| LayoutError::new_err("CUDA fill client was poisoned by a prior panic"))?;
+        sink.ensure_capacity(destination_bytes)
+            .map_err(fill_error)?;
         sink.retarget(destination_ptr, destination_bytes)
             .map_err(fill_error)?;
         fill_tensor(reader, name, destination_offset, layout, &mut *sink)
+    }
+
+    #[pyo3(signature = (source_ptr, source_bytes, destination_ptr, destination_bytes, shape, element_bytes, destination_offset = 0, layout = "torch.contiguous@1"))]
+    #[allow(clippy::too_many_arguments)]
+    fn fill_address(
+        &self,
+        source_ptr: u64,
+        source_bytes: usize,
+        destination_ptr: u64,
+        destination_bytes: usize,
+        shape: Vec<u64>,
+        element_bytes: usize,
+        destination_offset: u64,
+        layout: &str,
+    ) -> PyResult<PyFillStats> {
+        if destination_ptr == 0 {
+            return Err(LayoutError::new_err(
+                "CUDA fill destination pointer is null",
+            ));
+        }
+        let mut sink = self
+            .sink
+            .lock()
+            .map_err(|_| LayoutError::new_err("CUDA fill client was poisoned by a prior panic"))?;
+        sink.ensure_capacity(destination_bytes)
+            .map_err(fill_error)?;
+        sink.retarget(destination_ptr, destination_bytes)
+            .map_err(fill_error)?;
+        fill_address(
+            source_ptr,
+            source_bytes,
+            FillSpec {
+                shape: &shape,
+                element_bytes,
+                destination_offset,
+                layout,
+                where_: "source address",
+            },
+            &mut *sink,
+        )
+    }
+
+    #[pyo3(signature = (records, destination_ptr, destination_bytes, shape, element_bytes, destination_offset = 0, layout = "torch.contiguous@1"))]
+    #[allow(clippy::too_many_arguments)]
+    fn fill_files(
+        &self,
+        records: Vec<(Option<PathBuf>, u64, usize)>,
+        destination_ptr: u64,
+        destination_bytes: usize,
+        shape: Vec<u64>,
+        element_bytes: usize,
+        destination_offset: u64,
+        layout: &str,
+    ) -> PyResult<PyFillStats> {
+        if destination_ptr == 0 {
+            return Err(LayoutError::new_err(
+                "CUDA fill destination pointer is null",
+            ));
+        }
+        let mut sink = self
+            .sink
+            .lock()
+            .map_err(|_| LayoutError::new_err("CUDA fill client was poisoned by a prior panic"))?;
+        sink.ensure_capacity(destination_bytes)
+            .map_err(fill_error)?;
+        sink.retarget(destination_ptr, destination_bytes)
+            .map_err(fill_error)?;
+        fill_files(
+            &records,
+            FillSpec {
+                shape: &shape,
+                element_bytes,
+                destination_offset,
+                layout,
+                where_: "source segments",
+            },
+            &mut *sink,
+        )
     }
 }
 
@@ -2179,6 +2473,7 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyContractInfo>()?;
     module.add_class::<PyStreamTensor>()?;
     module.add_class::<PyFillStats>()?;
+    module.add_class::<PyHostFillClient>()?;
     module.add_class::<PyCudaFillClient>()?;
     module.add_class::<PyTensorStreamReader>()?;
 

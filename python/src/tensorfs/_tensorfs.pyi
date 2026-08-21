@@ -223,6 +223,29 @@ class FillStats:
     @property
     def chunks(self) -> int: ...
 
+class HostFillClient:
+    def fill_address(
+        self,
+        source_ptr: int,
+        source_bytes: int,
+        destination_ptr: int,
+        destination_bytes: int,
+        shape: Sequence[int],
+        element_bytes: int,
+        destination_offset: int = 0,
+        layout: str = "torch.contiguous@1",
+    ) -> FillStats: ...
+    def fill_files(
+        self,
+        records: Sequence[tuple[str | PathLike[str] | None, int, int]],
+        destination_ptr: int,
+        destination_bytes: int,
+        shape: Sequence[int],
+        element_bytes: int,
+        destination_offset: int = 0,
+        layout: str = "torch.contiguous@1",
+    ) -> FillStats: ...
+
 class CudaFillClient:
     def __init__(self, staging_bytes: int, device: int = 0) -> None: ...
     def fill(
@@ -231,6 +254,27 @@ class CudaFillClient:
         name: str,
         destination_ptr: int,
         destination_bytes: int,
+        destination_offset: int = 0,
+        layout: str = "torch.contiguous@1",
+    ) -> FillStats: ...
+    def fill_address(
+        self,
+        source_ptr: int,
+        source_bytes: int,
+        destination_ptr: int,
+        destination_bytes: int,
+        shape: Sequence[int],
+        element_bytes: int,
+        destination_offset: int = 0,
+        layout: str = "torch.contiguous@1",
+    ) -> FillStats: ...
+    def fill_files(
+        self,
+        records: Sequence[tuple[str | PathLike[str] | None, int, int]],
+        destination_ptr: int,
+        destination_bytes: int,
+        shape: Sequence[int],
+        element_bytes: int,
         destination_offset: int = 0,
         layout: str = "torch.contiguous@1",
     ) -> FillStats: ...

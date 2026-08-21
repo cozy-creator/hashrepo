@@ -8,7 +8,13 @@ import struct
 from pathlib import Path
 
 import pytest
-from tensorfs.native import FileRecord, LayoutError, ObjectStore, TensorStreamReader
+from tensorfs.native import (
+    FileRecord,
+    HostFillClient,
+    LayoutError,
+    ObjectStore,
+    TensorStreamReader,
+)
 
 
 def _container(shape: tuple[int, ...]) -> tuple[bytes, bytes]:
@@ -66,6 +72,51 @@ def test_host_address_fill_uses_only_primitive_destination_data(tmp_path: Path) 
     assert stats.destination_bytes == len(payload)
 
 
+def test_generic_address_fill_applies_the_ratified_transform() -> None:
+    shape = (2, 3, 4, 5)
+    payload = bytes((index * 37 + 11) % 251 for index in range(120))
+    source = (ctypes.c_ubyte * len(payload)).from_buffer_copy(payload)
+    destination = (ctypes.c_ubyte * len(payload))()
+
+    stats = HostFillClient().fill_address(
+        ctypes.addressof(source),
+        len(source),
+        ctypes.addressof(destination),
+        len(destination),
+        shape,
+        1,
+        layout="torch.channels_last-2d@1",
+    )
+
+    expected = bytes(
+        payload[((n * shape[1] + c) * shape[2] + h) * shape[3] + w]
+        for n in range(shape[0])
+        for h in range(shape[2])
+        for w in range(shape[3])
+        for c in range(shape[1])
+    )
+    assert bytes(destination) == expected
+    assert stats.runs == len(payload)
+
+
+def test_generic_file_segments_include_declared_holes(tmp_path: Path) -> None:
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"discardABCDEtail")
+    destination = (ctypes.c_ubyte * 9)()
+
+    stats = HostFillClient().fill_files(
+        [(source, 7, 5), (None, 0, 4)],
+        ctypes.addressof(destination),
+        len(destination),
+        (9,),
+        1,
+    )
+
+    assert bytes(destination) == b"ABCDE\0\0\0\0"
+    assert stats.source_bytes == 9
+    assert stats.chunks == 2
+
+
 def test_morphism_is_applied_by_the_same_bound_fill(tmp_path: Path) -> None:
     shape = (2, 3, 4, 5)
     reader, payload = _reader(tmp_path, shape)
@@ -91,6 +142,8 @@ def test_fill_refusals_cross_the_binding_typed(tmp_path: Path) -> None:
         reader.fill_host_into("weight", bytearray(len(payload) - 1))
     with pytest.raises(LayoutError, match="pointer is null"):
         reader.fill_host_address("weight", 0, len(payload))
+    with pytest.raises(LayoutError, match="source pointer is null"):
+        HostFillClient().fill_address(0, len(payload), 1, len(payload), (len(payload),), 1)
     allocation = (ctypes.c_ubyte * len(payload))()
     with pytest.raises(LayoutError, match="buffer holds"):
         reader.fill_host_address("weight", ctypes.addressof(allocation), len(payload) - 1)
@@ -110,7 +163,11 @@ def test_no_torch_type_or_import_exists_at_the_fill_seam() -> None:
     signatures = (
         inspect.signature(native.TensorStreamReader.fill_host_into),
         inspect.signature(native.TensorStreamReader.fill_host_address),
+        inspect.signature(native.HostFillClient.fill_address),
+        inspect.signature(native.HostFillClient.fill_files),
         inspect.signature(native.CudaFillClient.fill),
+        inspect.signature(native.CudaFillClient.fill_address),
+        inspect.signature(native.CudaFillClient.fill_files),
     )
     for signature in signatures:
         assert all(

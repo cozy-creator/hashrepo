@@ -197,6 +197,35 @@ impl CudaSink {
         self.staging_bytes
     }
 
+    /// Grow the one pinned slab when a later destination is larger.
+    ///
+    /// Capacity is monotonic: a destination map pays at most once for each
+    /// new maximum tensor/region size and every smaller refill reuses it.
+    pub fn ensure_capacity(&mut self, bytes: usize) -> Result<(), LayoutError> {
+        if bytes <= self.staging_bytes {
+            return Ok(());
+        }
+        if self.staged != 0 {
+            return Err(LayoutError::Record {
+                handle: "cuda".into(),
+                detail: "cannot grow staging while a transfer is pending".into(),
+            });
+        }
+        let cuda = driver()?;
+        let mut replacement: *mut c_void = std::ptr::null_mut();
+        unsafe {
+            check(
+                cuda,
+                (cuda.mem_host_alloc)(&mut replacement, bytes, CU_MEMHOSTALLOC_PORTABLE),
+                "cuMemHostAlloc",
+            )?;
+            let _ = (cuda.mem_free_host)(self.staging);
+        }
+        self.staging = replacement;
+        self.staging_bytes = bytes;
+        Ok(())
+    }
+
     /// Point the reusable staging allocation at a new caller-owned address.
     ///
     /// Retargeting moves no bytes and allocates nothing. A client can fill a
