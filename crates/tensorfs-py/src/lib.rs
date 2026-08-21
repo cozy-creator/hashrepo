@@ -41,6 +41,7 @@ use tensorfs_core::source::FileByteSource;
 use tensorfs_core::store::ObjectStore;
 use tensorfs_core::tfm1::{self, Entry, FileRecord as CoreFileRecord, SnapshotId};
 use tensorfs_core::tfp1;
+use tensorfs_core::verdict;
 use tensorfs_core::workspace_source::RecordsSource;
 
 create_exception!(
@@ -1609,6 +1610,177 @@ fn contract_info(document: &str) -> PyResult<PyContractInfo> {
     })
 }
 
+// ── the bind verdict ─────────────────────────────────────────────────────────
+//
+// One implementation of the tri-state answer, reachable from both languages.
+// gen-worker selects a lane at boot from Python; before this, the only verdict
+// lived in Go, and the alternative was a narrow Python re-implementation — a
+// THIRD copy of the pattern matcher (tensorfs#129) and a third chance to ADMIT
+// a bind that should have been refused, which stays invisible until a pod 500s.
+
+/// The conversion a `derivable` verdict names.
+#[pyclass(frozen, get_all, module = "tensorfs._tensorfs", name = "Conversion")]
+pub struct PyConversion {
+    /// The RECIPE, read off the TARGET contract's declarations.
+    kind: String,
+    /// Trailing underscore because `from` is a Python keyword: `v.from` does
+    /// not parse, and an attribute reachable only through `getattr` is a worse
+    /// API than a name that reads slightly odd.
+    from_: Vec<String>,
+    to: Vec<String>,
+    files: Vec<String>,
+    text: String,
+}
+
+#[pymethods]
+impl PyConversion {
+    fn __repr__(&self) -> String {
+        format!("Conversion({})", self.text)
+    }
+    fn __str__(&self) -> String {
+        self.text.clone()
+    }
+}
+
+/// A NAMED refusal: which tensor, which pattern, declared vs observed.
+#[pyclass(frozen, get_all, module = "tensorfs._tensorfs", name = "Mismatch")]
+pub struct PyMismatch {
+    kind: String,
+    tensor: String,
+    pattern: String,
+    role: String,
+    declared: String,
+    observed: String,
+    stamp: String,
+    text: String,
+}
+
+#[pymethods]
+impl PyMismatch {
+    fn __repr__(&self) -> String {
+        format!("Mismatch({})", self.text)
+    }
+    fn __str__(&self) -> String {
+        self.text.clone()
+    }
+}
+
+/// The artifact-level answer: `satisfies` | `derivable` | `incompatible`.
+#[pyclass(frozen, get_all, module = "tensorfs._tensorfs", name = "Verdict")]
+pub struct PyVerdict {
+    kind: String,
+    stamp: String,
+    matched: usize,
+    explained: usize,
+    unexplained: Vec<String>,
+    conversion: Option<Py<PyConversion>>,
+    mismatch: Option<Py<PyMismatch>>,
+    file: String,
+    /// The Go rendering, verbatim — what the parity proof compares.
+    text: String,
+}
+
+#[pymethods]
+impl PyVerdict {
+    fn __repr__(&self) -> String {
+        format!("Verdict({})", self.text)
+    }
+    fn __str__(&self) -> String {
+        self.text.clone()
+    }
+}
+
+/// One member of an artifact as Python hands it over: its path, then its
+/// header entries as `(name, dtype, shape, byte_length)`.
+type PyArtifactFile = (String, Vec<(String, String, Vec<u64>, u64)>);
+
+/// The bind verdict for one artifact against one contract document.
+///
+/// `files` is `[(path, [(name, dtype, shape, length), ...]), ...]`. `length`
+/// may be 0 for "not supplied", which SKIPS the byte half of the fusion rule
+/// rather than manufacturing a refusal from an absent number.
+#[pyfunction]
+fn contract_verdict(
+    python: Python<'_>,
+    document: &str,
+    files: Vec<PyArtifactFile>,
+) -> PyResult<PyVerdict> {
+    let parsed = contract::Contract::parse(document).map_err(contract_error)?;
+    let members: Vec<verdict::ArtifactFile> = files
+        .into_iter()
+        .map(|(path, tensors)| verdict::ArtifactFile {
+            path,
+            tensors: tensors
+                .into_iter()
+                .map(|(name, dtype, shape, length)| verdict::InventoryTensor {
+                    name,
+                    dtype,
+                    shape,
+                    length,
+                })
+                .collect(),
+        })
+        .collect();
+    let answer = parsed.verdict(&members);
+    let text = answer.to_string();
+    let conversion = answer
+        .conversion
+        .as_ref()
+        .map(|found| {
+            Py::new(
+                python,
+                PyConversion {
+                    kind: found.kind.clone(),
+                    from_: found.from.clone(),
+                    to: found.to.clone(),
+                    files: found.files.clone(),
+                    text: found.to_string(),
+                },
+            )
+        })
+        .transpose()?;
+    let mismatch = answer
+        .mismatch
+        .as_ref()
+        .map(|found| {
+            Py::new(
+                python,
+                PyMismatch {
+                    kind: found.kind.as_str().to_owned(),
+                    tensor: found.tensor.clone(),
+                    pattern: found.pattern.clone(),
+                    role: found.role.clone(),
+                    declared: found.declared.clone(),
+                    observed: found.observed.clone(),
+                    stamp: found.stamp.clone(),
+                    text: found.to_string(),
+                },
+            )
+        })
+        .transpose()?;
+    Ok(PyVerdict {
+        kind: answer.kind.as_str().to_owned(),
+        stamp: answer.stamp.clone(),
+        matched: answer.matched,
+        explained: answer.explained,
+        unexplained: answer.unexplained.clone(),
+        conversion,
+        mismatch,
+        file: answer.file.clone(),
+        text,
+    })
+}
+
+/// The conversion recipe a contract's own declarations imply. DERIVED, never
+/// stored: there is no `recipe` field and there must never be one.
+#[pyfunction]
+fn contract_recipe(document: &str) -> PyResult<String> {
+    Ok(contract::Contract::parse(document)
+        .map_err(contract_error)?
+        .recipe()
+        .to_owned())
+}
+
 /// A contract argument: a plain string, or a `tensorfs.Contract`-shaped
 /// object carrying the wanted text as an attribute (`document` where a full
 /// document travels, `stamp` where only the identity does).
@@ -1945,6 +2117,9 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyRecordsReader>()?;
     module.add_class::<PyRegistry>()?;
     module.add_class::<PyContractInfo>()?;
+    module.add_class::<PyConversion>()?;
+    module.add_class::<PyMismatch>()?;
+    module.add_class::<PyVerdict>()?;
     module.add_class::<PyStreamTensor>()?;
     module.add_class::<PyTensorStreamReader>()?;
 
@@ -1960,6 +2135,8 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(plan_and_hash_file, module)?)?;
     module.add_function(wrap_pyfunction!(ingest_concurrency, module)?)?;
     module.add_function(wrap_pyfunction!(contract_info, module)?)?;
+    module.add_function(wrap_pyfunction!(contract_verdict, module)?)?;
+    module.add_function(wrap_pyfunction!(contract_recipe, module)?)?;
     module.add_function(wrap_pyfunction!(rekey, module)?)?;
     module.add_function(wrap_pyfunction!(subset, module)?)?;
     module.add_function(wrap_pyfunction!(adopt, module)?)?;

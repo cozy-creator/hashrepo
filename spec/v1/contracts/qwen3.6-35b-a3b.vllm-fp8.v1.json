@@ -1,0 +1,745 @@
+{
+  "format": "tensorfs-contract-v1",
+  "name": "qwen3.6-35b-a3b.vllm-fp8",
+  "version": 1,
+  "dtype": "float8_e4m3fn",
+  "description": "GENERATED CANDIDATE - NOT RATIFIED. Qwen3.6-35B-A3B-FP8: a hybrid linear-attention / full-attention MoE served by vLLM,\nsharded as outside.safetensors + layers-N.safetensors + mtp.safetensors. MIXED PACKAGING, and it\nis expressible exactly as sdxl.diffusers-fp8-rowwise@1 already is: the top-level dtype is the\nLANE's load dtype while the per-tensor dtypes carry the matcher's constraint, so a flat\nfloat8_e4m3fn lane legitimately holds BF16 declarations. The fp8 weights come with\nweight_scale_inv twins; the vision tower and every norm stay BF16, which config.json's\nquantization_config.modules_to_not_convert corroborates. The top-level dtype is DECLARED rather\nthan derived here: BF16 outnumbers F8_E4M3 by tensor COUNT, and a majority vote over counts is\nthe wrong instrument for 'what does this lane load as'. Derived mechanically by tensorfs.generate from headers only - no tensor byte was read. fp8: 64196 tensors 92 declarations cover 64196 tensors (36 singleton, 56 indexed) dtypes: BF16 x32451, F8_E4M3 x31745 NON-CONTIGUOUS index range: model.language_model.layers.{i}.linear_attn.A_log hole 0: [0, 1, 2, 4, 5, 6, 8, 9]... (30 of 0..38) NON-CONTIGUOUS index range: model.language_model.layers.{i}.linear_attn.conv1d.weight hole 0: [0, 1, 2, 4, 5, 6, 8, 9]... (30 of 0..38) NON-CONTIGUOUS index range: model.language_model.layers.{i}.linear_attn.dt_bias hole 0: [0, 1, 2, 4, 5, 6, 8, 9]... (30 of 0..38) NON-CONTIGUOUS index range: model.language_model.layers.{i}.linear_attn.in_proj_a.weight hole 0: [0, 1, 2, 4, 5, 6, 8, 9]... (30 of 0..38) NON-CONTIGUOUS index range: model.language_model.layers.{i}.linear_attn.in_proj_b.weight hole 0: [0, 1, 2, 4, 5, 6, 8, 9]... (30 of 0..38) NON-CONTIGUOUS index range: model.language_model.layers.{i}.linear_attn.in_proj_qkv.weight hole 0: [0, 1, 2, 4, 5, 6, 8, 9]... (30 of 0..38) NON-CONTIGUOUS index range: model.language_model.layers.{i}.linear_attn.in_proj_qkv.weight_scale_inv hole 0: [0, 1, 2, 4, 5, 6, 8, 9]... (30 of 0..38) NON-CONTIGUOUS index range: model.language_model.layers.{i}.linear_attn.in_proj_z.weight hole 0: [0, 1, 2, 4, 5, 6, 8, 9]... (30 of 0..38) NON-CONTIGUOUS index range: model.language_model.layers.{i}.linear_attn.in_proj_z.weight_scale_inv hole 0: [0, 1, 2, 4, 5, 6, 8, 9]... (30 of 0..38) NON-CONTIGUOUS index range: model.language_model.layers.{i}.linear_attn.norm.weight hole 0: [0, 1, 2, 4, 5, 6, 8, 9]... (30 of 0..38) NON-CONTIGUOUS index range: model.language_model.layers.{i}.linear_attn.out_proj.weight hole 0: [0, 1, 2, 4, 5, 6, 8, 9]... (30 of 0..38) NON-CONTIGUOUS index range: model.language_model.layers.{i}.linear_attn.out_proj.weight_scale_inv hole 0: [0, 1, 2, 4, 5, 6, 8, 9]... (30 of 0..38) NON-CONTIGUOUS index range: model.language_model.layers.{i}.self_attn.k_norm.weight hole 0: [3, 7, 11, 15, 19, 23, 27, 31]... (10 of 0..39) NON-CONTIGUOUS index range: model.language_model.layers.{i}.self_attn.k_proj.weight hole 0: [3, 7, 11, 15, 19, 23, 27, 31]... (10 of 0..39) NON-CONTIGUOUS index range: model.language_model.layers.{i}.self_attn.k_proj.weight_scale_inv hole 0: [3, 7, 11, 15, 19, 23, 27, 31]... (10 of 0..39) NON-CONTIGUOUS index range: model.language_model.layers.{i}.self_attn.o_proj.weight hole 0: [3, 7, 11, 15, 19, 23, 27, 31]... (10 of 0..39) NON-CONTIGUOUS index range: model.language_model.layers.{i}.self_attn.o_proj.weight_scale_inv hole 0: [3, 7, 11, 15, 19, 23, 27, 31]... (10 of 0..39) NON-CONTIGUOUS index range: model.language_model.layers.{i}.self_attn.q_norm.weight hole 0: [3, 7, 11, 15, 19, 23, 27, 31]... (10 of 0..39) NON-CONTIGUOUS index range: model.language_model.layers.{i}.self_attn.q_proj.weight hole 0: [3, 7, 11, 15, 19, 23, 27, 31]... (10 of 0..39) NON-CONTIGUOUS index range: model.language_model.layers.{i}.self_attn.q_proj.weight_scale_inv hole 0: [3, 7, 11, 15, 19, 23, 27, 31]... (10 of 0..39) NON-CONTIGUOUS index range: model.language_model.layers.{i}.self_attn.v_proj.weight hole 0: [3, 7, 11, 15, 19, 23, 27, 31]... (10 of 0..39) NON-CONTIGUOUS index range: model.language_model.layers.{i}.self_attn.v_proj.weight_scale_inv hole 0: [3, 7, 11, 15, 19, 23, 27, 31]... (10 of 0..39). RATIFICATION OWED: (1) vLLM self-loads a directory, so ctx.load is never called on this path and no loader\nconsumes this document TODAY. It is authored because lanes= answers checkpoint compatibility and\nlane selection independently of compilation (pgw#1597) - it must not be read as asserting a\npytorch streaming load this endpoint does not perform. (2) ROLES are mechanical (role == pattern). Rename any tensor whose bytes are the same bytes another packaging spells differently - that is the only thing that makes a cross-packaging derive possible instead of a refusal. (3) FUSIONS are undeclared. A header cannot see a fused axis, so a fused qkv/gate-up must be declared by a human reading the model's config (head count, hidden size); a wrong one is a ~90%-error split that never crashes. (4) SETS are undeclared (no subset-snapshot groups). (5) COMPONENT SCOPE is the caller's: declaring a shared encoder ties this document to every family that ships the same one (tensorfs#121).",
+  "tensors": [
+    {
+      "role": "lm_head.weight",
+      "pattern": "lm_head.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.embed_tokens.weight",
+      "pattern": "model.language_model.embed_tokens.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.input_layernorm.weight",
+      "pattern": "model.language_model.layers.{i}.input_layernorm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.language_model.layers.{i}.linear_attn.A_log",
+      "pattern": "model.language_model.layers.{i}.linear_attn.A_log",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.language_model.layers.{i}.linear_attn.conv1d.weight",
+      "pattern": "model.language_model.layers.{i}.linear_attn.conv1d.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 3
+    },
+    {
+      "role": "model.language_model.layers.{i}.linear_attn.dt_bias",
+      "pattern": "model.language_model.layers.{i}.linear_attn.dt_bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.language_model.layers.{i}.linear_attn.in_proj_a.weight",
+      "pattern": "model.language_model.layers.{i}.linear_attn.in_proj_a.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.linear_attn.in_proj_b.weight",
+      "pattern": "model.language_model.layers.{i}.linear_attn.in_proj_b.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.linear_attn.in_proj_qkv.weight",
+      "pattern": "model.language_model.layers.{i}.linear_attn.in_proj_qkv.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.linear_attn.in_proj_qkv.weight_scale_inv",
+      "pattern": "model.language_model.layers.{i}.linear_attn.in_proj_qkv.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.linear_attn.in_proj_z.weight",
+      "pattern": "model.language_model.layers.{i}.linear_attn.in_proj_z.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.linear_attn.in_proj_z.weight_scale_inv",
+      "pattern": "model.language_model.layers.{i}.linear_attn.in_proj_z.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.linear_attn.norm.weight",
+      "pattern": "model.language_model.layers.{i}.linear_attn.norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.language_model.layers.{i}.linear_attn.out_proj.weight",
+      "pattern": "model.language_model.layers.{i}.linear_attn.out_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.linear_attn.out_proj.weight_scale_inv",
+      "pattern": "model.language_model.layers.{i}.linear_attn.out_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.experts.{i}.down_proj.weight",
+      "pattern": "model.language_model.layers.{i}.mlp.experts.{i}.down_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.experts.{i}.down_proj.weight_scale_inv",
+      "pattern": "model.language_model.layers.{i}.mlp.experts.{i}.down_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.experts.{i}.gate_proj.weight",
+      "pattern": "model.language_model.layers.{i}.mlp.experts.{i}.gate_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.experts.{i}.gate_proj.weight_scale_inv",
+      "pattern": "model.language_model.layers.{i}.mlp.experts.{i}.gate_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.experts.{i}.up_proj.weight",
+      "pattern": "model.language_model.layers.{i}.mlp.experts.{i}.up_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.experts.{i}.up_proj.weight_scale_inv",
+      "pattern": "model.language_model.layers.{i}.mlp.experts.{i}.up_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.gate.weight",
+      "pattern": "model.language_model.layers.{i}.mlp.gate.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.shared_expert.down_proj.weight",
+      "pattern": "model.language_model.layers.{i}.mlp.shared_expert.down_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.shared_expert.down_proj.weight_scale_inv",
+      "pattern": "model.language_model.layers.{i}.mlp.shared_expert.down_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.shared_expert.gate_proj.weight",
+      "pattern": "model.language_model.layers.{i}.mlp.shared_expert.gate_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.shared_expert.gate_proj.weight_scale_inv",
+      "pattern": "model.language_model.layers.{i}.mlp.shared_expert.gate_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.shared_expert.up_proj.weight",
+      "pattern": "model.language_model.layers.{i}.mlp.shared_expert.up_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.shared_expert.up_proj.weight_scale_inv",
+      "pattern": "model.language_model.layers.{i}.mlp.shared_expert.up_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.mlp.shared_expert_gate.weight",
+      "pattern": "model.language_model.layers.{i}.mlp.shared_expert_gate.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.post_attention_layernorm.weight",
+      "pattern": "model.language_model.layers.{i}.post_attention_layernorm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.language_model.layers.{i}.self_attn.k_norm.weight",
+      "pattern": "model.language_model.layers.{i}.self_attn.k_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.language_model.layers.{i}.self_attn.k_proj.weight",
+      "pattern": "model.language_model.layers.{i}.self_attn.k_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.self_attn.k_proj.weight_scale_inv",
+      "pattern": "model.language_model.layers.{i}.self_attn.k_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.self_attn.o_proj.weight",
+      "pattern": "model.language_model.layers.{i}.self_attn.o_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.self_attn.o_proj.weight_scale_inv",
+      "pattern": "model.language_model.layers.{i}.self_attn.o_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.self_attn.q_norm.weight",
+      "pattern": "model.language_model.layers.{i}.self_attn.q_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.language_model.layers.{i}.self_attn.q_proj.weight",
+      "pattern": "model.language_model.layers.{i}.self_attn.q_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.self_attn.q_proj.weight_scale_inv",
+      "pattern": "model.language_model.layers.{i}.self_attn.q_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.self_attn.v_proj.weight",
+      "pattern": "model.language_model.layers.{i}.self_attn.v_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.layers.{i}.self_attn.v_proj.weight_scale_inv",
+      "pattern": "model.language_model.layers.{i}.self_attn.v_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.language_model.norm.weight",
+      "pattern": "model.language_model.norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.blocks.{i}.attn.proj.bias",
+      "pattern": "model.visual.blocks.{i}.attn.proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.blocks.{i}.attn.proj.weight",
+      "pattern": "model.visual.blocks.{i}.attn.proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.visual.blocks.{i}.attn.qkv.bias",
+      "pattern": "model.visual.blocks.{i}.attn.qkv.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.blocks.{i}.attn.qkv.weight",
+      "pattern": "model.visual.blocks.{i}.attn.qkv.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.visual.blocks.{i}.mlp.linear_fc1.bias",
+      "pattern": "model.visual.blocks.{i}.mlp.linear_fc1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.blocks.{i}.mlp.linear_fc1.weight",
+      "pattern": "model.visual.blocks.{i}.mlp.linear_fc1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.visual.blocks.{i}.mlp.linear_fc2.bias",
+      "pattern": "model.visual.blocks.{i}.mlp.linear_fc2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.blocks.{i}.mlp.linear_fc2.weight",
+      "pattern": "model.visual.blocks.{i}.mlp.linear_fc2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.visual.blocks.{i}.norm1.bias",
+      "pattern": "model.visual.blocks.{i}.norm1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.blocks.{i}.norm1.weight",
+      "pattern": "model.visual.blocks.{i}.norm1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.blocks.{i}.norm2.bias",
+      "pattern": "model.visual.blocks.{i}.norm2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.blocks.{i}.norm2.weight",
+      "pattern": "model.visual.blocks.{i}.norm2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.merger.linear_fc1.bias",
+      "pattern": "model.visual.merger.linear_fc1.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.merger.linear_fc1.weight",
+      "pattern": "model.visual.merger.linear_fc1.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.visual.merger.linear_fc2.bias",
+      "pattern": "model.visual.merger.linear_fc2.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.merger.linear_fc2.weight",
+      "pattern": "model.visual.merger.linear_fc2.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "model.visual.merger.norm.bias",
+      "pattern": "model.visual.merger.norm.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.merger.norm.weight",
+      "pattern": "model.visual.merger.norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.patch_embed.proj.bias",
+      "pattern": "model.visual.patch_embed.proj.bias",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "model.visual.patch_embed.proj.weight",
+      "pattern": "model.visual.patch_embed.proj.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 5
+    },
+    {
+      "role": "model.visual.pos_embed.weight",
+      "pattern": "model.visual.pos_embed.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.fc.weight",
+      "pattern": "mtp.fc.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.input_layernorm.weight",
+      "pattern": "mtp.layers.0.input_layernorm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "mtp.layers.0.mlp.experts.{i}.down_proj.weight",
+      "pattern": "mtp.layers.0.mlp.experts.{i}.down_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.mlp.experts.{i}.down_proj.weight_scale_inv",
+      "pattern": "mtp.layers.0.mlp.experts.{i}.down_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.mlp.experts.{i}.gate_proj.weight",
+      "pattern": "mtp.layers.0.mlp.experts.{i}.gate_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.mlp.experts.{i}.gate_proj.weight_scale_inv",
+      "pattern": "mtp.layers.0.mlp.experts.{i}.gate_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.mlp.experts.{i}.up_proj.weight",
+      "pattern": "mtp.layers.0.mlp.experts.{i}.up_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.mlp.experts.{i}.up_proj.weight_scale_inv",
+      "pattern": "mtp.layers.0.mlp.experts.{i}.up_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.mlp.gate.weight",
+      "pattern": "mtp.layers.0.mlp.gate.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.mlp.shared_expert.down_proj.weight",
+      "pattern": "mtp.layers.0.mlp.shared_expert.down_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.mlp.shared_expert.down_proj.weight_scale_inv",
+      "pattern": "mtp.layers.0.mlp.shared_expert.down_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.mlp.shared_expert.gate_proj.weight",
+      "pattern": "mtp.layers.0.mlp.shared_expert.gate_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.mlp.shared_expert.gate_proj.weight_scale_inv",
+      "pattern": "mtp.layers.0.mlp.shared_expert.gate_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.mlp.shared_expert.up_proj.weight",
+      "pattern": "mtp.layers.0.mlp.shared_expert.up_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.mlp.shared_expert.up_proj.weight_scale_inv",
+      "pattern": "mtp.layers.0.mlp.shared_expert.up_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.mlp.shared_expert_gate.weight",
+      "pattern": "mtp.layers.0.mlp.shared_expert_gate.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.post_attention_layernorm.weight",
+      "pattern": "mtp.layers.0.post_attention_layernorm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "mtp.layers.0.self_attn.k_norm.weight",
+      "pattern": "mtp.layers.0.self_attn.k_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "mtp.layers.0.self_attn.k_proj.weight",
+      "pattern": "mtp.layers.0.self_attn.k_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.self_attn.k_proj.weight_scale_inv",
+      "pattern": "mtp.layers.0.self_attn.k_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.self_attn.o_proj.weight",
+      "pattern": "mtp.layers.0.self_attn.o_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.self_attn.o_proj.weight_scale_inv",
+      "pattern": "mtp.layers.0.self_attn.o_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.self_attn.q_norm.weight",
+      "pattern": "mtp.layers.0.self_attn.q_norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "mtp.layers.0.self_attn.q_proj.weight",
+      "pattern": "mtp.layers.0.self_attn.q_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.self_attn.q_proj.weight_scale_inv",
+      "pattern": "mtp.layers.0.self_attn.q_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.self_attn.v_proj.weight",
+      "pattern": "mtp.layers.0.self_attn.v_proj.weight",
+      "dtypes": [
+        "F8_E4M3"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.layers.0.self_attn.v_proj.weight_scale_inv",
+      "pattern": "mtp.layers.0.self_attn.v_proj.weight_scale_inv",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "mtp.norm.weight",
+      "pattern": "mtp.norm.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "mtp.pre_fc_norm_embedding.weight",
+      "pattern": "mtp.pre_fc_norm_embedding.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "mtp.pre_fc_norm_hidden.weight",
+      "pattern": "mtp.pre_fc_norm_hidden.weight",
+      "dtypes": [
+        "BF16"
+      ],
+      "rank": 1
+    }
+  ]
+}

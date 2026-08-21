@@ -33,11 +33,11 @@ never at deploy.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .native import contract_info
+from .native import contract_info, contract_recipe, contract_verdict
 
 __all__ = [
     "Contract",
@@ -232,6 +232,54 @@ class Contract:
         if self._name is not None:
             return self._name
         return f"sha256:{self._digest[:8]}…"
+
+    # -- the bind verdict -------------------------------------------------
+
+    @property
+    def recipe(self) -> str:
+        """The conversion this lane's bytes are MADE by — ``dtype-cast`` or
+        ``fp8-rowwise`` — derived from the declarations and stored nowhere
+        (tcg#53). There is no ``recipe`` field and there must never be one."""
+
+        return contract_recipe(self._document)
+
+    def verdict(
+        self, files: Mapping[str, Iterable[Sequence[Any]]]
+    ) -> Any:  # tensorfs._tensorfs.Verdict
+        """Does this checkpoint bind to this lane, and if not, what would fix
+        it: ``satisfies`` | ``derivable`` | ``incompatible``.
+
+        ``files`` maps a member path to its header entries, each
+        ``(name, dtype, shape)`` or ``(name, dtype, shape, byte_length)``.
+        ``dtype`` is the CONTAINER's spelling (``"BF16"``, a ggml type name),
+        which is what the declarations list. An omitted byte length is
+        "not supplied" and skips the byte half of the fusion rule rather than
+        manufacturing a refusal out of an absent number.
+
+        THE SAME RULE THE GO BIND GATE APPLIES, not a Python approximation of
+        it: both call one implementation (``crates/tensorfs-core/src/verdict.rs``),
+        and ``scripts/prove-verdict-parity.sh`` runs both over one corpus and
+        diffs the renderings. A second implementation of an admit decision is a
+        second chance to admit a bind that should have been refused, which
+        stays invisible until a pod 500s.
+        """
+
+        members = [
+            (
+                path,
+                [
+                    (
+                        str(entry[0]),
+                        str(entry[1]),
+                        [int(dimension) for dimension in entry[2]],
+                        int(entry[3]) if len(entry) > 3 else 0,
+                    )
+                    for entry in tensors
+                ],
+            )
+            for path, tensors in files.items()
+        ]
+        return contract_verdict(self._document, members)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Contract):

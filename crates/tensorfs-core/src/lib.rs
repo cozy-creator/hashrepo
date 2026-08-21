@@ -37,6 +37,9 @@ pub mod stream;
 pub mod sync;
 pub mod tfm1;
 pub mod tfp1;
+/// The bind verdict: does this checkpoint satisfy this lane, and if not, is
+/// the gap a conversion? A Go-identical port of `verdict.go` + `match.go`.
+pub mod verdict;
 /// Workspace metadata rides the Turso engine beside the object store, so it
 /// shares the store's real-filesystem platform gate.
 #[cfg(all(feature = "workspace", any(unix, windows)))]

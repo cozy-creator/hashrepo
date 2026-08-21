@@ -690,8 +690,16 @@ fn the_shipped_library_is_pinned_by_digest() {
     // shipped contract without bumping its version fails this test.
     let expected: BTreeMap<&str, &str> = BTreeMap::from([
         (
+            "anima.diffsynth-bf16@1",
+            "f8680e192e1adf6552665bb4f76ed1ba55d564577375c9082eb0ecbbb162e4fc",
+        ),
+        (
             "dit.blocks-fused-qkv@1",
             "57f09073ca1a631bb173293c84e11f462089d0fa8cf9ce45e142fc33881a17a1",
+        ),
+        (
+            "ernie.diffusers-bf16@1",
+            "b4e726e157035529a98a594a211b3d085cc5c3577182ed1e3b9bb4c1d5811c67",
         ),
         (
             "flux1.diffusers-bf16@1",
@@ -710,6 +718,18 @@ fn the_shipped_library_is_pinned_by_digest() {
             "9ee028aea999f92c4d93609f59ba476f0c6aad8dee3269cee1a22abec97d199d",
         ),
         (
+            "joycaption.llava-bf16@1",
+            "5dbd004a169c4a86ae1725f86f0e693507aed55c7fc37b9e12780019c43e240d",
+        ),
+        (
+            "krea-2.diffusers-bf16@1",
+            "0b131eeb3e07392f109053569ae91fe3dcef967c6087dc11c262a09857007000",
+        ),
+        (
+            "ltx-2-upsampler.diffusers-bf16@1",
+            "395dc3c8ccb4acc80c69135df12bf3c965a5746c88ca2c94fd75359432427621",
+        ),
+        (
             "ltx-2.diffusers-bf16@1",
             "71038ae11883111d367077eec59a457b97c8746439c3b7bc0885555e26b7aa12",
         ),
@@ -726,8 +746,24 @@ fn the_shipped_library_is_pinned_by_digest() {
             "5f6b7b4a8cd070653607840b922c213a846838e35379737727111c4b0a8de56c",
         ),
         (
+            "musicgen.transformers-fp16@1",
+            "4d78d369020fe22b612b7403b16dc9cfd653fe0a4f918d2cc364780d3c6f8ce5",
+        ),
+        (
             "qwen-image.diffusers-bf16@1",
             "757379261ff69111f5e50a5cf2a066c6a118759f1dfe1f34b605f8a49325e673",
+        ),
+        (
+            "qwen3.6-27b-mtp.gguf-ud-q4-k-xl@1",
+            "e870540dc46209ffae0a881120f5152828e1236cddbb9fce73898e30a1a9e674",
+        ),
+        (
+            "qwen3.6-35b-a3b.vllm-fp8@1",
+            "18f738e4c4a7325a97d9810c1dd7de1aca9db4e080140c822c1e7b38325c8627",
+        ),
+        (
+            "rife.flownet-fp32@1",
+            "4133542da74e3738449a8681c5b38cacfbe8d66083b18f24764b4f0520ed411b",
         ),
         (
             "sd15.diffusers-bf16@1",
@@ -742,10 +778,6 @@ fn the_shipped_library_is_pinned_by_digest() {
             "364c0c537e54013eab72994a3e6bf0b913cfb76ab1627dc0822b95cf17b1b262",
         ),
         (
-            "ernie.diffusers-bf16@1",
-            "b4e726e157035529a98a594a211b3d085cc5c3577182ed1e3b9bb4c1d5811c67",
-        ),
-        (
             "sdxl.clip-g-split-qkv@1",
             "c1bbfc65a89a736154504f68296b2b8be3dc43364d4dc04a192c08a184bf64fa",
         ),
@@ -756,6 +788,10 @@ fn the_shipped_library_is_pinned_by_digest() {
         (
             "sdxl.diffusers-fp8-rowwise@1",
             "7b78f2e44382dc5a3fe413e0f8f0a62ba63efefc810123304151c2ded931ee37",
+        ),
+        (
+            "sdxl.diffusers-nvfp4-flat@1",
+            "7ec1ca7afd139e9b9a2cdc449913644f6b8db95528e65fffaae51b3ce02ad031",
         ),
         (
             "stable-audio.diffusers-fp16@1",

@@ -1,0 +1,529 @@
+{
+  "format": "tensorfs-contract-v1",
+  "name": "musicgen.transformers-fp16",
+  "version": 1,
+  "dtype": "float16",
+  "description": "GENERATED CANDIDATE - NOT RATIFIED. Meta MusicGen stereo-medium (MusicgenForConditionalGeneration): a single-file\ntransformers tree, flat F16. WHOLE TREE, deliberately, because the tree IS the model - the T5\ntext encoder, the EnCodec audio codec and the LM decoder are one checkpoint the endpoint loads\nwith one from_pretrained. The cross-family tie the stable-audio document warned about does NOT\nrecur: musicgen spells its T5 under a 'text_encoder.' prefix while stable-audio declares the\nsame 99 tensors in a separate component file under bare 'encoder.' names, so the two documents\nshare zero pattern spellings and cannot match each other's checkpoints. Derived mechanically by tensorfs.generate from headers only - no tensor byte was read. stereo-medium: 1004 tensors 65 declarations cover 1004 tensors (16 singleton, 49 indexed) dtypes: F16 x1004 NON-CONTIGUOUS index range: audio_encoder.decoder.layers.{i}.block.{i}.conv.bias hole 0: [4, 7, 10, 13]... (4 of 0..13) NON-CONTIGUOUS index range: audio_encoder.decoder.layers.{i}.block.{i}.conv.bias hole 1: [1, 3]... (2 of 0..3) NON-CONTIGUOUS index range: audio_encoder.decoder.layers.{i}.block.{i}.conv.weight_g hole 0: [4, 7, 10, 13]... (4 of 0..13) NON-CONTIGUOUS index range: audio_encoder.decoder.layers.{i}.block.{i}.conv.weight_g hole 1: [1, 3]... (2 of 0..3) NON-CONTIGUOUS index range: audio_encoder.decoder.layers.{i}.block.{i}.conv.weight_v hole 0: [4, 7, 10, 13]... (4 of 0..13) NON-CONTIGUOUS index range: audio_encoder.decoder.layers.{i}.block.{i}.conv.weight_v hole 1: [1, 3]... (2 of 0..3) NON-CONTIGUOUS index range: audio_encoder.decoder.layers.{i}.conv.bias hole 0: [0, 3, 6, 9, 12, 15]... (6 of 0..15) NON-CONTIGUOUS index range: audio_encoder.decoder.layers.{i}.conv.weight_g hole 0: [0, 3, 6, 9, 12, 15]... (6 of 0..15) NON-CONTIGUOUS index range: audio_encoder.decoder.layers.{i}.conv.weight_v hole 0: [0, 3, 6, 9, 12, 15]... (6 of 0..15) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.block.{i}.conv.bias hole 0: [1, 4, 7, 10]... (4 of 0..10) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.block.{i}.conv.bias hole 1: [1, 3]... (2 of 0..3) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.block.{i}.conv.weight_g hole 0: [1, 4, 7, 10]... (4 of 0..10) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.block.{i}.conv.weight_g hole 1: [1, 3]... (2 of 0..3) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.block.{i}.conv.weight_v hole 0: [1, 4, 7, 10]... (4 of 0..10) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.block.{i}.conv.weight_v hole 1: [1, 3]... (2 of 0..3) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.conv.bias hole 0: [0, 3, 6, 9, 12, 15]... (6 of 0..15) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.conv.weight_g hole 0: [0, 3, 6, 9, 12, 15]... (6 of 0..15) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.conv.weight_v hole 0: [0, 3, 6, 9, 12, 15]... (6 of 0..15) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.lstm.bias_hh_l0 hole 0: [13]... (1 of 0..13) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.lstm.bias_hh_l1 hole 0: [13]... (1 of 0..13) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.lstm.bias_ih_l0 hole 0: [13]... (1 of 0..13) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.lstm.bias_ih_l1 hole 0: [13]... (1 of 0..13) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.lstm.weight_hh_l0 hole 0: [13]... (1 of 0..13) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.lstm.weight_hh_l1 hole 0: [13]... (1 of 0..13) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.lstm.weight_ih_l0 hole 0: [13]... (1 of 0..13) NON-CONTIGUOUS index range: audio_encoder.encoder.layers.{i}.lstm.weight_ih_l1 hole 0: [13]... (1 of 0..13) DEGENERATE hole (one value - probably not an index): audio_encoder.encoder.layers.{i}.lstm.bias_hh_l0 hole 0 == 13 DEGENERATE hole (one value - probably not an index): audio_encoder.encoder.layers.{i}.lstm.bias_hh_l1 hole 0 == 13 DEGENERATE hole (one value - probably not an index): audio_encoder.encoder.layers.{i}.lstm.bias_ih_l0 hole 0 == 13 DEGENERATE hole (one value - probably not an index): audio_encoder.encoder.layers.{i}.lstm.bias_ih_l1 hole 0 == 13 DEGENERATE hole (one value - probably not an index): audio_encoder.encoder.layers.{i}.lstm.weight_hh_l0 hole 0 == 13 DEGENERATE hole (one value - probably not an index): audio_encoder.encoder.layers.{i}.lstm.weight_hh_l1 hole 0 == 13 DEGENERATE hole (one value - probably not an index): audio_encoder.encoder.layers.{i}.lstm.weight_ih_l0 hole 0 == 13 DEGENERATE hole (one value - probably not an index): audio_encoder.encoder.layers.{i}.lstm.weight_ih_l1 hole 0 == 13. RATIFICATION OWED: (1) The repo also ships a state_dict.bin / compression_state_dict.bin pair (the audiocraft\npackaging) and an fp32 index. Only the safetensors packaging is described. (2) ROLES are mechanical (role == pattern). Rename any tensor whose bytes are the same bytes another packaging spells differently - that is the only thing that makes a cross-packaging derive possible instead of a refusal. (3) FUSIONS are undeclared. A header cannot see a fused axis, so a fused qkv/gate-up must be declared by a human reading the model's config (head count, hidden size); a wrong one is a ~90%-error split that never crashes. (4) SETS are undeclared (no subset-snapshot groups). (5) COMPONENT SCOPE is the caller's: declaring a shared encoder ties this document to every family that ships the same one (tensorfs#121).",
+  "tensors": [
+    {
+      "role": "audio_encoder.decoder.layers.1.lstm.bias_hh_l0",
+      "pattern": "audio_encoder.decoder.layers.1.lstm.bias_hh_l0",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "audio_encoder.decoder.layers.1.lstm.bias_hh_l1",
+      "pattern": "audio_encoder.decoder.layers.1.lstm.bias_hh_l1",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "audio_encoder.decoder.layers.1.lstm.bias_ih_l0",
+      "pattern": "audio_encoder.decoder.layers.1.lstm.bias_ih_l0",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "audio_encoder.decoder.layers.1.lstm.bias_ih_l1",
+      "pattern": "audio_encoder.decoder.layers.1.lstm.bias_ih_l1",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "audio_encoder.decoder.layers.1.lstm.weight_hh_l0",
+      "pattern": "audio_encoder.decoder.layers.1.lstm.weight_hh_l0",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "audio_encoder.decoder.layers.1.lstm.weight_hh_l1",
+      "pattern": "audio_encoder.decoder.layers.1.lstm.weight_hh_l1",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "audio_encoder.decoder.layers.1.lstm.weight_ih_l0",
+      "pattern": "audio_encoder.decoder.layers.1.lstm.weight_ih_l0",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "audio_encoder.decoder.layers.1.lstm.weight_ih_l1",
+      "pattern": "audio_encoder.decoder.layers.1.lstm.weight_ih_l1",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "audio_encoder.decoder.layers.{i}.block.{i}.conv.bias",
+      "pattern": "audio_encoder.decoder.layers.{i}.block.{i}.conv.bias",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "audio_encoder.decoder.layers.{i}.block.{i}.conv.weight_g",
+      "pattern": "audio_encoder.decoder.layers.{i}.block.{i}.conv.weight_g",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 3
+    },
+    {
+      "role": "audio_encoder.decoder.layers.{i}.block.{i}.conv.weight_v",
+      "pattern": "audio_encoder.decoder.layers.{i}.block.{i}.conv.weight_v",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 3
+    },
+    {
+      "role": "audio_encoder.decoder.layers.{i}.conv.bias",
+      "pattern": "audio_encoder.decoder.layers.{i}.conv.bias",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "audio_encoder.decoder.layers.{i}.conv.weight_g",
+      "pattern": "audio_encoder.decoder.layers.{i}.conv.weight_g",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 3
+    },
+    {
+      "role": "audio_encoder.decoder.layers.{i}.conv.weight_v",
+      "pattern": "audio_encoder.decoder.layers.{i}.conv.weight_v",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 3
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.block.{i}.conv.bias",
+      "pattern": "audio_encoder.encoder.layers.{i}.block.{i}.conv.bias",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.block.{i}.conv.weight_g",
+      "pattern": "audio_encoder.encoder.layers.{i}.block.{i}.conv.weight_g",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 3
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.block.{i}.conv.weight_v",
+      "pattern": "audio_encoder.encoder.layers.{i}.block.{i}.conv.weight_v",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 3
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.conv.bias",
+      "pattern": "audio_encoder.encoder.layers.{i}.conv.bias",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.conv.weight_g",
+      "pattern": "audio_encoder.encoder.layers.{i}.conv.weight_g",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 3
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.conv.weight_v",
+      "pattern": "audio_encoder.encoder.layers.{i}.conv.weight_v",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 3
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.lstm.bias_hh_l0",
+      "pattern": "audio_encoder.encoder.layers.{i}.lstm.bias_hh_l0",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.lstm.bias_hh_l1",
+      "pattern": "audio_encoder.encoder.layers.{i}.lstm.bias_hh_l1",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.lstm.bias_ih_l0",
+      "pattern": "audio_encoder.encoder.layers.{i}.lstm.bias_ih_l0",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.lstm.bias_ih_l1",
+      "pattern": "audio_encoder.encoder.layers.{i}.lstm.bias_ih_l1",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.lstm.weight_hh_l0",
+      "pattern": "audio_encoder.encoder.layers.{i}.lstm.weight_hh_l0",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.lstm.weight_hh_l1",
+      "pattern": "audio_encoder.encoder.layers.{i}.lstm.weight_hh_l1",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.lstm.weight_ih_l0",
+      "pattern": "audio_encoder.encoder.layers.{i}.lstm.weight_ih_l0",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "audio_encoder.encoder.layers.{i}.lstm.weight_ih_l1",
+      "pattern": "audio_encoder.encoder.layers.{i}.lstm.weight_ih_l1",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "audio_encoder.quantizer.layers.{i}.codebook.cluster_size",
+      "pattern": "audio_encoder.quantizer.layers.{i}.codebook.cluster_size",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "audio_encoder.quantizer.layers.{i}.codebook.embed",
+      "pattern": "audio_encoder.quantizer.layers.{i}.codebook.embed",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "audio_encoder.quantizer.layers.{i}.codebook.embed_avg",
+      "pattern": "audio_encoder.quantizer.layers.{i}.codebook.embed_avg",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "audio_encoder.quantizer.layers.{i}.codebook.inited",
+      "pattern": "audio_encoder.quantizer.layers.{i}.codebook.inited",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "decoder.lm_heads.{i}.weight",
+      "pattern": "decoder.lm_heads.{i}.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "decoder.model.decoder.embed_positions.weights",
+      "pattern": "decoder.model.decoder.embed_positions.weights",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "decoder.model.decoder.embed_tokens.{i}.weight",
+      "pattern": "decoder.model.decoder.embed_tokens.{i}.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "decoder.model.decoder.layer_norm.bias",
+      "pattern": "decoder.model.decoder.layer_norm.bias",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "decoder.model.decoder.layer_norm.weight",
+      "pattern": "decoder.model.decoder.layer_norm.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.encoder_attn.k_proj.weight",
+      "pattern": "decoder.model.decoder.layers.{i}.encoder_attn.k_proj.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.encoder_attn.out_proj.weight",
+      "pattern": "decoder.model.decoder.layers.{i}.encoder_attn.out_proj.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.encoder_attn.q_proj.weight",
+      "pattern": "decoder.model.decoder.layers.{i}.encoder_attn.q_proj.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.encoder_attn.v_proj.weight",
+      "pattern": "decoder.model.decoder.layers.{i}.encoder_attn.v_proj.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.encoder_attn_layer_norm.bias",
+      "pattern": "decoder.model.decoder.layers.{i}.encoder_attn_layer_norm.bias",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.encoder_attn_layer_norm.weight",
+      "pattern": "decoder.model.decoder.layers.{i}.encoder_attn_layer_norm.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.fc1.weight",
+      "pattern": "decoder.model.decoder.layers.{i}.fc1.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.fc2.weight",
+      "pattern": "decoder.model.decoder.layers.{i}.fc2.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.final_layer_norm.bias",
+      "pattern": "decoder.model.decoder.layers.{i}.final_layer_norm.bias",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.final_layer_norm.weight",
+      "pattern": "decoder.model.decoder.layers.{i}.final_layer_norm.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.self_attn.k_proj.weight",
+      "pattern": "decoder.model.decoder.layers.{i}.self_attn.k_proj.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.self_attn.out_proj.weight",
+      "pattern": "decoder.model.decoder.layers.{i}.self_attn.out_proj.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.self_attn.q_proj.weight",
+      "pattern": "decoder.model.decoder.layers.{i}.self_attn.q_proj.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.self_attn.v_proj.weight",
+      "pattern": "decoder.model.decoder.layers.{i}.self_attn.v_proj.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.self_attn_layer_norm.bias",
+      "pattern": "decoder.model.decoder.layers.{i}.self_attn_layer_norm.bias",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "decoder.model.decoder.layers.{i}.self_attn_layer_norm.weight",
+      "pattern": "decoder.model.decoder.layers.{i}.self_attn_layer_norm.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "enc_to_dec_proj.bias",
+      "pattern": "enc_to_dec_proj.bias",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "enc_to_dec_proj.weight",
+      "pattern": "enc_to_dec_proj.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_encoder.encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight",
+      "pattern": "text_encoder.encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_encoder.encoder.block.{i}.layer.0.SelfAttention.k.weight",
+      "pattern": "text_encoder.encoder.block.{i}.layer.0.SelfAttention.k.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_encoder.encoder.block.{i}.layer.0.SelfAttention.o.weight",
+      "pattern": "text_encoder.encoder.block.{i}.layer.0.SelfAttention.o.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_encoder.encoder.block.{i}.layer.0.SelfAttention.q.weight",
+      "pattern": "text_encoder.encoder.block.{i}.layer.0.SelfAttention.q.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_encoder.encoder.block.{i}.layer.0.SelfAttention.v.weight",
+      "pattern": "text_encoder.encoder.block.{i}.layer.0.SelfAttention.v.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_encoder.encoder.block.{i}.layer.1.DenseReluDense.wi.weight",
+      "pattern": "text_encoder.encoder.block.{i}.layer.1.DenseReluDense.wi.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_encoder.encoder.block.{i}.layer.1.DenseReluDense.wo.weight",
+      "pattern": "text_encoder.encoder.block.{i}.layer.1.DenseReluDense.wo.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    },
+    {
+      "role": "text_encoder.encoder.block.{i}.layer.{i}.layer_norm.weight",
+      "pattern": "text_encoder.encoder.block.{i}.layer.{i}.layer_norm.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "text_encoder.encoder.final_layer_norm.weight",
+      "pattern": "text_encoder.encoder.final_layer_norm.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 1
+    },
+    {
+      "role": "text_encoder.shared.weight",
+      "pattern": "text_encoder.shared.weight",
+      "dtypes": [
+        "F16"
+      ],
+      "rank": 2
+    }
+  ]
+}
