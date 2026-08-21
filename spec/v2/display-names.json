@@ -3,8 +3,10 @@
  "names": {
   "anima.net@1+plain.bf16@1": "anima.diffsynth-bf16@1",
   "ernie.diffusers@1+plain.bf16@1": "ernie.diffusers-bf16@1",
+  "flux1.diffusers@1+plain.bf16@1": "flux1.diffusers-bf16@1",
   "flux2-klein.diffusers@1+plain.bf16@1": "flux2-klein.diffusers-bf16@1",
   "hidream-o1.diffusers@1+plain.bf16@1": "hidream-o1.diffusers-bf16@1",
+  "internvl-u.diffusers@1+plain.bf16@1": "internvl-u.diffusers-bf16@1",
   "joycaption.llava@1+plain.bf16@1": "joycaption.llava-bf16@1",
   "ltx2-upsampler.diffusers@1+plain.bf16@1": "ltx-2-upsampler.diffusers-bf16@1",
   "ltx2.diffusers@1+plain.bf16@1": "ltx-2.diffusers-bf16@1",
@@ -12,11 +14,15 @@
   "minimax-h3.diffusers@1+plain.bf16@1": "minimax.h3-dit-diffusers@1",
   "minimax-h3.native@1+plain.bf16@1": "minimax.h3-dit-native@1",
   "musicgen.transformers@1+plain.f16@1": "musicgen.transformers-fp16@1",
+  "qwen-image.diffusers@1+plain.bf16@1": "qwen-image.diffusers-bf16@1",
+  "rife.flownet@1+plain.f32@1": "rife.flownet-fp32@1",
   "sd15.diffusers@1+plain.bf16@1": "sd15.diffusers-bf16@1",
   "sd2.diffusers@1+plain.bf16@1": "sd2.diffusers-bf16@1",
   "sdxl.diffusers@1+cozy.fp8-rowwise@1": "sdxl.diffusers-fp8-rowwise@1",
   "sdxl.diffusers@1+cozy.nvfp4-flat@1": "sdxl.diffusers-nvfp4-flat@1",
   "sdxl.diffusers@1+plain.bf16@1": "sdxl.diffusers-bf16@1",
+  "stable-audio.diffusers@1+plain.f16@1": "stable-audio.diffusers-fp16@1",
+  "trellis2.dit@1+plain.bf16@1": "trellis2.dit-bf16@1",
   "wan22.diffusers@1+plain.bf16@1": "wan22.diffusers-bf16@1",
   "z-image.diffusers@1+plain.bf16@1": "z-image.diffusers-bf16@1"
  }

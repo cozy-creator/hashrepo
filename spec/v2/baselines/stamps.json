@@ -1,5 +1,5 @@
 {
- "_": "Every banked checkpoint's expected v2 STAMP. Nineteen of the twenty real trees stamp; the twentieth is recorded as unstamped with its reason, because a gap that is written down is a gap and a gap that is silent is a bug.",
+ "_": "Every banked checkpoint's expected v2 STAMP. All but one of the real trees stamp; the exception is recorded under `unstamped` with its reason, because a gap that is written down is a gap and a gap that is silent is a bug.\n\nTHE `-hub` ROWS ARE THE ONES THAT MATTER MOST. A topology extracted from an upstream repo is only worth anything if the tree TENSORHUB SERVES is that topology, and the two differ in ways that are invisible from upstream: `krea-2-hub` is 20 members where krea ships 5, `qwen-image-hub` is 30 where Qwen ships 14, and `stable-audio-hub` is F16 throughout where stabilityai ships F32. Every one of them stamps the topology extracted from upstream, which is the property tensorfs#153 found SEVEN older records failing. Two of them stamp the SAME pair from two different hub repos (`qwen-image` / `qwen-image-edit-2511`, and `stable-audio-open` / `foundation-1`), which is where 'one document serves both checkpoints' stops being a claim carried over from a v1 description.",
  "stamps": {
   "anima-base": "anima.net@1+plain.bf16@1",
   "anima-turbo": "anima.diffusion-model@1+plain.bf16@1",
@@ -20,9 +20,21 @@
   "sdxl-inpainting": "sdxl-inpainting.diffusers@1+plain.f32@1",
   "wan22": "wan22.diffusers@1+plain.f32@1",
   "z-image": "z-image.diffusers@1+plain.bf16@1",
-  "sdxl-inpainting-bf16": "sdxl-inpainting.diffusers@1+plain.bf16@1"
+  "sdxl-inpainting-bf16": "sdxl-inpainting.diffusers@1+plain.bf16@1",
+  "flux1": "flux1.diffusers@1+plain.bf16@1",
+  "krea-2": "krea-2.diffusers@1+plain.bf16@1",
+  "qwen-image": "qwen-image.diffusers@1+plain.bf16@1",
+  "internvl-u": "internvl-u.diffusers@1+plain.bf16@1",
+  "trellis2": "trellis2.dit@1+plain.bf16@1",
+  "rife": "rife.flownet@1+plain.f32@1",
+  "stable-audio": "stable-audio.diffusers@1+plain.f32@1",
+  "qwen-image-hub": "qwen-image.diffusers@1+plain.bf16@1",
+  "qwen-image-edit-hub": "qwen-image.diffusers@1+plain.bf16@1",
+  "stable-audio-hub": "stable-audio.diffusers@1+plain.f16@1",
+  "foundation-1-hub": "stable-audio.diffusers@1+plain.f16@1",
+  "krea-2-hub": "krea-2.diffusers@1+plain.bf16@1"
  },
  "unstamped": {
-  "qwen3.6-35b-a3b-fp8": "NO v2 TOPOLOGY, and the reason is a MEASUREMENT, not an oversight. Qwen/Qwen3.6-35B-A3B-FP8 carries 64196 tensors across 42 members; the bf16 release it is nominally a quantization of carries 1045 across 26. The fp8 release is not a requant of the bf16 packaging \u2014 it also splits the MoE experts \u2014 so it is a DIFFERENT topology, needing its own extraction and its own vllm rule. v1's `qwen3.6-35b-a3b.vllm-fp8@1` answered `satisfies` here on a 92-declaration pattern list, which is the vacuous admit v2 refuses to reproduce. Recorded, not papered over."
+  "qwen3.6-35b-a3b-fp8": "NO v2 TOPOLOGY, and the reason is a MEASUREMENT, not an oversight. Qwen/Qwen3.6-35B-A3B-FP8 carries 64196 tensors across 42 members; the bf16 release it is nominally a quantization of carries 1045 across 26. The fp8 release is not a requant of the bf16 packaging — it also splits the MoE experts — so it is a DIFFERENT topology, needing its own extraction and its own vllm rule. v1's `qwen3.6-35b-a3b.vllm-fp8@1` answered `satisfies` here on a 92-declaration pattern list, which is the vacuous admit v2 refuses to reproduce. Recorded, not papered over."
  }
 }

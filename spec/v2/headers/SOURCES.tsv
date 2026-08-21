@@ -27,4 +27,21 @@ ltx-2	hf:diffusers/LTX-2.3-Distilled-Diffusers:transformer,hf:diffusers/LTX-2.3-
 wan22	hf:Wan-AI/Wan2.2-T2V-A14B-Diffusers:transformer,hf:Wan-AI/Wan2.2-T2V-A14B-Diffusers:transformer_2,hf:Wan-AI/Wan2.2-T2V-A14B-Diffusers:vae,hf:Wan-AI/Wan2.2-T2V-A14B-Diffusers:text_encoder	Wan 2.2 T2V A14B — two denoisers	
 z-image	hf:Tongyi-MAI/Z-Image-Turbo:transformer,hf:Tongyi-MAI/Z-Image-Turbo:vae,hf:Tongyi-MAI/Z-Image-Turbo:text_encoder	Z-Image Turbo	
 stable-audio	hf:stabilityai/stable-audio-open-1.0:transformer,hf:stabilityai/stable-audio-open-1.0:vae,hf:stabilityai/stable-audio-open-1.0:text_encoder,hf:stabilityai/stable-audio-open-1.0:projection_model	Stable Audio Open 1.0	
+qwen-image	hf:Qwen/Qwen-Image:transformer,hf:Qwen/Qwen-Image:vae,hf:Qwen/Qwen-Image:text_encoder	Qwen-Image, diffusers multifolder — the upstream of tensorhub/qwen-image
+internvl-u	hf:InternVL-U/InternVL-U@f012d760e69712bb47f7d3d09a24280f346cee01:generation_decoder,hf:InternVL-U/InternVL-U@f012d760e69712bb47f7d3d09a24280f346cee01:vae,hf:InternVL-U/InternVL-U@f012d760e69712bb47f7d3d09a24280f346cee01:vlm	InternVL-U at the PUBLIC UNGATED original's pinned revision — the F32 output island is real and measured
+trellis2	hf:microsoft/TRELLIS.2-4B@af44b45f2e35a493886929c6d786e563ec68364d:ckpts	TRELLIS.2-4B's whole ckpts/ tree, upstream's own flat layout and not a diffusers one. NINE members in ONE directory: three different bf16 DiTs (two of them shipped twice), and four fp16 autoencoders — which is why component grouping is by key DISJOINTNESS and not by folder.
+krea-2	hf:krea/Krea-2-Raw:transformer,hf:krea/Krea-2-Raw:vae,hf:krea/Krea-2-Raw:text_encoder	Krea 2 Raw, diffusers multifolder. Gated: read with the fleet's own HF_TOKEN, header ranges only. The single-file `raw.safetensors` at the root is a SECOND packaging and is excluded by taking the subfolders.
+rife	hub:tensorhub/rife-4.25@prod	RIFE v4.25's flownet. THE ONE SOURCE WITH NO UPSTREAM TREE: `cozy_rife.save_artifact` writes it pod-side out of Practical-RIFE 4.25's flownet.pkl, so the checkpoint tensorhub serves IS the reference and nothing on HuggingFace is it. Needs COZY_HUB_TOKEN.
+# THE PUBLISHED PACKAGING. A topology extracted from an upstream repo is only
+# useful if the tree TENSORHUB SERVES is that topology, and the two are not the
+# same thing: the hub repacks shard counts and sometimes the element type. These
+# rows are the checkpoints prod actually binds, pinned by DIGEST so a later
+# release cut cannot move them, and spec/v2/baselines/stamps.json asserts what
+# each one stamps. They are proof, not a second reference — no CORPUS.tsv row
+# extracts a topology from them.
+qwen-image-hub	hub:tensorhub/qwen-image@sha256:0780e58ef8ec16e095668e95a9ccfc87b9af4e41b3dc01b8ef7e2755d4f1c809	the bf16 qwen-image checkpoint prod binds — 30 members where upstream ships 14, same 2856 tensors
+qwen-image-edit-hub	hub:tensorhub/qwen-image-edit-2511@sha256:53058727d177b9e4ee2721b51f817154ba7ef46c7d93b107385549777549e548	the native-editing checkpoint. ONE topology covers both repos, and this is where that stops being a claim.
+stable-audio-hub	hub:tensorhub/stable-audio-open@prod	what stable-audio-open serves: the SAME 915 tensors as upstream, in F16 where upstream is F32
+foundation-1-hub	hub:tensorhub/foundation-1@prod	the second endpoint on that one topology
+krea-2-hub	hub:tensorhub/krea-2-raw@prod	20 members where upstream ships 5 — the shard-flattening case, on our own packaging
 sdxl-inpainting-bf16	recast:sdxl-inpainting:BF16	THE HOLE, in the packaging that exposes it: the real 9-channel inpainting UNet re-typed to bf16, which is what tensorhub publishes. v1 ADMITS this into the SDXL lane.	

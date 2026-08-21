@@ -163,3 +163,50 @@ func comparePin(t *testing.T, kind, handle, digest string, pins map[string]strin
 	}
 	return 1
 }
+
+// TestEveryDeclaredSourceWasActuallyBanked.
+//
+// SOURCES.tsv is a DECLARATION and the banked headers are the WORK; nothing
+// connected the two. tensorfs#151 shipped `flux1` and `stable-audio` rows whose
+// bank had never been run — the repos are gated and the run answered 401 — and
+// no gate anywhere went red, because every test in this tree enumerates
+// `spec/v2/headers/*.json.gz` and a header that was never written is simply not
+// in the glob. The corpus was short two checkpoints and the suite counted what
+// it had rather than what was owed.
+//
+// So: a declared source with no banked header REFUSES, and an orphan header no
+// row can regenerate refuses too. Both halves matter — the second is what stops
+// a header from becoming un-reproducible the day its source row is edited away.
+func TestEveryDeclaredSourceWasActuallyBanked(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("spec", "v2", "headers", "SOURCES.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	banked := loadBankedHeaders(t)
+	declared := map[string]bool{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		identifier := strings.SplitN(line, "\t", 2)[0]
+		declared[identifier] = true
+		if _, found := banked[identifier]; !found {
+			t.Errorf("SOURCES.tsv declares %q and spec/v2/headers/%s.json.gz does not exist: "+
+				"the bank was never run for it, or it failed and the failure was not read",
+				identifier, identifier)
+		}
+	}
+	if len(declared) == 0 {
+		t.Fatal("SOURCES.tsv parsed to nothing, so this proves nothing")
+	}
+	for _, identifier := range sortedNames(banked) {
+		if !declared[identifier] {
+			t.Errorf("spec/v2/headers/%s.json.gz is banked and SOURCES.tsv does not declare it: "+
+				"nothing can regenerate it", identifier)
+		}
+	}
+	if !t.Failed() {
+		t.Logf("%d declared sources, %d banked headers, and the two sets are equal",
+			len(declared), len(banked))
+	}
+}
