@@ -250,6 +250,7 @@ def main() -> int:
     arguments = parser.parse_args()
 
     sources: dict[str, list[Observed]] = {}
+    sharded = False
     for raw in arguments.source:
         label, _, refs = raw.partition("=")
         if not label or not refs:
@@ -262,13 +263,20 @@ def main() -> int:
             print(f"    {url.rsplit('/', 1)[-1]}: {len(entries)} tensors", file=sys.stderr)
             found.extend(entries)
         sources[label] = found
+        # A source that resolved to SEVERAL members makes every declaration
+        # optional — the matcher runs per member file, so all-required over a
+        # sharded checkpoint refuses the tree this document was derived from.
+        # Only this loop knows the member count; `candidate` sees one flat list.
+        if len(urls) > 1:
+            sharded = True
 
     pins = list(arguments.literal)
     if arguments.pin_trivial:
         # `fragment=True` only to keep this throwaway pass from tripping the
         # lane-dtype refusal; the real pass below applies it for real.
         _, first = candidate(
-            sources, name=arguments.name, version=arguments.version, fragment=True
+            sources, name=arguments.name, version=arguments.version, fragment=True,
+            sharded=sharded,
         )
         trivial: dict[str, list[int | None]] = {}
         for pattern, position, value in first.degenerate_holes:
@@ -299,6 +307,7 @@ def main() -> int:
         summary=arguments.summary,
         ratification=arguments.ratify,
         ratified=arguments.ratified,
+        sharded=sharded,
     )
     for line in report.lines():
         print(f"  {line}", file=sys.stderr)

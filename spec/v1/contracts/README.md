@@ -173,20 +173,24 @@ guessing is worse than owing: `role` (mechanically the pattern), `fusion` (a
 header cannot see a fused axis; a wrong one is the ~90%-error split that never
 crashes) and `sets`.
 
-⚠️ **`required` is derived per SOURCE and matching happens per MEMBER FILE, and
-those are not the same thing.** A source that resolves to several shards is
-flattened into one tensor list, so every declaration comes out `required` — but
-the bind gate builds one `ArtifactFile` per `.safetensors` and never groups an
-index's shards (tensorhub `internal/bindgate/bindgate.go:388`), so an
-all-`required` document over a sharded checkpoint demands every declaration of
-every shard and **refuses the tree it was generated from**. tensorfs#150 found
-all three multi-shard candidates in that state and flipped them to optional,
-which is the convention `verdict.go` already states ("a multifolder lane
-document is all-optional declarations") and every hand-authored multi-file
-document here already follows. Until the generator is member-aware
-(tensorfs#151), a generated document whose source has more than one member must
-have its `required` flags reviewed by hand — and the cheap proof either way is
-`Contract::verdict` over that checkpoint's own headers.
+⚠️ **`required` is derived per SOURCE; matching happens per MEMBER FILE.** Those
+are two axes of one question, and only the first is visible to `candidate()` —
+it sees one flat tensor list per source. The bind gate builds one `ArtifactFile`
+per `.safetensors` and never groups an index's shards (tensorhub
+`internal/bindgate/bindgate.go:388`), so an all-`required` document over a
+sharded checkpoint demands every declaration of every shard and **refuses the
+tree it was generated from**. tensorfs#150 found all three multi-shard
+candidates in exactly that state. `generate-contract.py` now counts the members
+a ref resolves to and passes `sharded=`, which makes every declaration optional
+— the convention `verdict.go` already states ("a multifolder lane document is
+all-optional declarations") and every hand-authored multi-file document here
+already follows. The cheap proof either way is `Contract::verdict` over that
+checkpoint's own headers; run it before believing a new document.
+
+`fusion` stays underivable on purpose, so the ratified answers for this set live
+in `scripts/declare-ratified-fusions.py`, which `generate-the-130-set.sh` calls
+for the two documents that carry one. A fusion named there that the document
+does not declare is a refusal, not a warning.
 
 A LANE's `dtype` is derived only when the header settles it beyond argument
 (one element type, or one plus an F32 island); anything mixed REFUSES with
