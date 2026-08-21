@@ -34,10 +34,49 @@ type File struct {
 	Chunks    []Chunk `json:"chunks,omitempty"`
 }
 
+// Derivation is the edge that makes a DERIVED tree an identity instead of a
+// pile of bytes: this tree is that tree's chunks, read through a named layout
+// morphism.
+//
+// It rides in the manifest and not beside it because THE MANIFEST IS THE LOAD
+// PLAN. A reader with the manifest has the chunk list and the arrangement to
+// apply to it, which is everything the fill path needs; a derivation edge kept
+// in a database would make the plan un-portable, and a checkpoint that only
+// loads correctly next to a hub is not a shareable file.
+type Derivation struct {
+	// Source is the manifest digest of the tree this one is derived from.
+	Source Ref `json:"source"`
+	// Morphism is the bridge id — `<from-layout>><to-layout>`. It is the whole
+	// of what this derivation DOES; the chunk list says what it does it to.
+	Morphism string `json:"morphism"`
+}
+
+// Validate checks the edge's structure. The morphism must be a bridge id and
+// not a bare handle: a derived tree has to say which arrangement it came FROM,
+// or applying it backwards is guesswork.
+func (d Derivation) Validate() error {
+	if d.Source.hex == "" {
+		return errors.New("a derivation requires the source tree's manifest digest")
+	}
+	from, to, err := ParseBridge(d.Morphism)
+	if err != nil {
+		return fmt.Errorf("derivation morphism: %w", err)
+	}
+	if from == to {
+		return fmt.Errorf("derivation morphism %q arranges %s as itself, which "+
+			"derives nothing", d.Morphism, from)
+	}
+	return nil
+}
+
 // Manifest is a deterministic repository root.
 type Manifest struct {
 	Format int    `json:"format"`
 	Files  []File `json:"files"`
+	// Derived is set on a derived tree and absent on a stored one. Absent is
+	// the overwhelming majority and it encodes to nothing, so every manifest
+	// written before layouts existed hashes to exactly what it always did.
+	Derived *Derivation `json:"derived_from,omitempty"`
 }
 
 func validatePath(value string) error {
@@ -165,9 +204,14 @@ func (m Manifest) Canonical() ([]byte, error) {
 	if m.Format != FormatV1 {
 		return nil, fmt.Errorf("unsupported manifest format %d; v1 accepts only 1", m.Format)
 	}
+	if m.Derived != nil {
+		if err := m.Derived.Validate(); err != nil {
+			return nil, err
+		}
+	}
 	files := make([]File, len(m.Files))
 	copy(files, m.Files)
-	copyOf := Manifest{Format: m.Format, Files: files}
+	copyOf := Manifest{Format: m.Format, Files: files, Derived: m.Derived}
 	sort.Slice(copyOf.Files, func(i, j int) bool { return copyOf.Files[i].Path < copyOf.Files[j].Path })
 	seen := map[string]bool{}
 	folded := map[string]bool{}
@@ -279,8 +323,9 @@ func (m *Manifest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var wire struct {
-		Format *int    `json:"format"`
-		Files  *[]File `json:"files"`
+		Format  *int        `json:"format"`
+		Files   *[]File     `json:"files"`
+		Derived *Derivation `json:"derived_from"`
 	}
 	if err := decodeOneJSON(data, &wire, "manifest"); err != nil {
 		return err
@@ -288,7 +333,7 @@ func (m *Manifest) UnmarshalJSON(data []byte) error {
 	if wire.Format == nil || wire.Files == nil {
 		return errors.New("manifest requires format and a non-null files array")
 	}
-	decoded := Manifest{Format: *wire.Format, Files: *wire.Files}
+	decoded := Manifest{Format: *wire.Format, Files: *wire.Files, Derived: wire.Derived}
 	if _, err := decoded.Canonical(); err != nil {
 		return err
 	}
@@ -304,6 +349,45 @@ func (m Manifest) Digest() (Ref, error) {
 		return Ref{}, err
 	}
 	sum := sha256.Sum256(data)
+	return Ref{hex: hex.EncodeToString(sum[:])}, nil
+}
+
+// DerivedDigest is a derived tree's CONTENT identity, computed over the source
+// digests it references and the morphism applied to them.
+//
+// The point is that identity does not require the bytes. A tree arranged
+// `channels_last-2d@1` out of a stored `contiguous@1` one has a name before
+// anything is materialized, so the storage tier can decide whether to
+// materialize it at all — and two producers deriving the same thing arrive at
+// the same name without talking to each other.
+//
+// CAS HASHING STAYS DUMB. This is not a content hash of the derived bytes and
+// it is not an input to the object store; every chunk in that store is still
+// addressed by the sha256 of exactly the bytes it holds. This digest names a
+// DERIVATION, and it is recomputed from its inputs on every call rather than
+// written down anywhere — a stored copy is a second answer waiting to drift
+// from the first.
+func (m Manifest) DerivedDigest() (Ref, error) {
+	if m.Derived == nil {
+		return Ref{}, errors.New("a manifest with no derivation has no derived digest")
+	}
+	if err := m.Derived.Validate(); err != nil {
+		return Ref{}, err
+	}
+	// The edge itself is excluded from the hashed body and stated in the
+	// preamble instead: the identity is (what the source bytes are) plus (what
+	// is done to them), and nothing about the document that carries the claim.
+	sourceOnly := Manifest{Format: m.Format, Files: m.Files}
+	body, err := sourceOnly.Canonical()
+	if err != nil {
+		return Ref{}, err
+	}
+	var canonical bytes.Buffer
+	canonical.WriteString("tensorfs-derived-v2\n")
+	fmt.Fprintf(&canonical, "morphism=%s\n", m.Derived.Morphism)
+	fmt.Fprintf(&canonical, "source=%s\n", m.Derived.Source)
+	canonical.Write(body)
+	sum := sha256.Sum256(canonical.Bytes())
 	return Ref{hex: hex.EncodeToString(sum[:])}, nil
 }
 

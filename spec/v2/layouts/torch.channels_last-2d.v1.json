@@ -1,0 +1,38 @@
+{
+ "class": "inductor",
+ "description": "torch's `channels_last` for 4-D tensors: NCHW logical, NHWC in storage. The arrangement inductor's conv lowering wants and re-derives on every forward call when the weights do not already have it.",
+ "digest": "c79afc4c189c655b03aafb091cbd87a498b01984e1be87b95d490d8ea82d80be",
+ "format": "tensorfs-layout-morphism-v2",
+ "name": "torch.channels_last-2d",
+ "permutation": [
+  0,
+  2,
+  3,
+  1
+ ],
+ "provenance": [
+  "MEASURED, not assumed (tcg#82, banked in research/layout-morphisms/0-DESIGN.md §9): SDXL's UNet carries 635 MiB of conv weights, 13.0% of its 4.78 GiB constant set, and inductor re-transposes them to NHWC every forward — >=1.27 GiB of DRAM traffic per step, ~36 GiB per 28-step image. Delivering the weights already in this arrangement is what makes that traffic zero.",
+  "READ FROM TORCH SOURCE, not inferred: `_inductor/ir.py`'s `require_strides` emits NO copy when the strides already match. That is the whole mechanism this record exists to trigger — the 51 per-call permute kernels are never generated, rather than generated and made cheap.",
+  "The permutation is torch's own `memory_format=torch.channels_last` and is not a choice made here: storage order (N, H, W, C) over logical axes (N, C, H, W) is axes [0, 2, 3, 1]."
+ ],
+ "rank": 4,
+ "sub_axes": [
+  {
+   "axis": 0,
+   "extent": "d0"
+  },
+  {
+   "axis": 1,
+   "extent": "d1"
+  },
+  {
+   "axis": 2,
+   "extent": "d2"
+  },
+  {
+   "axis": 3,
+   "extent": "d3"
+  }
+ ],
+ "version": 1
+}
