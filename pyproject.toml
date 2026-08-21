@@ -65,12 +65,20 @@ strip = true
 # is absent from the container's bounding set with no API field to grant it.
 # The daemon is shelved on the `shelf/tensorfsd` branch (tag
 # `shelf/tensorfsd-split`).
+# The wheel carried `tensorfs/_contracts/*.json` -- the 30 v1 documents, as
+# symlinks into `spec/v1/contracts` -- because constructing a `Contract` needed
+# them at IMPORT. Nothing in v2 needs a document at import: a layout is computed
+# by Go and handed over, and the identity facts a worker reads come from a
+# corpus it VENDORS (gen-worker already vendors the v1 one; pgw#1621 re-points
+# that at `spec/v2`). So the wheel carries no corpus, `layout2.rules(root=...)`
+# takes the path, and a caller that supplies none gets a named refusal rather
+# than an empty result that reads like a tiny valid corpus.
 include = [
-    { path = "python/src/tensorfs/_contracts/*.json", format = "wheel" },
     { path = "Cargo.toml", format = "sdist" },
     { path = "Cargo.lock", format = "sdist" },
     { path = "crates/**/*", format = "sdist" },
     { path = "spec/v1/**/*", format = "sdist" },
+    { path = "spec/v2/**/*", format = "sdist" },
     { path = "scripts/**/*", format = "sdist" },
     { path = "LICENSE", format = "sdist" },
 ]

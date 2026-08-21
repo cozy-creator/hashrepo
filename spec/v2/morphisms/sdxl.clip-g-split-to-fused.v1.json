@@ -1,0 +1,62 @@
+{
+ "description": "SDXL's CLIP-G text encoder, in its two shipped packagings: the diffusers split (`q_proj`/`k_proj`/`v_proj`) and the single-file OpenCLIP fusion (`in_proj_weight`). Contiguous thirds, T2 — the derive is manifest range-slicing over the same chunks, which is what makes single-file \u003c-\u003e diffusers conversion of the CLIP-G tensors a run-preserving derive rather than a refusal. SCOPED to text_encoder_2: CLIP-L ships the same key spellings at 768 and is a different component with its own packaging.",
+ "digest": "6034c178fbe12401eac6d272949932f440d4433b2ed22e49cc6730d74cf5c180",
+ "format": "tensorfs-morphism-v2",
+ "from": "sdxl.diffusers@1",
+ "invertible": true,
+ "name": "sdxl.clip-g-split-to-fused",
+ "provenance": [
+  "tensorfs#127 CLOSES HERE. v1 could not say whether a document was a SERVE LANE or a FRAGMENT, and only an accident distinguished them — the CLIP-G pair were fragments that a `lanes=` header must never name. In v2 a fragment is not a document kind at all: it is this, a morphism between two topologies, and only topologies can be named by a lane."
+ ],
+ "seams": [
+  {
+   "component": "text_encoder_2",
+   "groups": 1,
+   "parts": [
+    {
+     "key": "text_model.encoder.layers.{i}.self_attn.q_proj.weight",
+     "role": "q",
+     "share": 1
+    },
+    {
+     "key": "text_model.encoder.layers.{i}.self_attn.k_proj.weight",
+     "role": "k",
+     "share": 1
+    },
+    {
+     "key": "text_model.encoder.layers.{i}.self_attn.v_proj.weight",
+     "role": "v",
+     "share": 1
+    }
+   ],
+   "provenance": "RATIFIED, transplanted from the v1 fragments `sdxl.clip-g-fused-qkv@1` and `sdxl.clip-g-split-qkv@1`, which this morphism replaces — the design's ruling that a FRAGMENT is a morphism seam file, not a serve lane. OpenCLIP text encoders store attention as nn.MultiheadAttention's fused `in_proj_weight`, equal thirds in q, k, v order; diffusers' CLIPTextModel splits them. Measured against the real SDXL header: each projection is [1280, 1280] and the fusion is [3840, 1280].",
+   "target": "text_model.encoder.layers.{i}.self_attn.in_proj_weight"
+  },
+  {
+   "component": "text_encoder_2",
+   "groups": 1,
+   "parts": [
+    {
+     "key": "text_model.encoder.layers.{i}.self_attn.q_proj.bias",
+     "role": "q",
+     "share": 1
+    },
+    {
+     "key": "text_model.encoder.layers.{i}.self_attn.k_proj.bias",
+     "role": "k",
+     "share": 1
+    },
+    {
+     "key": "text_model.encoder.layers.{i}.self_attn.v_proj.bias",
+     "role": "v",
+     "share": 1
+    }
+   ],
+   "provenance": "RATIFIED with the weight seam above: the bias splits the same way, three [1280] parts concatenating to [3840], in q, k, v order. Same citation — OpenCLIP's nn.MultiheadAttention in_proj layout.",
+   "target": "text_model.encoder.layers.{i}.self_attn.in_proj_bias"
+  }
+ ],
+ "tier": 2,
+ "to": "sdxl.clip-g-fused@1",
+ "version": 1
+}

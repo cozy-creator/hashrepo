@@ -1,0 +1,28 @@
+{
+ "_": "Every banked checkpoint's expected v2 STAMP. Nineteen of the twenty real trees stamp; the twentieth is recorded as unstamped with its reason, because a gap that is written down is a gap and a gap that is silent is a bug.",
+ "stamps": {
+  "anima-base": "anima.net@1+plain.bf16@1",
+  "anima-turbo": "anima.diffusion-model@1+plain.bf16@1",
+  "ernie": "ernie.diffusers@1+plain.bf16@1",
+  "flux2-klein": "flux2-klein.diffusers@1+plain.bf16@1",
+  "hidream-o1": "hidream-o1.diffusers@1+plain.f32@1",
+  "joycaption": "joycaption.llava@1+plain.bf16@1",
+  "ltx-2": "ltx2.diffusers@1+plain.bf16@1",
+  "ltx-2-upsampler": "ltx2-upsampler.diffusers@1+plain.bf16@1",
+  "minimax-h3-diffusers": "minimax-h3.diffusers@1+plain.bf16@1",
+  "musicgen": "musicgen.transformers@1+plain.f16@1",
+  "qwen3.6-35b-a3b": "qwen3-6-35b-a3b.transformers@1+plain.bf16@1",
+  "sd-turbo": "sd2.diffusers@1+plain.f32@1",
+  "sd15": "sd15.diffusers@1+plain.f32@1",
+  "sdxl-base": "sdxl.diffusers@1+plain.f32@1",
+  "sdxl-base-fp16": "sdxl.diffusers@1+plain.f16@1",
+  "sdxl-base-sharded": "sdxl.diffusers@1+plain.bf16@1",
+  "sdxl-inpainting": "sdxl-inpainting.diffusers@1+plain.f32@1",
+  "wan22": "wan22.diffusers@1+plain.f32@1",
+  "z-image": "z-image.diffusers@1+plain.bf16@1",
+  "sdxl-inpainting-bf16": "sdxl-inpainting.diffusers@1+plain.bf16@1"
+ },
+ "unstamped": {
+  "qwen3.6-35b-a3b-fp8": "NO v2 TOPOLOGY, and the reason is a MEASUREMENT, not an oversight. Qwen/Qwen3.6-35B-A3B-FP8 carries 64196 tensors across 42 members; the bf16 release it is nominally a quantization of carries 1045 across 26. The fp8 release is not a requant of the bf16 packaging \u2014 it also splits the MoE experts \u2014 so it is a DIFFERENT topology, needing its own extraction and its own vllm rule. v1's `qwen3.6-35b-a3b.vllm-fp8@1` answered `satisfies` here on a 92-declaration pattern list, which is the vacuous admit v2 refuses to reproduce. Recorded, not papered over."
+ }
+}

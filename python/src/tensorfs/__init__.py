@@ -1,8 +1,6 @@
 """Content-addressed local storage and direct tensor reads and writes."""
 
-from importlib import import_module
-from typing import TYPE_CHECKING, Any
-
+from .layout2 import ExpectedHeader, LayoutTensor, Quant
 from .local import DigestMismatch, LocalCAS, Reclaimed, RefConflict, TempCollection
 from .manifest import MAX_CHUNK_SIZE, Chunk, FileEntry, RepositoryManifest
 from .project import (
@@ -44,10 +42,13 @@ __all__ = [
     "CASRef",
     "Chunk",
     "DigestMismatch",
+    "ExpectedHeader",
     "FileEntry",
+    "LayoutTensor",
     "LocalCAS",
     "MAX_CHUNK_SIZE",
     "ProjectionError",
+    "Quant",
     "Reclaimed",
     "RefConflict",
     "RepositoryManifest",
@@ -66,37 +67,10 @@ __all__ = [
     "read_stub",
     "stub_bytes",
     "tree_bytes",
-    "Contract",
-    "Fusion",
-    "MissingDtype",
-    "Permute",
-    "TensorDecl",
-    "contracts",
 ]
 
-if TYPE_CHECKING:
-    from . import contracts
-    from .contract import Contract, Fusion, MissingDtype, Permute, TensorDecl
-
-# The contract surface needs the compiled extension (construction runs the
-# Rust validator), while `import tensorfs` alone must stay pure-Python — the
-# projection path is vendored extension-free. PEP 562 keeps both true: the
-# extension loads on first ACCESS of a contract name, never at import.
-_CONTRACT_EXPORTS = {
-    "Contract": "contract",
-    "Fusion": "contract",
-    "MissingDtype": "contract",
-    "Permute": "contract",
-    "TensorDecl": "contract",
-    "contracts": "contracts",
-}
-
-
-def __getattr__(name: str) -> Any:
-    module_name = _CONTRACT_EXPORTS.get(name)
-    if module_name is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    module = import_module(f".{module_name}", __name__)
-    value: Any = module if name == "contracts" else getattr(module, name)
-    globals()[name] = value
-    return value
+# The v1 `Contract` surface stood here behind a PEP 562 `__getattr__`, because
+# constructing one ran the Rust validator and `import tensorfs` must stay
+# pure-Python for the vendored projection path. Its replacement,
+# `tensorfs.layout2`, reads what the Go engine already computed and needs
+# nothing compiled, so it is a plain import again.

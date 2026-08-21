@@ -41,7 +41,6 @@ use tensorfs_core::source::FileByteSource;
 use tensorfs_core::store::ObjectStore;
 use tensorfs_core::tfm1::{self, Entry, FileRecord as CoreFileRecord, SnapshotId};
 use tensorfs_core::tfp1;
-use tensorfs_core::verdict;
 use tensorfs_core::workspace_source::RecordsSource;
 
 create_exception!(
@@ -903,15 +902,15 @@ impl PyObjectStore {
     ///
     /// Returns `(plan, objects)`, which correspond positionally: `objects[i]`
     /// is the admitted form of `plan.regions[i]`.
-    #[pyo3(signature = (path, registry = None))]
+    #[pyo3(signature = (path, seams = None))]
     fn admit_file(
         &self,
         py: Python<'_>,
         path: PathBuf,
-        registry: Option<&PyRegistry>,
+        seams: Option<&str>,
     ) -> PyResult<(PyPlan, Vec<PyAdmittedObject>)> {
         let store = Arc::clone(&self.inner);
-        let registry = registry.map(|held| held.inner.clone());
+        let registry = parse_seams(seams)?;
         let (plan, admitted) = py.detach(move || -> PyResult<_> {
             let source = FileByteSource::open(&path).map_err(io_error)?;
             let plan = plan_under(&source, registry.as_ref())?;
@@ -1528,9 +1527,9 @@ fn plan_and_hash_bytes(py: Python<'_>, data: Vec<u8>) -> PyResult<PyHashedPlan> 
 /// declared seams before the 64 MiB grid. Without one, the plain per-tensor
 /// grid, which is `contract:none`.
 #[pyfunction]
-#[pyo3(signature = (path, registry = None))]
-fn plan_file(py: Python<'_>, path: PathBuf, registry: Option<&PyRegistry>) -> PyResult<PyPlan> {
-    let registry = registry.map(|held| held.inner.clone());
+#[pyo3(signature = (path, seams = None))]
+fn plan_file(py: Python<'_>, path: PathBuf, seams: Option<&str>) -> PyResult<PyPlan> {
+    let registry = parse_seams(seams)?;
     let plan = py.detach(move || -> PyResult<_> {
         let source = FileByteSource::open(&path).map_err(io_error)?;
         plan_under(&source, registry.as_ref())
@@ -1540,13 +1539,13 @@ fn plan_file(py: Python<'_>, path: PathBuf, registry: Option<&PyRegistry>) -> Py
 
 /// Plans and hashes a file. Every byte is read and hashed exactly once.
 #[pyfunction]
-#[pyo3(signature = (path, registry = None))]
+#[pyo3(signature = (path, seams = None))]
 fn plan_and_hash_file(
     py: Python<'_>,
     path: PathBuf,
-    registry: Option<&PyRegistry>,
+    seams: Option<&str>,
 ) -> PyResult<PyHashedPlan> {
-    let registry = registry.map(|held| held.inner.clone());
+    let registry = parse_seams(seams)?;
     let plan = py.detach(move || -> PyResult<_> {
         let source = FileByteSource::open(&path).map_err(io_error)?;
         let plan = plan_under(&source, registry.as_ref())?;
@@ -1555,19 +1554,27 @@ fn plan_and_hash_file(
     hashed_plan_into_python(py, &plan)
 }
 
-/// Identifies then plans: one header read, one deterministic winner.
+/// Plans one file, cutting at the caller's declared seams when it has any.
+///
+/// v1 IDENTIFIED the file first — it scored a registry of library contracts
+/// against the header and let the winner direct the cuts. That was a second
+/// implementation of "which checkpoint is this", and it is gone: a caller that
+/// knows the layout says so, and a caller that does not gets plain chunking.
 fn plan_under<S: planner::ByteSource + ?Sized>(
     source: &S,
-    registry: Option<&contract::Registry>,
+    seams: Option<&contract::Contract>,
 ) -> PyResult<planner::Plan> {
-    let Some(registry) = registry else {
-        return planner::plan(source).map_err(plan_error);
-    };
-    let stamp = match planner::inventory(source).map_err(plan_error)? {
-        Some(inventory) => registry.detect(&inventory).stamp().clone(),
-        None => contract::Stamp::None,
-    };
-    planner::plan_with(source, registry.get(&stamp)).map_err(plan_error)
+    match seams {
+        None => planner::plan(source).map_err(plan_error),
+        Some(seams) => planner::plan_with(source, Some(seams)).map_err(plan_error),
+    }
+}
+
+/// Parses an optional seam document.
+fn parse_seams(document: Option<&str>) -> PyResult<Option<contract::Contract>> {
+    document
+        .map(|text| contract::Contract::parse(text).map_err(contract_error))
+        .transpose()
 }
 
 /// One validated contract document's identity and read-side fields, exactly
@@ -1610,180 +1617,9 @@ fn contract_info(document: &str) -> PyResult<PyContractInfo> {
     })
 }
 
-// ── the bind verdict ─────────────────────────────────────────────────────────
-//
-// One implementation of the tri-state answer, reachable from both languages.
-// gen-worker selects a lane at boot from Python; before this, the only verdict
-// lived in Go, and the alternative was a narrow Python re-implementation — a
-// THIRD copy of the pattern matcher (tensorfs#129) and a third chance to ADMIT
-// a bind that should have been refused, which stays invisible until a pod 500s.
-
-/// The conversion a `derivable` verdict names.
-#[pyclass(frozen, get_all, module = "tensorfs._tensorfs", name = "Conversion")]
-pub struct PyConversion {
-    /// The RECIPE, read off the TARGET contract's declarations.
-    kind: String,
-    /// Trailing underscore because `from` is a Python keyword: `v.from` does
-    /// not parse, and an attribute reachable only through `getattr` is a worse
-    /// API than a name that reads slightly odd.
-    from_: Vec<String>,
-    to: Vec<String>,
-    files: Vec<String>,
-    text: String,
-}
-
-#[pymethods]
-impl PyConversion {
-    fn __repr__(&self) -> String {
-        format!("Conversion({})", self.text)
-    }
-    fn __str__(&self) -> String {
-        self.text.clone()
-    }
-}
-
-/// A NAMED refusal: which tensor, which pattern, declared vs observed.
-#[pyclass(frozen, get_all, module = "tensorfs._tensorfs", name = "Mismatch")]
-pub struct PyMismatch {
-    kind: String,
-    tensor: String,
-    pattern: String,
-    role: String,
-    declared: String,
-    observed: String,
-    stamp: String,
-    text: String,
-}
-
-#[pymethods]
-impl PyMismatch {
-    fn __repr__(&self) -> String {
-        format!("Mismatch({})", self.text)
-    }
-    fn __str__(&self) -> String {
-        self.text.clone()
-    }
-}
-
-/// The artifact-level answer: `satisfies` | `derivable` | `incompatible`.
-#[pyclass(frozen, get_all, module = "tensorfs._tensorfs", name = "Verdict")]
-pub struct PyVerdict {
-    kind: String,
-    stamp: String,
-    matched: usize,
-    explained: usize,
-    unexplained: Vec<String>,
-    conversion: Option<Py<PyConversion>>,
-    mismatch: Option<Py<PyMismatch>>,
-    file: String,
-    /// The Go rendering, verbatim — what the parity proof compares.
-    text: String,
-}
-
-#[pymethods]
-impl PyVerdict {
-    fn __repr__(&self) -> String {
-        format!("Verdict({})", self.text)
-    }
-    fn __str__(&self) -> String {
-        self.text.clone()
-    }
-}
-
-/// One member of an artifact as Python hands it over: its path, then its
-/// header entries as `(name, dtype, shape, byte_length)`.
-type PyArtifactFile = (String, Vec<(String, String, Vec<u64>, u64)>);
-
-/// The bind verdict for one artifact against one contract document.
-///
-/// `files` is `[(path, [(name, dtype, shape, length), ...]), ...]`. `length`
-/// may be 0 for "not supplied", which SKIPS the byte half of the fusion rule
-/// rather than manufacturing a refusal from an absent number.
-#[pyfunction]
-fn contract_verdict(
-    python: Python<'_>,
-    document: &str,
-    files: Vec<PyArtifactFile>,
-) -> PyResult<PyVerdict> {
-    let parsed = contract::Contract::parse(document).map_err(contract_error)?;
-    let members: Vec<verdict::ArtifactFile> = files
-        .into_iter()
-        .map(|(path, tensors)| verdict::ArtifactFile {
-            path,
-            tensors: tensors
-                .into_iter()
-                .map(|(name, dtype, shape, length)| verdict::InventoryTensor {
-                    name,
-                    dtype,
-                    shape,
-                    length,
-                })
-                .collect(),
-        })
-        .collect();
-    let answer = parsed.verdict(&members);
-    let text = answer.to_string();
-    let conversion = answer
-        .conversion
-        .as_ref()
-        .map(|found| {
-            Py::new(
-                python,
-                PyConversion {
-                    kind: found.kind.clone(),
-                    from_: found.from.clone(),
-                    to: found.to.clone(),
-                    files: found.files.clone(),
-                    text: found.to_string(),
-                },
-            )
-        })
-        .transpose()?;
-    let mismatch = answer
-        .mismatch
-        .as_ref()
-        .map(|found| {
-            Py::new(
-                python,
-                PyMismatch {
-                    kind: found.kind.as_str().to_owned(),
-                    tensor: found.tensor.clone(),
-                    pattern: found.pattern.clone(),
-                    role: found.role.clone(),
-                    declared: found.declared.clone(),
-                    observed: found.observed.clone(),
-                    stamp: found.stamp.clone(),
-                    text: found.to_string(),
-                },
-            )
-        })
-        .transpose()?;
-    Ok(PyVerdict {
-        kind: answer.kind.as_str().to_owned(),
-        stamp: answer.stamp.clone(),
-        matched: answer.matched,
-        explained: answer.explained,
-        unexplained: answer.unexplained.clone(),
-        conversion,
-        mismatch,
-        file: answer.file.clone(),
-        text,
-    })
-}
-
-/// The conversion recipe a contract's own declarations imply. DERIVED, never
-/// stored: there is no `recipe` field and there must never be one.
-#[pyfunction]
-fn contract_recipe(document: &str) -> PyResult<String> {
-    Ok(contract::Contract::parse(document)
-        .map_err(contract_error)?
-        .recipe()
-        .to_owned())
-}
-
-/// A contract argument: a plain string, or a `tensorfs.Contract`-shaped
-/// object carrying the wanted text as an attribute (`document` where a full
-/// document travels, `stamp` where only the identity does).
+/// A contract argument: a plain string, or a `tensorfs.Contract`-shaped object
+/// carrying the wanted text as an attribute (`document` where a full document
+/// travels, `stamp` where only the identity does).
 fn text_or_attr(any: &Bound<'_, PyAny>, attribute: &str) -> PyResult<String> {
     if let Ok(text) = any.extract::<String>() {
         return Ok(text);
@@ -1791,93 +1627,18 @@ fn text_or_attr(any: &Bound<'_, PyAny>, attribute: &str) -> PyResult<String> {
     any.getattr(attribute)?.extract::<String>()
 }
 
-/// A set of layout contracts a file may be identified against.
-///
-/// Contracts are DATA: JSON documents (`spec/v1/contracts/`), not code. The
-/// shipped library is `Registry.builtin()`; a caller with a family we do not
-/// ship passes its own documents.
-#[pyclass(frozen, module = "tensorfs._tensorfs", name = "ContractRegistry")]
-pub struct PyRegistry {
-    inner: contract::Registry,
-}
+// THE BIND VERDICT AND THE CONTRACT REGISTRY ARE DELETED (tensorfs#151).
+//
+// `contract_verdict` was a pyo3 port of `verdict.go` + `match.go`, added so a
+// Python caller would not write a THIRD copy of the pattern matcher. v2 removes
+// the reason rather than the copy: the verdict is computed ONCE, in Go, by the
+// hub, and workers consume it binding-carried. A worker that recomputed an
+// admit locally would be a second authority on whether a checkpoint may serve.
+//
+// What a worker still needs is IDENTITY FACTS — a quant rule's declared dtype
+// and capability floor, a topology's key set — and those are DATA, read from
+// the vendored `spec/v2/` documents. See `python/src/tensorfs/layout2.py`.
 
-#[pymethods]
-impl PyRegistry {
-    /// Builds a registry from contract documents: JSON strings or
-    /// `tensorfs.Contract` objects (anything carrying `.document`).
-    #[new]
-    #[pyo3(signature = (documents = Vec::new()))]
-    fn new(documents: Vec<Bound<'_, PyAny>>) -> PyResult<Self> {
-        let mut inner = contract::Registry::new();
-        for entry in &documents {
-            let document = text_or_attr(entry, "document")?;
-            inner
-                .insert(contract::Contract::parse(&document).map_err(contract_error)?)
-                .map_err(contract_error)?;
-        }
-        Ok(Self { inner })
-    }
-
-    /// The contract library shipped with tensorfs.
-    #[staticmethod]
-    fn builtin() -> PyResult<Self> {
-        Ok(Self {
-            inner: contract::Registry::builtin().map_err(contract_error)?,
-        })
-    }
-
-    /// Every contract held, as `name@version`.
-    fn stamps(&self) -> Vec<String> {
-        self.inner
-            .contracts()
-            .iter()
-            .map(|contract| contract.stamp().to_string())
-            .collect()
-    }
-
-    /// Identifies a file from its HEADER alone — names, shapes and dtypes.
-    /// No tensor byte is read. Returns `name@version`, or `"none"`.
-    fn detect_file(&self, py: Python<'_>, path: PathBuf) -> PyResult<String> {
-        let registry = self.inner.clone();
-        py.detach(move || -> PyResult<String> {
-            let source = FileByteSource::open(&path).map_err(io_error)?;
-            let Some(inventory) = planner::inventory(&source).map_err(plan_error)? else {
-                return Ok(contract::Stamp::None.to_string());
-            };
-            Ok(registry.detect(&inventory).stamp().to_string())
-        })
-    }
-
-    /// The tensors of a file that belong to one of a contract's named sets —
-    /// the removable sets a subset snapshot trims.
-    fn set_members(&self, py: Python<'_>, path: PathBuf, set: String) -> PyResult<Vec<String>> {
-        let registry = self.inner.clone();
-        py.detach(move || -> PyResult<Vec<String>> {
-            let source = FileByteSource::open(&path).map_err(io_error)?;
-            let Some(inventory) = planner::inventory(&source).map_err(plan_error)? else {
-                return Ok(Vec::new());
-            };
-            let stamp = registry.detect(&inventory).stamp().clone();
-            let Some(contract) = registry.get(&stamp) else {
-                return Ok(Vec::new());
-            };
-            Ok(contract
-                .set_members(&set, &inventory)
-                .into_iter()
-                .map(str::to_owned)
-                .collect())
-        })
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "ContractRegistry(contracts={})",
-            self.inner.contracts().len()
-        )
-    }
-}
-
-/// How many objects the store hashes and installs concurrently.
 #[pyfunction]
 fn ingest_concurrency() -> usize {
     tensorfs_core::store::ingest_concurrency()
@@ -1991,13 +1752,13 @@ fn derive(
 /// does not move is inherited by digest, so only the seam-affected tensors are
 /// read and admitted.
 #[pyfunction]
-#[pyo3(signature = (store, planner, records, registry = None))]
+#[pyo3(signature = (store, planner, records, seams = None))]
 fn adopt(
     py: Python<'_>,
     store: &PyObjectStore,
     planner: &str,
     records: Vec<PyFileRecord>,
-    registry: Option<&PyRegistry>,
+    seams: Option<&str>,
 ) -> PyResult<(Vec<PyFileRecord>, String)> {
     let format = parse_planner(planner)?
         .tensor_format()
@@ -2012,18 +1773,9 @@ fn adopt(
         logical_size: records.iter().map(record_length).sum(),
         records,
     };
-    let registry = registry.map(|held| held.inner.clone());
+    let registry = parse_seams(seams)?;
     let composed = py.detach(|| -> PyResult<tfm1::FileBody> {
-        let source = RecordsSource::new(store.inner.as_ref(), &body.records());
-        let stamp = match registry.as_ref() {
-            None => contract::Stamp::None,
-            Some(registry) => match planner::inventory(&source).map_err(plan_error)? {
-                Some(inventory) => registry.detect(&inventory).stamp().clone(),
-                None => contract::Stamp::None,
-            },
-        };
-        let contract = registry.as_ref().and_then(|registry| registry.get(&stamp));
-        compose::adopt(store.inner.as_ref(), &body, contract).map_err(compose_error)
+        compose::adopt(store.inner.as_ref(), &body, registry.as_ref()).map_err(compose_error)
     })?;
     let stamp = match &composed {
         tfm1::FileBody::Tensor { contract, .. } => contract.to_string(),
@@ -2115,11 +1867,7 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyMappedObject>()?;
     module.add_class::<PyObjectStore>()?;
     module.add_class::<PyRecordsReader>()?;
-    module.add_class::<PyRegistry>()?;
     module.add_class::<PyContractInfo>()?;
-    module.add_class::<PyConversion>()?;
-    module.add_class::<PyMismatch>()?;
-    module.add_class::<PyVerdict>()?;
     module.add_class::<PyStreamTensor>()?;
     module.add_class::<PyTensorStreamReader>()?;
 
@@ -2135,8 +1883,6 @@ fn tensorfs_extension(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(plan_and_hash_file, module)?)?;
     module.add_function(wrap_pyfunction!(ingest_concurrency, module)?)?;
     module.add_function(wrap_pyfunction!(contract_info, module)?)?;
-    module.add_function(wrap_pyfunction!(contract_verdict, module)?)?;
-    module.add_function(wrap_pyfunction!(contract_recipe, module)?)?;
     module.add_function(wrap_pyfunction!(rekey, module)?)?;
     module.add_function(wrap_pyfunction!(subset, module)?)?;
     module.add_function(wrap_pyfunction!(adopt, module)?)?;

@@ -1,19 +1,27 @@
-//! Tensor layout contracts: the declarative input that directs chunking.
+//! SEAM DESCRIPTORS: the declarative input that directs chunking.
 //!
-//! A contract describes one layout a checkpoint family can be written in —
-//! which tensors exist under which spellings, what dtypes and ranks they
-//! carry, where a fused tensor's seams fall, and which named sets of tensors
-//! are removable. It is DATA, not planner code: a versioned JSON document
-//! that ships in `spec/v1/contracts/` or arrives with the file being ingested.
+//! A document here describes where a fused tensor's seams fall and which named
+//! sets of tensors are removable, so the chunker can cut a fused packaging and
+//! its split twin into the SAME data objects. It is DATA, not planner code, and
+//! it ARRIVES WITH THE CALLER — there is no library and no registry in this
+//! crate any more.
+//!
+//! **What this module no longer does (tensorfs#151).** It used to identify a
+//! checkpoint: score an embedded library of contracts against a header and pick
+//! a winner. That question — "which layout is this?" — now has exactly one
+//! answer-giver, the Go decision engine, which searches v2 topology records and
+//! quant rules for the pair whose COMPUTED layout the headers are. Three
+//! implementations of that search (here, in Go, and in the Python planner) were
+//! three chances to admit a bind that should have been refused, invisible until
+//! a pod 500s.
 //!
 //! Two properties are load-bearing (dedup-invariance memo §4):
 //!
 //! - Boundaries are a pure function of `(file bytes, contract)`. The store's
 //!   contents never enter, so the same file under the same contract chunks
 //!   identically on every store, at every time, before and after a GC.
-//! - A contract is identified by its stamp and that stamp is recorded in the
-//!   snapshot: `name@version` for a library document (`spec/v1/contracts/`,
-//!   digest-pinned by CI so the name is a real promise), `sha256:<hex>` — the
+//! - A document is identified by its stamp and that stamp is recorded in the
+//!   snapshot: `name@version` for a named one, `sha256:<hex>` — the
 //!   digest of the canonical rendering — for an author-constructed custom,
 //!   which carries no name at all. Reading a snapshot tells you which layout
 //!   directed it without consulting whatever registry happens to be
@@ -48,131 +56,16 @@ pub const CONTRACT_FORMAT: &str = "tensorfs-contract-v1";
 /// Bound on a contract name, so a stamp is a bounded manifest field.
 pub const MAX_CONTRACT_NAME_BYTES: usize = 64;
 
-/// The well-known contract library, embedded from `spec/v1/contracts/` so the
-/// default ingestion path needs no filesystem and no network. The same files
-/// are the language-neutral copy any other implementation reads.
-pub const BUILTIN: &[(&str, &str)] = &[
-    (
-        "anima.diffsynth-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/anima.diffsynth-bf16.v1.json"),
-    ),
-    (
-        "dit.blocks-fused-qkv.v1.json",
-        include_str!("../../../spec/v1/contracts/dit.blocks-fused-qkv.v1.json"),
-    ),
-    (
-        "ernie.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/ernie.diffusers-bf16.v1.json"),
-    ),
-    (
-        "flux1.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/flux1.diffusers-bf16.v1.json"),
-    ),
-    (
-        "flux2-klein.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/flux2-klein.diffusers-bf16.v1.json"),
-    ),
-    (
-        "hidream-o1.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/hidream-o1.diffusers-bf16.v1.json"),
-    ),
-    (
-        "internvl-u.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/internvl-u.diffusers-bf16.v1.json"),
-    ),
-    (
-        "joycaption.llava-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/joycaption.llava-bf16.v1.json"),
-    ),
-    (
-        "krea-2.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/krea-2.diffusers-bf16.v1.json"),
-    ),
-    (
-        "ltx-2-upsampler.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/ltx-2-upsampler.diffusers-bf16.v1.json"),
-    ),
-    (
-        "ltx-2.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/ltx-2.diffusers-bf16.v1.json"),
-    ),
-    (
-        "minimax.h3-dit-diffusers.v1.json",
-        include_str!("../../../spec/v1/contracts/minimax.h3-dit-diffusers.v1.json"),
-    ),
-    (
-        "minimax.h3-dit-fp8-rowwise.v1.json",
-        include_str!("../../../spec/v1/contracts/minimax.h3-dit-fp8-rowwise.v1.json"),
-    ),
-    (
-        "minimax.h3-dit-native.v1.json",
-        include_str!("../../../spec/v1/contracts/minimax.h3-dit-native.v1.json"),
-    ),
-    (
-        "musicgen.transformers-fp16.v1.json",
-        include_str!("../../../spec/v1/contracts/musicgen.transformers-fp16.v1.json"),
-    ),
-    (
-        "qwen-image.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/qwen-image.diffusers-bf16.v1.json"),
-    ),
-    (
-        "qwen3.6-27b-mtp.gguf-ud-q4-k-xl.v1.json",
-        include_str!("../../../spec/v1/contracts/qwen3.6-27b-mtp.gguf-ud-q4-k-xl.v1.json"),
-    ),
-    (
-        "qwen3.6-35b-a3b.vllm-fp8.v1.json",
-        include_str!("../../../spec/v1/contracts/qwen3.6-35b-a3b.vllm-fp8.v1.json"),
-    ),
-    (
-        "rife.flownet-fp32.v1.json",
-        include_str!("../../../spec/v1/contracts/rife.flownet-fp32.v1.json"),
-    ),
-    (
-        "sd15.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/sd15.diffusers-bf16.v1.json"),
-    ),
-    (
-        "sd2.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/sd2.diffusers-bf16.v1.json"),
-    ),
-    (
-        "sdxl.clip-g-fused-qkv.v1.json",
-        include_str!("../../../spec/v1/contracts/sdxl.clip-g-fused-qkv.v1.json"),
-    ),
-    (
-        "sdxl.clip-g-split-qkv.v1.json",
-        include_str!("../../../spec/v1/contracts/sdxl.clip-g-split-qkv.v1.json"),
-    ),
-    (
-        "sdxl.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/sdxl.diffusers-bf16.v1.json"),
-    ),
-    (
-        "sdxl.diffusers-fp8-rowwise.v1.json",
-        include_str!("../../../spec/v1/contracts/sdxl.diffusers-fp8-rowwise.v1.json"),
-    ),
-    (
-        "sdxl.diffusers-nvfp4-flat.v1.json",
-        include_str!("../../../spec/v1/contracts/sdxl.diffusers-nvfp4-flat.v1.json"),
-    ),
-    (
-        "stable-audio.diffusers-fp16.v1.json",
-        include_str!("../../../spec/v1/contracts/stable-audio.diffusers-fp16.v1.json"),
-    ),
-    (
-        "trellis2.dit-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/trellis2.dit-bf16.v1.json"),
-    ),
-    (
-        "wan22.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/wan22.diffusers-bf16.v1.json"),
-    ),
-    (
-        "z-image.diffusers-bf16.v1.json",
-        include_str!("../../../spec/v1/contracts/z-image.diffusers-bf16.v1.json"),
-    ),
-];
+// THE EMBEDDED CONTRACT LIBRARY IS GONE (tensorfs#151). `spec/v1/contracts/`
+// and the Registry that identified files against it are deleted with the v1
+// engine: identification is now the Go decision engine's `Catalog.Stamp`, over
+// v2 topology records and quant rules, and there is exactly one of it.
+//
+// What survives here is MECHANICS. A document parsed by this module tells the
+// chunker where a fused tensor's seams fall and tells `adapter`/`compose`
+// which bytes a derive may inherit. It decides nothing about admission, it is
+// supplied by the caller rather than looked up, and it can no longer answer
+// "is this the right checkpoint?" — that question left this crate.
 
 #[derive(Debug, Error)]
 pub enum ContractError {
@@ -274,12 +167,12 @@ impl Handle {
 
 /// Which contract directed one file's chunking. Recorded in the manifest, so
 /// a snapshot answers "what layout is this?" without probing and without the
-/// registry that produced it.
+/// caller that produced it.
 ///
-/// Identity has two spellings, deliberately: a contract shipped in the curated
-/// library (`spec/v1/contracts/`, digest-pinned by CI) is identified
-/// `name@version`, because the library is what makes that name a promise.
-/// Every other contract — an author-constructed custom — is identified by the
+/// Identity has two spellings, deliberately: a NAMED layout is identified
+/// `name@version`, because the name is pinned somewhere a reader can check —
+/// under v2 that is `spec/v2/`, whose records are digest-pinned and regenerated
+/// from real headers. Every other document is identified by the
 /// SHA-256 of its canonical rendering, spelled `sha256:<hex>`. A free-text
 /// name on an inline document validates nothing and can lie or collide, so a
 /// custom carries no name at all.
@@ -1088,213 +981,20 @@ impl Contract {
         self.sets.keys().map(String::as_str).collect()
     }
 
-    /// Whether this contract describes `inventory`, and how much of it.
-    ///
-    /// A contract matches when every required declaration is present and every
-    /// tensor it claims agrees with the declaration — dtype, rank, and seam
-    /// arithmetic that actually divides. A claimed tensor that disagrees is a
-    /// refusal, not a shrug: contracts must be falsifiable from the header
-    /// alone or the stamp would mean nothing.
-    #[must_use]
-    pub fn matches(&self, inventory: &TensorInventory) -> Option<Match> {
-        let mut seen = vec![false; self.tensors.len()];
-        let mut matched = 0_usize;
-        for tensor in inventory.tensors() {
-            let Some((index, entry)) = self
-                .tensors
-                .iter()
-                .enumerate()
-                .find(|(_, entry)| entry.pattern.matches(tensor.name()))
-            else {
-                continue;
-            };
-            if !entry.accepts(tensor.dtype(), tensor.shape()) {
-                return None;
-            }
-            if let Some(fusion) = &entry.fusion
-                && fusion.runs(tensor.shape(), tensor.length()).is_none()
-            {
-                return None;
-            }
-            if let Some(permute) = &entry.permute
-                && permute.resolve(tensor.shape()).is_none()
-            {
-                return None;
-            }
-            seen[index] = true;
-            matched += 1;
-        }
-        for (index, entry) in self.tensors.iter().enumerate() {
-            if entry.required && !seen[index] {
-                return None;
-            }
-        }
-        // A contract that explains NOTHING about a file does not describe it.
-        // Without this, an all-optional contract — the per-component-file
-        // shape a multifolder lane document needs — would vacuously match
-        // every tensor container in existence.
-        if matched == 0 {
-            return None;
-        }
-        Some(Match {
-            stamp: self.stamp(),
-            matched,
-        })
-    }
-}
-
-/// One contract's verdict on one file.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Match {
-    stamp: Stamp,
-    matched: usize,
-}
-
-impl Match {
-    #[must_use]
-    pub const fn stamp(&self) -> &Stamp {
-        &self.stamp
-    }
-
-    /// How many of the file's tensors this contract explains — the primary
-    /// specificity key.
-    #[must_use]
-    pub const fn matched(&self) -> usize {
-        self.matched
-    }
+    // `matches` IS DELETED (tensorfs#151). Header-vs-document matching now
+    // happens once, in Go, against a computed layout.
 }
 
 // ---------------------------------------------------------------------------
-// The registry
+// THE REGISTRY AND ITS DETECTION ARE DELETED (tensorfs#151)
+//
+// `Registry::detect` scored every library contract against a file's inventory
+// and picked a winner. That is IDENTIFICATION, and it now happens exactly once
+// in the whole system: the Go engine stamps a checkpoint by searching the v2
+// catalog for the (topology, quant) pair whose COMPUTED layout the headers are.
+// Three implementations of that search — here, in Go, and in the Python
+// planner — were three chances to admit a bind that should have been refused.
 // ---------------------------------------------------------------------------
-
-/// The set of contracts ingestion may identify a file against.
-#[derive(Clone, Debug, Default)]
-pub struct Registry {
-    contracts: Vec<Contract>,
-}
-
-impl Registry {
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            contracts: Vec::new(),
-        }
-    }
-
-    /// The library shipped in `spec/v1/contracts/`.
-    pub fn builtin() -> Result<Self, ContractError> {
-        let mut registry = Self::new();
-        for (_, document) in BUILTIN {
-            registry.insert(Contract::parse(document)?)?;
-        }
-        Ok(registry)
-    }
-
-    /// Inserts a contract, library or custom. A named duplicate refuses by
-    /// `name@version`; ANY content duplicate refuses by digest, which is what
-    /// dedups a custom inserted twice — two spellings of one document are one
-    /// contract, so a second insert is a caller error, not a second entry.
-    pub fn insert(&mut self, contract: Contract) -> Result<(), ContractError> {
-        let digest = contract.digest();
-        if self.contracts.iter().any(|held| {
-            (held.handle.is_some() && held.handle == contract.handle) || held.digest() == digest
-        }) {
-            return Err(ContractError::DuplicateContract(
-                contract.stamp().to_string(),
-            ));
-        }
-        self.contracts.push(contract);
-        Ok(())
-    }
-
-    #[must_use]
-    pub fn contracts(&self) -> &[Contract] {
-        &self.contracts
-    }
-
-    /// Resolves a stamp to the contract it names. A digest stamp resolves to
-    /// an inserted custom with that exact canonical digest; an unknown digest
-    /// is a typed miss (`None`), never a fallback.
-    #[must_use]
-    pub fn get(&self, stamp: &Stamp) -> Option<&Contract> {
-        match stamp {
-            Stamp::None => None,
-            Stamp::Named(handle) => self
-                .contracts
-                .iter()
-                .find(|contract| contract.handle.as_ref() == Some(handle)),
-            Stamp::Digest(digest) => self
-                .contracts
-                .iter()
-                .find(|contract| contract.digest() == *digest),
-        }
-    }
-
-    /// Identifies the contract a file implements from its header inventory —
-    /// names, shapes and dtypes only. No tensor byte is read.
-    ///
-    /// The tie-break is total and recorded: MOST SPECIFIC first (the contract
-    /// that explains the most of the file's tensors), then HIGHEST VERSION,
-    /// then the lexicographically smallest name. The last key exists so the
-    /// answer never depends on registry insertion order.
-    #[must_use]
-    pub fn detect(&self, inventory: &TensorInventory) -> Detection {
-        let mut candidates: Vec<Match> = self
-            .contracts
-            .iter()
-            .filter_map(|contract| contract.matches(inventory))
-            .collect();
-        candidates.sort_by(|left, right| {
-            right
-                .matched
-                .cmp(&left.matched)
-                .then_with(|| right.stamp.version().cmp(&left.stamp.version()))
-                .then_with(|| left.stamp.name().cmp(&right.stamp.name()))
-                // Two nameless customs still order deterministically: their
-                // stamps ARE their digests, and distinct contracts differ.
-                .then_with(|| left.stamp.to_string().cmp(&right.stamp.to_string()))
-        });
-        let stamp = candidates
-            .first()
-            .map_or(Stamp::None, |winner| winner.stamp.clone());
-        let ambiguous = matches!(candidates.as_slice(), [first, second, ..]
-            if first.matched == second.matched && first.stamp.version() == second.stamp.version());
-        Detection {
-            stamp,
-            candidates,
-            ambiguous,
-        }
-    }
-}
-
-/// The recorded outcome of identification: the winner, every contract that
-/// matched in tie-break order, and whether the win needed the name key.
-#[derive(Clone, Debug)]
-pub struct Detection {
-    stamp: Stamp,
-    candidates: Vec<Match>,
-    ambiguous: bool,
-}
-
-impl Detection {
-    #[must_use]
-    pub const fn stamp(&self) -> &Stamp {
-        &self.stamp
-    }
-
-    #[must_use]
-    pub fn candidates(&self) -> &[Match] {
-        &self.candidates
-    }
-
-    /// True when two contracts were separated only by the name key — the
-    /// caller may want to say so, but the answer is still deterministic.
-    #[must_use]
-    pub const fn ambiguous(&self) -> bool {
-        self.ambiguous
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Document parsing
@@ -1788,26 +1488,6 @@ mod tests {
     }
 
     #[test]
-    fn the_registry_resolves_digest_stamps_and_dedups_customs() {
-        let custom = contract(NAMELESS);
-        let mut registry = Registry::builtin().unwrap();
-        registry.insert(custom.clone()).unwrap();
-
-        // A digest stamp resolves to the inserted custom; an unknown digest
-        // is a typed miss, never a fallback.
-        let found = registry.get(&custom.stamp()).expect("resolves");
-        assert_eq!(found.stamp(), custom.stamp());
-        assert!(registry.get(&Stamp::Digest([0x5A; 32])).is_none());
-
-        // A second spelling of the same document is the same contract.
-        let respelled = contract(&NAMELESS.replace('\n', " "));
-        assert!(matches!(
-            registry.insert(respelled),
-            Err(ContractError::DuplicateContract(_))
-        ));
-    }
-
-    #[test]
     fn malformed_documents_refuse() {
         let cases = [
             FUSED.replace(CONTRACT_FORMAT, "tensorfs-contract-v2"),
@@ -1834,28 +1514,5 @@ mod tests {
         }
         // Two parts with one role name cannot be told apart.
         assert!(Contract::parse(&FUSED.replace("\"role\": \"k\"", "\"role\": \"q\"")).is_err());
-    }
-
-    #[test]
-    fn the_builtin_library_parses_and_holds_distinct_stamps() {
-        let registry = Registry::builtin().unwrap();
-        assert!(registry.contracts().len() >= 3);
-        // The name guarantee lives in the curated library, not the parser: a
-        // nameless document is valid everywhere a document travels, but every
-        // SHIPPED document must carry a real name@version.
-        for held in registry.contracts() {
-            assert!(
-                held.name().is_some() && held.version() >= 1,
-                "a shipped contract is nameless"
-            );
-        }
-        let mut stamps: Vec<String> = registry
-            .contracts()
-            .iter()
-            .map(|contract| contract.stamp().to_string())
-            .collect();
-        stamps.sort();
-        stamps.dedup();
-        assert_eq!(stamps.len(), registry.contracts().len());
     }
 }

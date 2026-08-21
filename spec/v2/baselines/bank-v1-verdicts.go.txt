@@ -1,0 +1,216 @@
+// THE DERIVATION OF v1-verdicts.json, kept readable and re-runnable.
+//
+// It is a `.go.txt` and not a `.go` because it will not compile against this
+// tree: `Contract.Verdict` was deleted by tensorfs#151, which is the whole
+// reason the answers had to be BANKED before the deletion rather than
+// recomputed after it.
+//
+// To re-run it, from a checkout that still has the v1 engine:
+//
+//	git archive 0d00a6a | tar -x -C /tmp/v1base           # the parent commit
+//	cp -r spec/v2/headers /tmp/v1base/spec/v2/headers     # the banked headers
+//	cp spec/v2/baselines/bank-v1-verdicts.go.txt \
+//	   /tmp/v1base/scripts/bank_v1_baselines/main.go
+//	cd /tmp/v1base && go run ./scripts/bank_v1_baselines . > v1-verdicts.json
+//
+// ---------------------------------------------------------------------------
+//
+// Bank the v1 engine's verdicts as GOLDEN BASELINES, before v1 is deleted.
+//
+// This is proof-battery item 1's baseline half (tensor-layout-v2 design §6):
+// "v2 admission reproduces every verdict the v1 engine gives over the existing
+// corpus + real headers." A regression test cannot run against an engine that
+// has been deleted, so the answers are banked FIRST, from the real
+// `Contract.Verdict` call the hub's bind gate makes (tensorhub
+// internal/bindgate/bindgate.go:317), and the v2 engine is then measured
+// against the bank rather than against a memory of what v1 said.
+//
+// Two inputs, both in the tree:
+//
+//   - spec/v1/contracts/*.v1.json — every library document, all 30.
+//   - spec/v2/headers/*.json.gz — real upstream headers, banked by
+//     scripts/bank-headers.py. The tensorfs#150 ratification lane ran the same
+//     call over the same checkpoints; these are those runs, made re-runnable.
+//
+// The CROSS PRODUCT is deliberate. A baseline of "each document against its own
+// reference" only ever exercises `satisfies`, and an engine that answered
+// `satisfies` to everything would reproduce it perfectly. Every document is run
+// against every checkpoint, so the bank is dominated by refusals and the
+// regression has something to be wrong about.
+package main
+
+import (
+	"compress/gzip"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	tensorfs "github.com/cozy-creator/tensorfs"
+)
+
+type bankedTensor struct {
+	Name   string   `json:"name"`
+	Dtype  string   `json:"dtype"`
+	Shape  []uint64 `json:"shape"`
+	Length uint64   `json:"length"`
+}
+
+type bankedFile struct {
+	Path    string         `json:"path"`
+	Tensors []bankedTensor `json:"tensors"`
+}
+
+type bankedHeaders struct {
+	ID     string       `json:"id"`
+	Source string       `json:"source"`
+	Note   string       `json:"note"`
+	Files  []bankedFile `json:"files"`
+}
+
+// baseline is ONE (document, checkpoint) answer, kept field by field as well as
+// rendered. The rendering is what an operator reads; the fields are what a
+// regression can diff precisely.
+type baseline struct {
+	Contract    string   `json:"contract"`
+	Checkpoint  string   `json:"checkpoint"`
+	Kind        string   `json:"kind"`
+	Matched     int      `json:"matched"`
+	Explained   int      `json:"explained"`
+	Unexplained []string `json:"unexplained,omitempty"`
+	Conversion  string   `json:"conversion,omitempty"`
+	MismatchKt  string   `json:"mismatch_kind,omitempty"`
+	Tensor      string   `json:"mismatch_tensor,omitempty"`
+	Pattern     string   `json:"mismatch_pattern,omitempty"`
+	Declared    string   `json:"mismatch_declared,omitempty"`
+	Observed    string   `json:"mismatch_observed,omitempty"`
+	File        string   `json:"file,omitempty"`
+	Rendered    string   `json:"rendered"`
+}
+
+func main() {
+	root := "."
+	if len(os.Args) > 1 {
+		root = os.Args[1]
+	}
+	contracts := loadContracts(filepath.Join(root, "spec", "v1", "contracts"))
+	checkpoints := loadHeaders(filepath.Join(root, "spec", "v2", "headers"))
+
+	out := make([]baseline, 0, len(contracts)*len(checkpoints))
+	for _, name := range sortedKeys(contracts) {
+		for _, id := range sortedKeys(checkpoints) {
+			out = append(out, run(name, contracts[name], id, checkpoints[id]))
+		}
+	}
+	document := map[string]any{
+		"_": "GOLDEN: the v1 engine's own answers, banked before v1 was deleted " +
+			"(tensor-layout-v2 battery item 1). Regenerate ONLY from a checkout that " +
+			"still has spec/v1/contracts and Contract.Verdict — after tensorfs#151 " +
+			"that is a git revision, not the working tree.",
+		"contracts":   len(contracts),
+		"checkpoints": len(checkpoints),
+		"verdicts":    out,
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", " ")
+	if err := encoder.Encode(document); err != nil {
+		panic(err)
+	}
+	counts := map[string]int{}
+	for _, entry := range out {
+		counts[entry.Kind]++
+	}
+	fmt.Fprintf(os.Stderr, "%d contracts x %d checkpoints = %d verdicts: %v\n",
+		len(contracts), len(checkpoints), len(out), counts)
+}
+
+func run(name string, contract *tensorfs.Contract, id string, headers bankedHeaders) baseline {
+	members := make([]tensorfs.ArtifactFile, 0, len(headers.Files))
+	for _, member := range headers.Files {
+		tensors := make([]tensorfs.InventoryTensor, 0, len(member.Tensors))
+		for _, item := range member.Tensors {
+			tensors = append(tensors, tensorfs.InventoryTensor{
+				Name: item.Name, Dtype: item.Dtype, Shape: item.Shape, Length: item.Length,
+			})
+		}
+		members = append(members, tensorfs.ArtifactFile{Path: member.Path, Tensors: tensors})
+	}
+	verdict := contract.Verdict(members)
+	entry := baseline{
+		Contract: name, Checkpoint: id, Kind: string(verdict.Kind),
+		Matched: verdict.Matched, Explained: verdict.Explained,
+		Unexplained: verdict.Unexplained, File: verdict.File,
+		Rendered: verdict.String(),
+	}
+	if verdict.Conversion != nil {
+		entry.Conversion = verdict.Conversion.String()
+	}
+	if verdict.Mismatch != nil {
+		entry.MismatchKt = string(verdict.Mismatch.Kind)
+		entry.Tensor = verdict.Mismatch.Tensor
+		entry.Pattern = verdict.Mismatch.Pattern
+		entry.Declared = verdict.Mismatch.Declared
+		entry.Observed = verdict.Mismatch.Observed
+	}
+	return entry
+}
+
+func loadContracts(directory string) map[string]*tensorfs.Contract {
+	entries, err := filepath.Glob(filepath.Join(directory, "*.v1.json"))
+	if err != nil || len(entries) == 0 {
+		panic(fmt.Sprintf("no v1 contracts under %s: %v", directory, err))
+	}
+	out := map[string]*tensorfs.Contract{}
+	for _, path := range entries {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			panic(err)
+		}
+		contract, err := tensorfs.ParseContract(raw)
+		if err != nil {
+			panic(fmt.Sprintf("%s: %v", path, err))
+		}
+		out[contract.Stamp()] = contract
+	}
+	return out
+}
+
+func loadHeaders(directory string) map[string]bankedHeaders {
+	entries, err := filepath.Glob(filepath.Join(directory, "*.json.gz"))
+	if err != nil || len(entries) == 0 {
+		panic(fmt.Sprintf("no banked headers under %s: %v", directory, err))
+	}
+	out := map[string]bankedHeaders{}
+	for _, path := range entries {
+		handle, err := os.Open(path)
+		if err != nil {
+			panic(err)
+		}
+		reader, err := gzip.NewReader(handle)
+		if err != nil {
+			panic(err)
+		}
+		var headers bankedHeaders
+		if err := json.NewDecoder(reader).Decode(&headers); err != nil {
+			panic(fmt.Sprintf("%s: %v", path, err))
+		}
+		_ = reader.Close()
+		_ = handle.Close()
+		if headers.ID == "" {
+			headers.ID = strings.TrimSuffix(filepath.Base(path), ".json.gz")
+		}
+		out[headers.ID] = headers
+	}
+	return out
+}
+
+func sortedKeys[V any](in map[string]V) []string {
+	keys := make([]string, 0, len(in))
+	for key := range in {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}

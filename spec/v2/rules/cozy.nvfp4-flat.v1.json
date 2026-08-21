@@ -1,0 +1,101 @@
+{
+ "base_dtype": "BF16",
+ "capability_floor_sm": 100,
+ "conventions": {
+  "activation_scale": "optional static input_scale",
+  "element": "nvfp4_e2m1",
+  "nibble_order": "LOW (element 2j in the low nibble)",
+  "scale": "group_16",
+  "scale_dtype": "F8_E4M3",
+  "scale_layout": "flat-row-major (NOT pre-swizzled)",
+  "second_level_scale": "per-tensor F32 [1, 1]"
+ },
+ "declared_dtype": "float4_e2m1fn",
+ "description": "The FLAT nvfp4 W4A4 storage of a denoiser's block Linears, transcribed from python-gen-worker `src/gen_worker/models/w4a4.py` — the decode path that actually reads these bytes. Per eligible Linear L: `L.weight` is U8 [out, in/2] holding packed e2m1 nibble pairs with element 2j in the LOW nibble (the torch.float4_e2m1fn_x2 convention); `L.weight_scale` is F8_E4M3 [out, in/16], per-16-block and FLAT row-major; `L.weight_scale_2` is an F32 [1, 1] per-tensor second-level scale; `L.input_scale` (F32 [1, 1], static activation scale) and `L.pre_quant_scale` (BF16 [in], AWQ-lite smoothing) are OPTIONAL-WITH-FIXED-SHAPE — a calibration may or may not have produced them, but if present they are exactly this. THIS IS NOT `bfl.nvfp4-preswizzled` AND MUST NEVER ALIAS IT. That format is HIGH-nibble with PRE-SWIZZLED scales; conflating the two measured LPIPS 1.11 — every name, dtype and shape correct and every number wrong. The nibble order and the scale layout are in this rule's DIGEST, which is the representation in which that mistake is a refusal rather than a shipped disaster. Alignment is the kernel's: in_features % 32 == 0 and out_features % 16 == 0 (`_K_ALIGN`/`_N_ALIGN`), because torch's fp4 scaled_mm needs packed K/2 % 16.",
+ "digest": "46eba1dd06b1e52d63ceee86b63eba4ed420bd4b25bcec4cde37ebb6d25f4b8e",
+ "eligible": {
+  "dim_align": [
+   16,
+   32
+  ],
+  "key_suffix": ".weight",
+  "rank": 2,
+  "require_repeated_block_segment": true,
+  "skip_module_exact": [
+   "proj_in",
+   "proj_out",
+   "proj"
+  ],
+  "skip_module_substrings": [
+   "embed",
+   "norm",
+   "pooler",
+   "adaln_single",
+   "final_layer",
+   "quantize",
+   "decoder",
+   "preprocess_conv",
+   "postprocess_conv",
+   "gate_logits"
+  ],
+  "source_dtypes": [
+   "F64",
+   "F32",
+   "F16",
+   "BF16"
+  ]
+ },
+ "emissions": [
+  {
+   "dtype": "U8",
+   "key": "{module}.weight",
+   "shape": [
+    "d0",
+    "d1/2"
+   ]
+  },
+  {
+   "dtype": "F8_E4M3",
+   "key": "{module}.weight_scale",
+   "shape": [
+    "d0",
+    "d1/16"
+   ]
+  },
+  {
+   "dtype": "F32",
+   "key": "{module}.weight_scale_2",
+   "shape": [
+    "1",
+    "1"
+   ]
+  },
+  {
+   "dtype": "F32",
+   "key": "{module}.input_scale",
+   "optional": true,
+   "shape": [
+    "1",
+    "1"
+   ]
+  },
+  {
+   "dtype": "BF16",
+   "key": "{module}.pre_quant_scale",
+   "optional": true,
+   "shape": [
+    "d1"
+   ]
+  }
+ ],
+ "format": "tensorfs-quant-rule-v2",
+ "inverse": "W ~= e2m1(weight) * weight_scale.float() * weight_scale_2",
+ "lossy": true,
+ "name": "cozy.nvfp4-flat",
+ "reference_tolerant": true,
+ "scope_roles": [
+  "denoiser",
+  "backbone"
+ ],
+ "version": 1
+}

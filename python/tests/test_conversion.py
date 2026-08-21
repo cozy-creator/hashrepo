@@ -1,130 +1,64 @@
 """The conversion PRODUCER, driven end to end on real bytes.
 
-What this suite is for. `Contract.Verdict` has answered `DerivableVia(dtype-cast)`
-since tensorfs#123, and two independent hub gates have emitted a CONVERTIBLE
-code for longer than that — while nothing anywhere could produce the derived
-checkpoint (tensorhub th#2164). So the assertions that matter here are not
-"the function returns a plan"; they are:
+What this suite is for. Two independent hub gates emitted a CONVERTIBLE code
+for longer than anything could produce the derived checkpoint (tensorhub
+th#2164). So the assertions that matter here are not "the function returns a
+plan"; they are:
 
-* an fp16-packaged SDXL tree — the dominant community packaging, and the named
-  over-constraint in Paul's matching-set ruling — is DERIVABLE to the bf16 lane,
-  and after the conversion runs it SATISFIES it;
-* a bf16 tree converts to the fp8-rowwise lane and satisfies THAT, with the
-  per-row scale twins the lane declares actually present;
-* the conversion rewrites the unet and nothing else, so every other member's
-  CAS objects survive with their digests;
+* an fp16-packaged tree is DERIVABLE to a bf16 layout, and the rounding is
+  round-to-nearest-even rather than the truncation that biases every magnitude
+  toward zero;
+* a bf16 tree converts to `cozy.fp8-rowwise` with the per-row scale twins the
+  computed layout declares actually present, and those scales are MULTIPLIERS;
+* the conversion rewrites the denoiser and nothing else, so every other
+  member's CAS objects survive with their digests;
 * the refusals that exist because their failure is silent actually fire.
 
-The verdicts themselves are taken by the REAL matcher, in Go, over the bytes
-this suite writes: `conversion_proof_test.go`, driven by
-`scripts/prove-conversion.sh`. A Python re-implementation of the verdict would
-be a third matcher grading its own homework.
+**Where the target layouts come from.** `data/layout-*.json` is verbatim
+`go run ./scripts/compute_layout` output, committed. It is the whole point of
+v2 that Python does not compute a layout, so the fixtures the producer aims at
+are Go's own — including the shapes, which is what lets the planner refuse a
+checkpoint of the right family and the wrong size.
+
+The real layouts' tensors are real sizes (ernie's smallest fp8 Linear is
+4096x4096), which no pure-Python kernel can push bytes through in a test. So
+the byte-level fp8 loop runs against a SMALL layout built here, carrying the
+quant block lifted verbatim from the committed ernie fixture -- the rule
+identity is Go's, only the topology half is miniaturized.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import struct
+from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 import pytest
 from tensorfs import LocalCAS, RepositoryManifest, TensorWriter, open_tensors, read_entry
-from tensorfs import contracts as library
 from tensorfs.convert import (
     FP8_E4M3,
     ConversionRefused,
-    _declaration_for,  # the ported claim rule the Go fence re-counts
+    component_of,
     convert,
     recipe_for,
 )
+from tensorfs.layout2 import ExpectedHeader
 
-# One tiny SDXL-shaped diffusers tree: the four members th#2160 drove its bind
-# gate against. Shapes are 16-aligned on both axes wherever the fp8 recipe is
-# eligible, because that is a conjunct of the producing rule the contract format
-# deliberately cannot carry -- a fixture that ignored it would prove the plan
-# against weights the real producer would refuse.
-_UNET = "unet/diffusion_pytorch_model.safetensors"
-_VAE = "vae/diffusion_pytorch_model.safetensors"
-_TE = "text_encoder/model.safetensors"
-_TE2 = "text_encoder_2/model.safetensors"
-
-_TREE: dict[str, tuple[tuple[str, tuple[int, ...]], ...]] = {
-    _UNET: (
-        ("conv_in.weight", (32, 4, 3, 3)),
-        ("conv_in.bias", (32,)),
-        ("time_embedding.linear_1.weight", (32, 32)),
-        ("time_embedding.linear_1.bias", (32,)),
-        ("down_blocks.0.attentions.0.proj_in.weight", (32, 32)),
-        ("down_blocks.0.attentions.0.proj_in.bias", (32,)),
-        ("down_blocks.0.attentions.0.proj_out.weight", (32, 32)),
-        ("down_blocks.0.attentions.0.proj_out.bias", (32,)),
-        ("down_blocks.0.attentions.0.norm.weight", (32,)),
-        ("down_blocks.0.attentions.0.norm.bias", (32,)),
-        ("down_blocks.0.attentions.0.transformer_blocks.0.attn1.to_q.weight", (32, 32)),
-        ("down_blocks.0.attentions.0.transformer_blocks.0.attn1.to_k.weight", (32, 32)),
-        ("down_blocks.0.attentions.0.transformer_blocks.0.attn1.to_v.weight", (32, 32)),
-        ("down_blocks.0.attentions.0.transformer_blocks.0.attn1.to_out.0.weight", (32, 32)),
-        ("down_blocks.0.attentions.0.transformer_blocks.0.attn1.to_out.0.bias", (32,)),
-        ("down_blocks.0.attentions.0.transformer_blocks.0.ff.net.0.proj.weight", (64, 32)),
-        ("down_blocks.0.attentions.0.transformer_blocks.0.ff.net.0.proj.bias", (64,)),
-        ("down_blocks.0.attentions.0.transformer_blocks.0.ff.net.2.weight", (32, 32)),
-        ("down_blocks.0.attentions.0.transformer_blocks.0.norm1.weight", (32,)),
-        ("down_blocks.0.attentions.0.transformer_blocks.0.norm1.bias", (32,)),
-        ("down_blocks.0.resnets.0.time_emb_proj.weight", (32, 32)),
-        ("down_blocks.0.resnets.0.time_emb_proj.bias", (32,)),
-        ("down_blocks.0.resnets.0.conv1.weight", (32, 32, 3, 3)),
-        ("down_blocks.0.resnets.0.conv1.bias", (32,)),
-        ("down_blocks.0.resnets.0.norm1.weight", (32,)),
-        ("down_blocks.0.resnets.0.norm1.bias", (32,)),
-    ),
-    _VAE: (
-        ("encoder.conv_in.weight", (32, 3, 3, 3)),
-        ("encoder.conv_in.bias", (32,)),
-        ("decoder.conv_in.weight", (32, 4, 3, 3)),
-        ("decoder.conv_in.bias", (32,)),
-        ("quant_conv.weight", (8, 8, 1, 1)),
-        ("quant_conv.bias", (8,)),
-    ),
-    _TE: (
-        ("text_model.encoder.layers.0.self_attn.q_proj.weight", (32, 32)),
-        ("text_model.encoder.layers.0.self_attn.q_proj.bias", (32,)),
-        ("text_model.encoder.layers.0.self_attn.out_proj.weight", (32, 32)),
-        ("text_model.encoder.layers.0.self_attn.out_proj.bias", (32,)),
-        ("text_model.encoder.layers.0.mlp.fc1.weight", (64, 32)),
-        ("text_model.encoder.layers.0.mlp.fc1.bias", (64,)),
-        ("text_model.final_layer_norm.weight", (32,)),
-        ("text_model.final_layer_norm.bias", (32,)),
-    ),
-    _TE2: (
-        ("text_model.encoder.layers.0.self_attn.q_proj.weight", (32, 32)),
-        ("text_model.encoder.layers.0.self_attn.q_proj.bias", (32,)),
-        ("text_model.encoder.layers.0.mlp.fc1.weight", (64, 32)),
-        ("text_model.encoder.layers.0.mlp.fc1.bias", (64,)),
-        ("text_projection.weight", (32, 32)),
-    ),
-}
+_DATA = Path(__file__).resolve().parent / "data"
 
 
-# A tiny MiniMax-H3 DiT, same shape discipline. The attention weights carry the
-# native contract's 56-group interleave, so the outer axis is 56 * 2 -- a fusion
-# whose arithmetic does not divide is a REFUSAL, and a fixture that ignored it
-# would prove the fp8 document against weights the matcher rejects.
-_DIT = "transformer/diffusion_pytorch_model.safetensors"
-_H3_TREE: dict[str, tuple[tuple[str, tuple[int, ...]], ...]] = {
-    _DIT: (
-        ("transformer_blocks.0.attn.to_q.weight", (112, 32)),
-        ("transformer_blocks.0.attn.to_k.weight", (112, 32)),
-        ("transformer_blocks.0.attn.to_v.weight", (112, 32)),
-        ("transformer_blocks.0.attn.to_out.0.weight", (32, 112)),
-        ("transformer_blocks.0.attn.norm_q.weight", (32,)),
-        ("transformer_blocks.0.attn.norm_k.weight", (32,)),
-        ("transformer_blocks.0.ff.net.0.proj.weight", (64, 32)),
-        ("transformer_blocks.0.ff.net.2.weight", (32, 64)),
-        ("transformer_blocks.0.adaln_proj.linear.weight", (96, 32)),
-        ("transformer_blocks.0.adaln_proj.linear.bias", (96,)),
-    ),
-}
+def _fixture(name: str) -> dict[str, Any]:
+    loaded: dict[str, Any] = json.loads((_DATA / name).read_text(encoding="utf-8"))
+    return loaded
+
+
+_LTX2 = _fixture("layout-ltx2-upsampler-plain-bf16.json")
+_ERNIE = _fixture("layout-ernie-fp8-rowwise.json")
+
+
+# -- writing trees ----------------------------------------------------------
 
 
 def _count(shape: tuple[int, ...]) -> int:
@@ -157,117 +91,272 @@ def _body(name: str, dtype: str, shape: tuple[int, ...]) -> bytes:
 
 
 def _seed(
-    cas: LocalCAS,
-    dtype: str,
-    tree: dict[str, tuple[tuple[str, tuple[int, ...]], ...]] | None = None,
+    cas: LocalCAS, dtype: str, tree: dict[str, dict[str, tuple[int, ...]]]
 ) -> RepositoryManifest:
     entries = []
-    for path, tensors in (tree or _TREE).items():
+    for path, tensors in tree.items():
         writer = TensorWriter(cas, path)
-        for name, shape in tensors:
+        for name, shape in tensors.items():
             writer.add(name, dtype, shape, _body(name, dtype, shape))
         entries.append(writer.finish())
     return RepositoryManifest(tuple(entries))
 
 
-@pytest.fixture()
-def fp16_tree(tmp_path: Path) -> tuple[LocalCAS, RepositoryManifest]:
-    cas = LocalCAS(tmp_path / "cas")
-    return cas, _seed(cas, "F16")
+def _member(cas: LocalCAS, manifest: RepositoryManifest, path: str) -> Any:
+    entry = next(e for e in manifest.files if e.path == path)
+    return open_tensors(cas, RepositoryManifest((entry,)))
+
+
+# -- the small fp8 layout, with Go's quant block --------------------------
+
+
+#: The four members th#2160 drove its bind gate against. Shapes are 16-aligned
+#: on both axes wherever the fp8 rule is eligible, because that is a conjunct of
+#: the producing rule, and a fixture that ignored it would prove the plan
+#: against weights the real producer would refuse.
+_UNET = "unet/diffusion_pytorch_model.safetensors"
+_VAE = "vae/diffusion_pytorch_model.safetensors"
+_TE = "text_encoder/model.safetensors"
+_TE2 = "text_encoder_2/model.safetensors"
+
+_UNET_BF16: dict[str, tuple[int, ...]] = {
+    "conv_in.weight": (32, 4, 3, 3),
+    "conv_in.bias": (32,),
+    "time_embedding.linear_1.weight": (32, 32),
+    "down_blocks.0.attentions.0.norm.weight": (32,),
+}
+_UNET_FP8: dict[str, tuple[int, ...]] = {
+    "down_blocks.0.attentions.0.proj_in.weight": (32, 32),
+    "down_blocks.0.attentions.0.transformer_blocks.0.attn1.to_q.weight": (32, 32),
+    "down_blocks.0.attentions.0.transformer_blocks.0.ff.net.0.proj.weight": (64, 32),
+    "down_blocks.0.resnets.0.time_emb_proj.weight": (32, 32),
+}
+_VAE_BF16: dict[str, tuple[int, ...]] = {
+    "encoder.conv_in.weight": (32, 3, 3, 3),
+    "encoder.conv_in.bias": (32,),
+}
+# THE v1 COLLISION, kept as a fixture: both text encoders carry this key, at
+# different widths. A flat pattern set could not tell CLIP-L from CLIP-G; two
+# finite maps can.
+_SHARED_KEY = "text_model.encoder.layers.0.self_attn.q_proj.weight"
+_TE_BF16: dict[str, tuple[int, ...]] = {_SHARED_KEY: (32, 32)}
+_TE2_BF16: dict[str, tuple[int, ...]] = {_SHARED_KEY: (64, 64)}
+
+_TREE: dict[str, dict[str, tuple[int, ...]]] = {
+    _UNET: {**_UNET_BF16, **_UNET_FP8},
+    _VAE: _VAE_BF16,
+    _TE: _TE_BF16,
+    _TE2: _TE2_BF16,
+}
+
+
+def _component(name: str, role: str, tensors: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    return {"name": name, "role": role, "tensors": tensors}
+
+
+def _plain(shapes: dict[str, tuple[int, ...]], dtype: str = "BF16") -> dict[str, dict[str, Any]]:
+    return {key: {"dtypes": [dtype], "shape": list(shape)} for key, shape in shapes.items()}
+
+
+def _quantized(shapes: dict[str, tuple[int, ...]]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for key, shape in shapes.items():
+        out[key] = {"dtypes": ["F8_E4M3"], "shape": list(shape)}
+        out[key.removesuffix(".weight") + ".weight_scale"] = {
+            "dtypes": ["F32"],
+            "shape": [shape[0]],
+        }
+    return out
+
+
+def _layout(components: list[dict[str, Any]], quant: dict[str, Any], stamp: str) -> ExpectedHeader:
+    transformed = sum(
+        1
+        for component in components
+        for entry in component["tensors"].values()
+        if entry["dtypes"] == ["F8_E4M3"]
+    )
+    quant = {**deepcopy(quant), "transformed": transformed}
+    return ExpectedHeader.from_document(
+        {
+            "stamp": stamp,
+            "topology": stamp.split("+")[0],
+            "topology_digest": "0" * 64,
+            "quant": quant,
+            "components": components,
+        }
+    )
+
+
+def _fp8_layout() -> ExpectedHeader:
+    """The small SDXL-shaped fp8 target. The quant block is Go's, verbatim."""
+
+    return _layout(
+        [
+            _component(
+                "unet",
+                "denoiser",
+                {**_plain(_UNET_BF16), **_quantized(_UNET_FP8)},
+            ),
+            _component("vae", "vae", _plain(_VAE_BF16)),
+            _component("text_encoder", "text_encoder", _plain(_TE_BF16)),
+            _component("text_encoder_2", "text_encoder", _plain(_TE2_BF16)),
+        ],
+        _ERNIE["quant"],
+        "sdxl-small.diffusers@1+cozy.fp8-rowwise@1",
+    )
+
+
+def _bf16_layout() -> ExpectedHeader:
+    return _layout(
+        [
+            _component("unet", "denoiser", _plain({**_UNET_BF16, **_UNET_FP8})),
+            _component("vae", "vae", _plain(_VAE_BF16)),
+            _component("text_encoder", "text_encoder", _plain(_TE_BF16)),
+            _component("text_encoder_2", "text_encoder", _plain(_TE2_BF16)),
+        ],
+        _LTX2["quant"],
+        "sdxl-small.diffusers@1+plain.bf16@1",
+    )
 
 
 @pytest.fixture()
 def bf16_tree(tmp_path: Path) -> tuple[LocalCAS, RepositoryManifest]:
     cas = LocalCAS(tmp_path / "cas")
-    return cas, _seed(cas, "BF16")
+    return cas, _seed(cas, "BF16", _TREE)
 
 
-def _member(cas: LocalCAS, manifest: RepositoryManifest, path: str) -> object:
-    entry = next(e for e in manifest.files if e.path == path)
-    return open_tensors(cas, RepositoryManifest((entry,)))
+# -- the recipe is the quant rule's identity --------------------------------
 
 
-# -- the recipe is the lane's property, not the caller's ---------------------
+def test_the_recipe_is_the_quant_rule() -> None:
+    assert recipe_for(ExpectedHeader.from_document(_LTX2)) == "dtype-cast"
+    assert recipe_for(ExpectedHeader.from_document(_ERNIE)) == "fp8-rowwise"
 
 
-def test_the_recipe_is_read_out_of_the_target_lane() -> None:
-    assert recipe_for(library.get("sdxl.diffusers-bf16@1")) == "dtype-cast"
-    assert recipe_for(library.get("sdxl.diffusers-fp8-rowwise@1")) == "fp8-rowwise"
-    assert recipe_for(library.get("minimax.h3-dit-fp8-rowwise@1")) == "fp8-rowwise"
+@pytest.mark.parametrize("handle", ["cozy.nvfp4-flat@1", "cozy.fp8-storage@1"])
+def test_a_rule_this_producer_has_no_kernel_for_refuses(handle: str) -> None:
+    """The silent default #129 forbids, in both of its shapes. Falling through
+    to a cast for a 4-bit rule writes bytes in the target's element type with
+    none of the rule's scales. `cozy.fp8-storage` is subtler and worse: it is a
+    scale-free fp8 rule, so a plain cast produces a file that looks entirely
+    right -- except that torch's fp8 cast does not saturate, and every weight
+    the rule would have clamped to 448 is now NaN."""
+
+    foreign = deepcopy(_ERNIE)
+    foreign["quant"]["handle"] = handle
+    with pytest.raises(ConversionRefused, match="no kernel for quant rule"):
+        recipe_for(ExpectedHeader.from_document(foreign))
+
+
+def test_a_rowwise_rule_with_foreign_conventions_refuses() -> None:
+    """Same family, re-versioned with a different scale granularity. The
+    kernel below would write confidently wrong scales, so the conventions are
+    read rather than assumed from the family name."""
+
+    blockwise = deepcopy(_ERNIE)
+    blockwise["quant"]["conventions"]["scale"] = "block_128x128"
+    with pytest.raises(ConversionRefused, match="conventions this producer"):
+        recipe_for(ExpectedHeader.from_document(blockwise))
 
 
 # -- direction 1: the over-constraint remedy --------------------------------
 
 
-def test_an_fp16_tree_converts_to_the_bf16_lane(
-    fp16_tree: tuple[LocalCAS, RepositoryManifest],
-) -> None:
-    cas, manifest = fp16_tree
-    result = convert(cas, manifest, library.get("sdxl.diffusers-bf16@1"))
+def test_an_fp16_tree_converts_to_a_bf16_layout(tmp_path: Path) -> None:
+    cas = LocalCAS(tmp_path / "cas")
+    manifest = _seed(cas, "F16", _TREE)
+    result = convert(cas, manifest, _bf16_layout())
     assert result.plan.recipe == "dtype-cast"
-    # Every member carries claimed tensors, so every member is rewritten: this
-    # lane's dtype constraint is BF16 on all four.
     assert set(result.rewritten) == set(_TREE)
     for path in _TREE:
-        with _member(cas, result.manifest, path) as out:  # type: ignore[attr-defined]
+        with _member(cas, result.manifest, path) as out:
             for name in out:
                 assert out[name].dtype == "BF16", f"{path}:{name}"
 
 
-def test_the_conversion_is_lossless_within_bf16(
-    fp16_tree: tuple[LocalCAS, RepositoryManifest],
-) -> None:
+def test_the_conversion_is_lossless_within_bf16(tmp_path: Path) -> None:
     """A cast is math, so the claim is not "identical" -- it is "the rounding is
     the rounding". Round-to-nearest-even, not truncation: truncating biases
     every magnitude toward zero, which no shape or dtype check can see."""
 
-    cas, manifest = fp16_tree
+    cas = LocalCAS(tmp_path / "cas")
+    manifest = _seed(cas, "F16", _TREE)
     name = "down_blocks.0.resnets.0.time_emb_proj.weight"
-    with _member(cas, manifest, _UNET) as source:  # type: ignore[attr-defined]
+    with _member(cas, manifest, _UNET) as source:
         before = source[name].tobytes()
-    result = convert(cas, manifest, library.get("sdxl.diffusers-bf16@1"))
-    with _member(cas, result.manifest, _UNET) as out:  # type: ignore[attr-defined]
+    result = convert(cas, manifest, _bf16_layout())
+    with _member(cas, result.manifest, _UNET) as out:
         after = out[name].tobytes()
     for index in range(len(before) // 2):
-        source = struct.unpack_from("<e", before, index * 2)[0]
+        original = struct.unpack_from("<e", before, index * 2)[0]
         lo, hi = after[index * 2], after[index * 2 + 1]
-        result = struct.unpack("<f", bytes((0, 0, lo, hi)))[0]
-        assert abs(result - source) <= abs(source) * 2.0**-8 + 2.0**-20
+        rounded = struct.unpack("<f", bytes((0, 0, lo, hi)))[0]
+        assert abs(rounded - original) <= abs(original) * 2.0**-8 + 2.0**-20
 
 
-# -- the fp8-rowwise lane ---------------------------------------------------
+def test_a_real_computed_layout_drives_the_planner(tmp_path: Path) -> None:
+    """The same cast, aimed at a layout this repository did not author: the
+    ltx2 upsampler as `compute_layout` printed it, keys and shapes and all."""
+
+    layout = ExpectedHeader.from_document(_LTX2)
+    shapes = {
+        key: entry.shape
+        for key, entry in layout.tensors().items()
+        if _count(entry.shape) <= 1024
+    }
+    assert shapes, "the fixture has no cheap keys to drive bytes through"
+
+    cas = LocalCAS(tmp_path / "cas")
+    member = "latent_upsampler/diffusion_pytorch_model.safetensors"
+    manifest = _seed(cas, "F16", {member: shapes})
+    result = convert(cas, manifest, layout)
+    assert result.rewritten == (member,)
+    with _member(cas, result.manifest, member) as out:
+        assert {out[name].dtype for name in out} == {"BF16"}
 
 
-def test_a_bf16_tree_converts_to_the_fp8_rowwise_lane(
+def test_a_shape_the_layout_does_not_declare_refuses(tmp_path: Path) -> None:
+    """v1 could only compare dtypes, so a checkpoint of the right family and
+    the wrong size converted cleanly and failed at load. The computed layout
+    carries the shape."""
+
+    layout = ExpectedHeader.from_document(_LTX2)
+    cas = LocalCAS(tmp_path / "cas")
+    member = "latent_upsampler/diffusion_pytorch_model.safetensors"
+    manifest = _seed(cas, "F16", {member: {"final_conv.bias": (127,)}})
+    with pytest.raises(ConversionRefused, match="not that model"):
+        convert(cas, manifest, layout)
+
+
+# -- the fp8-rowwise rule ---------------------------------------------------
+
+
+def test_a_bf16_tree_converts_to_the_fp8_rowwise_layout(
     bf16_tree: tuple[LocalCAS, RepositoryManifest],
 ) -> None:
     cas, manifest = bf16_tree
-    result = convert(cas, manifest, library.get("sdxl.diffusers-fp8-rowwise@1"))
+    result = convert(cas, manifest, _fp8_layout())
     assert result.plan.recipe == "fp8-rowwise"
-    # THE POINT: fp8 storage targets the denoiser, so the vae and both text
-    # encoders are not touched at all and keep every digest they had.
+    # THE POINT: the rule scopes itself to the denoiser, so the vae and both
+    # text encoders are not touched at all and keep every digest they had.
     assert result.rewritten == (_UNET,)
-    with _member(cas, result.manifest, _UNET) as out:  # type: ignore[attr-defined]
-        quantized = [name for name in out if out[name].dtype == FP8_E4M3]
+    with _member(cas, result.manifest, _UNET) as out:
+        quantized = sorted(name for name in out if out[name].dtype == FP8_E4M3)
         scales = [name for name in out if name.endswith(".weight_scale")]
-        assert quantized, "the recipe converted nothing"
+        assert quantized == sorted(_UNET_FP8)
         assert len(scales) == len(quantized), (
             "every fp8 weight needs its per-row scale; a mismatch here IS the "
             "half-quantized artifact"
         )
         for name in quantized:
-            scale = out[name[: -len(".weight")] + ".weight_scale"]
+            scale = out[name.removesuffix(".weight") + ".weight_scale"]
             assert scale.dtype == "F32"
             assert scale.shape == (out[name].shape[0],), (
                 "a per-ROW scale has one entry per output row"
             )
-        # The rule's own consequences, asserted so a future edit to the skip
-        # list is caught by a test rather than by a render.
-        assert "down_blocks.0.attentions.0.proj_in.weight" in quantized
-        assert "down_blocks.0.resnets.0.time_emb_proj.weight" in quantized
-        assert "time_embedding.linear_1.weight" not in quantized
-        assert "conv_in.weight" not in quantized
-        assert "down_blocks.0.attentions.0.norm.weight" not in quantized
+        for name in _UNET_BF16:
+            assert out[name].dtype == "BF16", f"{name} is outside the rule's scope"
 
 
 def test_the_scale_is_a_multiplier_not_its_reciprocal(
@@ -278,7 +367,7 @@ def test_the_scale_is_a_multiplier_not_its_reciprocal(
 
     cas, manifest = bf16_tree
     name = "down_blocks.0.attentions.0.transformer_blocks.0.attn1.to_q.weight"
-    with _member(cas, manifest, _UNET) as reader:  # type: ignore[attr-defined]
+    with _member(cas, manifest, _UNET) as reader:
         source = reader[name]
         rows, columns = source.shape
         raw = source.tobytes()
@@ -286,19 +375,19 @@ def test_the_scale_is_a_multiplier_not_its_reciprocal(
         for index in range(rows * columns):
             lo, hi = raw[index * 2], raw[index * 2 + 1]
             original.append(struct.unpack("<f", bytes((0, 0, lo, hi)))[0])
-    result = convert(cas, manifest, library.get("sdxl.diffusers-fp8-rowwise@1"))
-    with _member(cas, result.manifest, _UNET) as out:  # type: ignore[attr-defined]
+    result = convert(cas, manifest, _fp8_layout())
+    with _member(cas, result.manifest, _UNET) as out:
         weights = out[name].tobytes()
-        scale_name = name[: -len(".weight")] + ".weight_scale"
-        scales = struct.unpack(f"<{rows}f", out[scale_name].tobytes())
+        scale = out[name.removesuffix(".weight") + ".weight_scale"]
+        scales = struct.unpack(f"<{rows}f", scale.tobytes())
     for row in range(rows):
-        peak = max(abs(v) for v in original[row * columns : (row + 1) * columns])
+        row_slice = original[row * columns : (row + 1) * columns]
+        peak = max(abs(value) for value in row_slice)
         if peak == 0.0:
             continue
         recovered = [
             _decode_e4m3(weights[row * columns + column]) * scales[row] for column in range(columns)
         ]
-        row_slice = original[row * columns : (row + 1) * columns]
         for observed, expected in zip(recovered, row_slice, strict=True):
             assert abs(observed - expected) <= peak / 8.0
 
@@ -321,11 +410,44 @@ def test_untouched_members_keep_their_objects(
     untouched = {
         entry.path: read_entry(cas, entry) for entry in manifest.files if entry.path != _UNET
     }
-    result = convert(cas, manifest, library.get("sdxl.diffusers-fp8-rowwise@1"))
+    result = convert(cas, manifest, _fp8_layout())
     for entry in result.manifest.files:
         if entry.path == _UNET:
             continue
         assert read_entry(cas, entry) == untouched[entry.path], entry.path
+
+
+def test_each_text_encoder_is_measured_against_its_own_component(
+    bf16_tree: tuple[LocalCAS, RepositoryManifest],
+) -> None:
+    """The v1 collision, resolved. `text_encoder` and `text_encoder_2` carry
+    the same key at 32x32 and 64x64; if the planner reached for a single flat
+    rule set, one of them would refuse on shape."""
+
+    cas, manifest = bf16_tree
+    layout = _fp8_layout()
+    assert component_of(layout, _TE) == "text_encoder"
+    assert component_of(layout, _TE2) == "text_encoder_2"
+    assert layout.tensors(_TE.split("/")[0])[_SHARED_KEY].shape == (32, 32)
+    assert layout.tensors(_TE2.split("/")[0])[_SHARED_KEY].shape == (64, 64)
+    # And it survives the whole producer: neither member is rewritten, and
+    # neither raises.
+    assert convert(cas, manifest, layout).rewritten == (_UNET,)
+
+
+def test_a_member_the_layout_does_not_name_is_carried_by_reference(
+    bf16_tree: tuple[LocalCAS, RepositoryManifest],
+) -> None:
+    cas, manifest = bf16_tree
+    stray = TensorWriter(cas, "scheduler/extra.safetensors")
+    stray.add("whatever", "BF16", (4, 4), _body("x", "BF16", (4, 4)))
+    widened = RepositoryManifest((*manifest.files, stray.finish()))
+    before = {entry.path: read_entry(cas, entry) for entry in widened.files}
+    result = convert(cas, widened, _fp8_layout())
+    assert "scheduler/extra.safetensors" not in result.rewritten
+    for entry in result.manifest.files:
+        if entry.path != _UNET:
+            assert read_entry(cas, entry) == before[entry.path]
 
 
 # -- the refusals that exist because the failure is silent ------------------
@@ -335,128 +457,19 @@ def test_requantizing_an_fp8_tree_is_a_no_op_not_a_second_pass(
     bf16_tree: tuple[LocalCAS, RepositoryManifest],
 ) -> None:
     cas, manifest = bf16_tree
-    target = library.get("sdxl.diffusers-fp8-rowwise@1")
+    target = _fp8_layout()
     result = convert(cas, manifest, target)
     again = convert(cas, result.manifest, target)
     assert again.plan.converted == 0, "a second pass must not re-quantize fp8 bytes"
     assert again.rewritten == ()
 
 
-def test_a_lane_whose_recipe_matches_nothing_refuses(tmp_path: Path) -> None:
-    """The module shape moved under the recipe. Writing the file anyway would
-    stamp a bit-identical copy of the source as an fp8 lane, and the pod would
-    then serve a silently-bf16 'fp8' checkpoint."""
+def test_a_rule_that_transforms_nothing_here_refuses(tmp_path: Path) -> None:
+    """The module shape moved under the rule. Writing the file anyway would
+    stamp a bit-identical copy of the source as an fp8 layout, and the pod
+    would then serve a silently-bf16 'fp8' checkpoint."""
 
     cas = LocalCAS(tmp_path / "cas")
-    writer = TensorWriter(cas, _UNET)
-    writer.add("nothing.this.lane.knows", "BF16", (4, 4), _body("x", "BF16", (4, 4)))
-    manifest = RepositoryManifest((writer.finish(),))
+    manifest = _seed(cas, "BF16", {_UNET: _UNET_BF16, _VAE: _VAE_BF16})
     with pytest.raises(ConversionRefused, match="converts none of them"):
-        convert(cas, manifest, library.get("sdxl.diffusers-fp8-rowwise@1"))
-
-
-# -- the proof fixture the Go matcher grades --------------------------------
-
-
-def test_write_the_verdict_proof_fixture(tmp_path: Path) -> None:
-    """Emit both trees' headers for `conversion_proof_test.go`.
-
-    The verdict is NOT taken here. This test's whole job is to put real bytes
-    where the real matcher can read them, so the claim "the converted tree
-    satisfies the lane" is answered by the code the hub actually calls.
-    """
-
-    out_dir = os.environ.get("TENSORFS_CONVERSION_PROOF_DIR")
-    if not out_dir:
-        pytest.skip("set TENSORFS_CONVERSION_PROOF_DIR (scripts/prove-conversion.sh)")
-    destination = Path(out_dir)
-    destination.mkdir(parents=True, exist_ok=True)
-
-    cases: dict[str, dict[str, object]] = {}
-    for label, dtype, lane, tree in (
-        ("fp16-to-bf16", "F16", "sdxl.diffusers-bf16@1", _TREE),
-        ("bf16-to-fp8-rowwise", "BF16", "sdxl.diffusers-fp8-rowwise@1", _TREE),
-        ("h3-bf16-to-fp8-rowwise", "BF16", "minimax.h3-dit-fp8-rowwise@1", _H3_TREE),
-    ):
-        cas = LocalCAS(tmp_path / f"cas-{label}")
-        manifest = _seed(cas, dtype, tree)
-        before = _headers(cas, manifest)
-        result = convert(cas, manifest, library.get(lane))
-        after = _headers(cas, result.manifest)
-        cases[label] = {
-            "lane": lane,
-            "before": before,
-            "after": after,
-            "rewritten": list(result.rewritten),
-            # The parity fence. The planner needs to know which declaration
-            # claims a tensor, and it answers that with a Python port of a rule
-            # whose authority is Rust. A port that silently claims NOTHING is
-            # not hypothetical -- it is the bug this suite caught while being
-            # written (a two-segment pattern was read as ambiguous, so every
-            # `a.{i}.b` declaration matched nothing and every conversion was a
-            # no-op that still looked like a pass). So Go re-counts.
-            "python_claimed": {
-                path: sum(
-                    1
-                    for tensor in tensors
-                    if _declaration_for(library.get(lane), str(tensor["name"]))
-                    is not None
-                )
-                for path, tensors in after.items()
-            },
-        }
-
-    (destination / "verdict-cases.json").write_text(json.dumps(cases, indent=2), encoding="utf-8")
-
-
-def _headers(cas: LocalCAS, manifest: RepositoryManifest) -> dict[str, list[dict[str, object]]]:
-    files: dict[str, list[dict[str, object]]] = {}
-    for entry in manifest.files:
-        with open_tensors(cas, RepositoryManifest((entry,))) as reader:
-            files[entry.path] = [
-                {
-                    "name": reader[name].name,
-                    "dtype": reader[name].dtype,
-                    "shape": list(reader[name].shape),
-                    "length": reader[name].nbytes,
-                }
-                for name in sorted(reader)
-            ]
-    return files
-
-
-def test_the_h3_fp8_document_is_what_the_producer_writes(tmp_path: Path) -> None:
-    """The H3 fp8 lane, closed-loop.
-
-    This document was DERIVED (from minimax.h3-dit-diffusers@1 plus gen-worker's
-    eligibility rule) rather than read off the live artifact, which this author
-    could not reach. So the claim it is entitled to make is exactly this one:
-    the producer's output satisfies it. Whether the artifact already on the hub
-    was made by this producer is a separate question, named in the document's
-    own description and owed in tensorfs#128 -- and if the answer is no, the
-    failure is a bind refusal naming the tensor, never a silent mismatch.
-    """
-
-    cas = LocalCAS(tmp_path / "cas")
-    manifest = _seed(cas, "BF16", _H3_TREE)
-    result = convert(cas, manifest, library.get("minimax.h3-dit-fp8-rowwise@1"))
-    assert result.plan.recipe == "fp8-rowwise"
-    with _member(cas, result.manifest, _DIT) as out:  # type: ignore[attr-defined]
-        quantized = sorted(name for name in out if out[name].dtype == FP8_E4M3)
-        assert quantized == [
-            "transformer_blocks.0.adaln_proj.linear.weight",
-            "transformer_blocks.0.attn.to_k.weight",
-            "transformer_blocks.0.attn.to_out.0.weight",
-            "transformer_blocks.0.attn.to_q.weight",
-            "transformer_blocks.0.attn.to_v.weight",
-            "transformer_blocks.0.ff.net.0.proj.weight",
-            "transformer_blocks.0.ff.net.2.weight",
-        ]
-        # The q/k/v scales are REQUIRED by the document, which is how it refuses
-        # a half-quantized DiT; assert they are actually there.
-        for leaf in ("to_q", "to_k", "to_v"):
-            scale = out[f"transformer_blocks.0.attn.{leaf}.weight_scale"]
-            assert scale.dtype == "F32" and scale.shape == (112,)
-        # The norms are the rule's own exclusions, not an oversight.
-        assert out["transformer_blocks.0.attn.norm_q.weight"].dtype == "BF16"
-        assert out["transformer_blocks.0.adaln_proj.linear.bias"].dtype == "BF16"
+        convert(cas, manifest, _fp8_layout())

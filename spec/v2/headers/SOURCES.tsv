@@ -1,0 +1,30 @@
+# Banked REAL checkpoint headers — id <TAB> ref[,ref...] <TAB> note <TAB> member filter
+# Regenerate with scripts/bank-headers.py (header ranges only, zero weight bytes).
+# These are the measured input of BOTH the banked v1 verdict baselines and every
+# v2 proof: committed, never fetched at test time.
+# The member filter picks ONE packaging out of a repo that ships several side by
+# side — a tree carrying both `.safetensors` and `.fp16.safetensors` is two
+# checkpoints, not one.
+sdxl-base	hf:stabilityai/stable-diffusion-xl-base-1.0:unet,hf:stabilityai/stable-diffusion-xl-base-1.0:vae,hf:stabilityai/stable-diffusion-xl-base-1.0:text_encoder,hf:stabilityai/stable-diffusion-xl-base-1.0:text_encoder_2	the SDXL reference tree, diffusers multifolder	!.fp16.
+sdxl-base-fp16	hf:stabilityai/stable-diffusion-xl-base-1.0:unet,hf:stabilityai/stable-diffusion-xl-base-1.0:vae,hf:stabilityai/stable-diffusion-xl-base-1.0:text_encoder,hf:stabilityai/stable-diffusion-xl-base-1.0:text_encoder_2	the same tree packaged fp16 — the dominant community packaging, and the DERIVABLE case	.fp16.
+sdxl-base-sharded	local:/home/fidika/.cache/cozy/pgw1587-accept/sdxl-bf16-tree	the same network with a 3-shard unet — the shard-flattening case	
+sdxl-inpainting	hf:diffusers/stable-diffusion-xl-1.0-inpainting-0.1:unet	9-channel conv_in — THE HOLE v1 admits	!.fp16.
+sd15	hf:stable-diffusion-v1-5/stable-diffusion-v1-5:unet	SD1.x — rank-4 proj_in/proj_out	!.fp16.|.non_ema.
+sd-turbo	hf:stabilityai/sd-turbo:unet	SD2.x — rank-2 proj_in/proj_out, identical key set	!.fp16.
+anima-base	hf:circlestone-labs/Anima:split_files/diffusion_models/anima-base-v1.0.safetensors	net.* packaging	
+anima-turbo	hf:circlestone-labs/Anima:split_files/diffusion_models/anima-turbo-v1.0.safetensors	model.diffusion_model.* packaging — the rekey morphism's other end	
+joycaption	hf:fancyfeast/llama-joycaption-beta-one-hf-llava	4 shards — the multi-shard self-refusal class	
+musicgen	hf:facebook/musicgen-stereo-medium	fp16 transformers packaging	
+ltx-2-upsampler	hf:dg845/LTX-2.3-Spatial-Upsampler-Diffusers:latent_upsampler	conditional layout	
+ernie	hf:baidu/ERNIE-Image@5346b31d68c9c23758ba56ef8be5e9dc174c7f99:transformer	the human-authored document's own reference	
+qwen3.6-35b-a3b-fp8	hf:Qwen/Qwen3.6-35B-A3B-FP8	42 shards, fp8 + head-major q|gate fusion	
+minimax-h3-diffusers	hf:MiniMaxAI/MiniMax-H3:transformer	638 keys, split to_q/to_k/to_v — what the hub ships (te#185's second stop)	
+qwen3.6-35b-a3b	hf:Qwen/Qwen3.6-35B-A3B	the bf16 reference the fp8 release quantizes	
+flux1	hf:black-forest-labs/FLUX.1-dev:transformer,hf:black-forest-labs/FLUX.1-dev:text_encoder,hf:black-forest-labs/FLUX.1-dev:text_encoder_2,hf:black-forest-labs/FLUX.1-dev:vae	FLUX.1-dev, diffusers multifolder	
+flux2-klein	hf:black-forest-labs/FLUX.2-klein-4B:transformer,hf:black-forest-labs/FLUX.2-klein-4B:text_encoder,hf:black-forest-labs/FLUX.2-klein-4B:vae	FLUX.2 klein-4B	
+hidream-o1	hf:HiDream-ai/HiDream-O1-Image-Dev	8 shards at the repo root	
+ltx-2	hf:diffusers/LTX-2.3-Distilled-Diffusers:transformer,hf:diffusers/LTX-2.3-Distilled-Diffusers:vae,hf:diffusers/LTX-2.3-Distilled-Diffusers:audio_vae,hf:diffusers/LTX-2.3-Distilled-Diffusers:connectors,hf:diffusers/LTX-2.3-Distilled-Diffusers:text_encoder,hf:diffusers/LTX-2.3-Distilled-Diffusers:vocoder	LTX-2.3 distilled	
+wan22	hf:Wan-AI/Wan2.2-T2V-A14B-Diffusers:transformer,hf:Wan-AI/Wan2.2-T2V-A14B-Diffusers:transformer_2,hf:Wan-AI/Wan2.2-T2V-A14B-Diffusers:vae,hf:Wan-AI/Wan2.2-T2V-A14B-Diffusers:text_encoder	Wan 2.2 T2V A14B — two denoisers	
+z-image	hf:Tongyi-MAI/Z-Image-Turbo:transformer,hf:Tongyi-MAI/Z-Image-Turbo:vae,hf:Tongyi-MAI/Z-Image-Turbo:text_encoder	Z-Image Turbo	
+stable-audio	hf:stabilityai/stable-audio-open-1.0:transformer,hf:stabilityai/stable-audio-open-1.0:vae,hf:stabilityai/stable-audio-open-1.0:text_encoder,hf:stabilityai/stable-audio-open-1.0:projection_model	Stable Audio Open 1.0	
+sdxl-inpainting-bf16	recast:sdxl-inpainting:BF16	THE HOLE, in the packaging that exposes it: the real 9-channel inpainting UNet re-typed to bf16, which is what tensorhub publishes. v1 ADMITS this into the SDXL lane.	

@@ -19,10 +19,10 @@ use std::sync::Mutex;
 use crate::workspace_db::{Connection, OptionalExtension, Param, TransactionBehavior, params};
 use thiserror::Error;
 
-use crate::contract::{Registry, Stamp};
+use crate::contract::{Contract, Stamp};
 use crate::layout::{Layout, LayoutError, Removal, ScratchReap};
 use crate::object::ObjectDigest;
-use crate::planner::{ByteSource as _, PlanError, PlannerId, inventory, plan_with};
+use crate::planner::{ByteSource as _, PlanError, PlannerId, plan_with};
 use crate::store::{ObjectStore, StoreError};
 use crate::tfm1::{
     Entry, FileBody, FileRecord, HeadTree, Snapshot, SnapshotBuilder, SnapshotId, Tfm1Error,
@@ -268,11 +268,13 @@ fn manifest_objects(snapshot: &Snapshot, into: &mut HashSet<ObjectDigest>) {
 pub struct WorkspaceStore {
     store: ObjectStore,
     connection: Mutex<Connection>,
-    /// The contracts a seal may identify a file against. Sealing is where
-    /// this store canonicalizes bytes, so it is where contract-directed
-    /// chunking has to happen: the seal reads the header inventory, picks the
-    /// contract, cuts the seams, and records the stamp that explains them.
-    registry: Registry,
+    /// The SEAM DESCRIPTOR this store cuts against, when the caller supplies
+    /// one. Sealing is where the bytes are canonicalized, so it is where
+    /// seam-directed chunking happens — but the store no longer IDENTIFIES the
+    /// file to pick it. Identification is the hub's, once, in Go (tensorfs#151);
+    /// a caller that knows a file's layout hands the seams in, and a caller
+    /// that does not gets plain chunking and an unstamped manifest.
+    seams: Option<Contract>,
 }
 
 impl WorkspaceStore {
@@ -349,28 +351,26 @@ impl WorkspaceStore {
         Ok(Self {
             store,
             connection: Mutex::new(connection),
-            // The shipped library, which is data in `spec/v1/contracts/`. A
-            // caller that ingests a family we do not ship supplies its own.
-            registry: Registry::builtin().expect("the shipped contracts parse"),
+            seams: None,
         })
     }
 
-    /// Replaces the contract library this store seals against.
+    /// Sets the seam descriptor this store cuts against.
     ///
-    /// Chunking stays a pure function of (bytes, contract): the registry only
-    /// decides WHICH contract a file is identified as, and the answer is
-    /// recorded in the snapshot, so a later registry cannot silently
-    /// reinterpret a sealed snapshot.
+    /// Chunking stays a pure function of (bytes, seams). What changed in v2 is
+    /// only where the seams come FROM: the caller, who was told by the one
+    /// engine that identifies checkpoints, instead of a registry in this crate
+    /// guessing from the header.
     #[must_use]
-    pub fn with_registry(mut self, registry: Registry) -> Self {
-        self.registry = registry;
+    pub fn with_seams(mut self, seams: Option<Contract>) -> Self {
+        self.seams = seams;
         self
     }
 
-    /// The contracts this store identifies files against.
+    /// The seam descriptor, if one was supplied.
     #[must_use]
-    pub const fn registry(&self) -> &Registry {
-        &self.registry
+    pub const fn seams(&self) -> Option<&Contract> {
+        self.seams.as_ref()
     }
 
     /// Whether this store root can be opened by several processes at once.
@@ -703,14 +703,13 @@ impl WorkspaceStore {
             // zeros included, read through the record source — as one object.
             return Ok(Some(self.blob_seal_job(path, &source)?));
         }
-        // Identification is header-only and happens before planning: the
-        // winning contract's seams then direct the cuts, and its stamp goes
-        // into the manifest beside them.
-        let detected = match inventory(&source)? {
-            Some(inventory) => self.registry.detect(&inventory).stamp().clone(),
-            None => Stamp::None,
-        };
-        let planned = plan_with(&source, self.registry.get(&detected))?;
+        // No identification happens here any more. The seams, when the caller
+        // supplied them, direct the cuts and their stamp goes into the manifest
+        // beside them; otherwise the file is chunked plainly and stamped None.
+        // A store that guessed would be a second answer to "what is this
+        // checkpoint", which is the question tensorfs#151 gave exactly one
+        // owner.
+        let planned = plan_with(&source, self.seams.as_ref())?;
         if planned.planner() == PlannerId::BlobV1 {
             // Already committed as its single whole-file object: reuse by
             // (offset, length) with ZERO re-hashing — the blob extension of

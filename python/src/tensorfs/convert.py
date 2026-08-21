@@ -1,23 +1,29 @@
-"""Produce the checkpoint a lane contract asks for, from the one you have.
+"""Produce the checkpoint a v2 layout asks for, from the one you have.
 
-This is the other half of the derivability verdict. ``Contract.Verdict`` (Go,
-``verdict.go``) answers *Satisfies | DerivableVia(conversion) | Incompatible*
-for a candidate checkpoint against a lane. The middle answer is only worth
-having if something can actually produce the derived checkpoint, and until this
-module existed nothing could: two independent gates emitted a CONVERTIBLE code
-and then refused, because the producer they pointed at was never wired
-(tensorhub th#2164 — ``grep "Conversions:"`` returned zero hits).
+The target is an :class:`~tensorfs.layout2.ExpectedHeader` — ``quant(topology)``
+as the Go engine computed it. The verdict that a checkpoint is DERIVABLE to that
+layout is the hub's and is taken in Go; this module is the other half, the thing
+that can actually produce the derived checkpoint. Until it existed nothing could:
+two independent gates emitted a CONVERTIBLE code and then refused, because the
+producer they pointed at was never wired (tensorhub th#2164).
 
-**The recipe is a property of the TARGET LANE, never a caller's argument**
-(torchcg tcg#53). ``recipe_for`` reads it out of the target document: a lane
-whose declarations name ``F8_E4M3`` beside per-row ``weight_scale`` twins IS an
-fp8-rowwise lane, and there is nowhere else for that fact to live. A caller
-that could pass its own recipe would be a second authority for a fact the lane
+**The recipe is a property of the TARGET LAYOUT, never a caller's argument**
+(torchcg tcg#53). :func:`recipe_for` reads it off ``target.quant``: the QUANT
+RULE *is* the recipe — ``cozy.fp8-rowwise@1`` names one transformation and one
+set of conventions, and there is nowhere else for that fact to live. A caller
+that could pass its own recipe would be a second authority for a fact the layout
 already states, which is exactly the serve-time cast tcg#53 deletes.
 
+**No matching happens here (tensorfs#129, closed by deletion).** v1's planner
+carried a port of the ``{i}``-hole pattern grammar so it could ask "which
+declaration claims this tensor" — the THIRD copy of a rule whose authority was
+Rust, and the copy #129 named. A v2 layout is a FINITE MAP, so the question is
+``target.tensors(component).get(name)``, a dict lookup with nothing to disagree
+about. The port, ``_claims``, ``_segments`` and ``_declaration_for`` are gone.
+
 **What this module owns and what it deliberately does not.** tensorfs is
-chunking and the local CAS. So it owns the PLAN — which is contract semantics,
-a pure function of (source headers, target document) — and the WRITE, which is
+chunking and the local CAS. So it owns the PLAN — a pure function of (source
+headers, computed layout) — and the WRITE, which is
 :class:`~tensorfs.writer.TensorWriter` and was already here. It does NOT own
 the numeric kernel. An op names what must happen; a ``kernels`` mapping supplies
 the code that does it. :mod:`tensorfs.convert` ships a reference kernel set in
@@ -40,7 +46,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from .contract import Contract, TensorDecl
+from .layout2 import ExpectedHeader, LayoutTensor
 from .manifest import FileEntry, RepositoryManifest
 from .tensors import TensorError, TensorReader, TensorView, open_tensors
 from .writer import TensorWriter
@@ -56,6 +62,7 @@ __all__ = [
     "Op",
     "REFERENCE_KERNELS",
     "apply",
+    "component_of",
     "convert",
     "plan",
     "recipe_for",
@@ -70,9 +77,9 @@ SCALE_DTYPE = "F32"
 #: first or an out-of-range weight silently becomes NaN.
 FP8_E4M3_MAX = 448.0
 
-#: Recipe tokens. These are the same strings ``tensorfs.Conversion.Kind``
-#: carries on the Go side, so a hub that read a verdict can name the recipe it
-#: was offered without translating.
+#: Recipe tokens: what the producer switches its kernel set on. They are the
+#: PRODUCER's vocabulary, not the layout's — the layout names a quant rule, and
+#: `_RECIPES` below is the one place the two are related.
 DTYPE_CAST = "dtype-cast"
 FP8_ROWWISE = "fp8-rowwise"
 
@@ -124,7 +131,7 @@ class ConversionPlan:
 
     recipe: str
     target: str
-    """The target lane's stamp."""
+    """The target layout's stamp, ``<topology>@v+<quant>@v``."""
     files: tuple[FilePlan, ...] = field(default_factory=tuple)
 
     @property
@@ -149,152 +156,135 @@ class ConversionPlan:
         )
 
 
-# -- the pattern grammar ----------------------------------------------------
+# -- the recipe, which is the quant rule -------------------------------------
 #
-# A PORT, and labelled as one. `{i}` holes are the contract format's whole
-# matching grammar (spec/v1/contracts/README.md: "No regex: matching is linear
-# and unambiguous"), and the authority is `Contract::matches`
-# (crates/tensorfs-core/src/contract.rs) with the Go port beside it in
-# `match.go`. This is a THIRD implementation and that is a real cost, paid
-# because the planner must know which declaration claims a tensor and the Rust
-# matcher is not reachable from Python today. It is fenced by
-# `test_conversion.py::test_python_claims_agree_with_the_go_matcher`, which
-# drives the shipped library through both. Collapsing it into a pyo3 binding is
-# the standing follow-up (tensorfs#128).
+# v1 scanned the target's declarations for `F8_E4M3` beside `.weight_scale`
+# twins and INFERRED a recipe from the shape of the document. v2 does not have
+# to guess: `cozy.fp8-rowwise@1` names one transformation, and the conventions
+# it carries are the producer's instructions. What replaced the inference is a
+# lookup plus a refusal.
+
+#: quant-rule family -> the kernel set this producer implements. A family that
+#: is not here is a REFUSAL and never a default: silently falling through to a
+#: cast for, say, `cozy.nvfp4-flat` writes 4-bit-shaped garbage — or, for an
+#: fp8 family whose scales this producer cannot compute, fp8 bytes with no
+#: dequant multiplier. Both files parse, load, and serve wrong numbers.
+#:
+#: `cozy.fp8-storage` is deliberately ABSENT. It is a real shipped rule, but a
+#: scale-free one whose conventions require clamping to +/-448 before the cast
+#: (torch's fp8 cast does not saturate, so an unclamped weight becomes NaN).
+#: This producer has no clamp-then-cast kernel, and a plain cast would be the
+#: exact silent failure the refusal exists for.
+_RECIPES: Mapping[str, str] = {
+    "plain.bf16": DTYPE_CAST,
+    "plain.f16": DTYPE_CAST,
+    "plain.f32": DTYPE_CAST,
+    "cozy.fp8-rowwise": FP8_ROWWISE,
+}
 
 
-def _segments(pattern: str) -> tuple[str, ...] | None:
-    """Split a pattern on its holes, or ``None`` if the pattern is ambiguous."""
+def recipe_for(target: ExpectedHeader) -> str:
+    """Which conversion this layout's bytes are made by.
 
-    parts = pattern.split("{i}")
-    if len(parts) == 1:
-        return (pattern,)
-    for part in parts[1:-1]:
-        if not part:  # two adjacent holes
-            return None
-    for part in parts[1:]:
-        if part[:1].isdigit():  # a digit immediately after a hole
-            return None
-    return tuple(parts)
-
-
-def _claims(pattern: str, name: str) -> bool:
-    """Does ``pattern`` describe the tensor called ``name``?"""
-
-    segments = _segments(pattern)
-    if segments is None:
-        return False
-    if len(segments) == 1:
-        return name == segments[0]
-    if not name.startswith(segments[0]):
-        return False
-    cursor = len(segments[0])
-    for index, literal in enumerate(segments[1:], start=1):
-        digits = cursor
-        while digits < len(name) and name[digits].isdigit():
-            digits += 1
-        run = name[cursor:digits]
-        if not run or (len(run) > 1 and run[0] == "0"):
-            return False
-        last = index == len(segments) - 1
-        if last:
-            return name[digits:] == literal
-        if not name.startswith(literal, digits):
-            return False
-        cursor = digits + len(literal)
-    return False
-
-
-def _declaration_for(target: Contract, name: str) -> TensorDecl | None:
-    """The FIRST declaration claiming ``name`` — first-declaration-wins, the
-    same order the matcher applies, so the planner and the gate never disagree
-    about which rule governs a tensor."""
-
-    for decl in target.tensors:
-        if _claims(decl.pattern, name):
-            return decl
-    return None
-
-
-# -- the recipe, read out of the target lane --------------------------------
-
-
-def recipe_for(target: Contract) -> str:
-    """Which conversion this lane's bytes are made by.
-
-    Read from the document, never passed in. Two lanes ship today:
-
-    * a lane declaring ``F8_E4M3`` weights beside ``.weight_scale`` twins is
-      **fp8-rowwise**;
-    * any other lane whose declarations agree on one float element type is a
-      **dtype-cast** target.
-
-    A lane declaring fp8 weights and NO scale twins is refused rather than
-    treated as a plain cast: fp8 bytes with no dequant multiplier are the
-    half-quantized artifact, and inferring a recipe for it would produce
-    exactly that.
+    Read off the target's quant rule, never passed in. The rule IS the recipe.
     """
 
-    dtypes = {d for decl in target.tensors for d in (decl.dtypes or ())}
-    if FP8_E4M3 in dtypes:
-        scales = [d for d in target.tensors if d.pattern.endswith(SCALE_SUFFIX)]
-        if not scales:
-            raise ConversionRefused(
-                f"{target.stamp} declares {FP8_E4M3} weights but no "
-                f"{SCALE_SUFFIX!r} twin: fp8 bytes with no dequant multiplier "
-                "are not a layout, they are a half-quantized artifact"
-            )
-        return FP8_ROWWISE
-    return DTYPE_CAST
+    recipe = _RECIPES.get(target.quant.family)
+    if recipe is None:
+        known = ", ".join(sorted(_RECIPES))
+        raise ConversionRefused(
+            f"{target.stamp}: no kernel for quant rule {target.quant.handle}; "
+            f"this producer implements {known}. Refusing to fall back to a "
+            "cast, which would write bytes in the target's element type with "
+            "none of the rule's scales"
+        )
+    if recipe == FP8_ROWWISE:
+        _check_conventions(target)
+    return recipe
 
 
-def _cast_target(decl: TensorDecl | None) -> str:
-    if decl is None or not decl.dtypes:
-        return ""
-    return decl.dtypes[0]
+def _check_conventions(target: ExpectedHeader) -> None:
+    """The rowwise kernel's assumptions, asserted against the rule that asked
+    for it. A rule may be re-versioned with a different scale granularity or a
+    reciprocal convention while keeping its family; the kernel below would then
+    write confidently wrong scales. So the conventions are read, not assumed."""
+
+    conventions = target.quant.conventions
+    expected = {"scale": "per_channel_out", "scale_dtype": SCALE_DTYPE, "amax_divisor": "448"}
+    wrong = {
+        key: conventions.get(key) for key, want in expected.items() if conventions.get(key) != want
+    }
+    if wrong:
+        raise ConversionRefused(
+            f"{target.quant.handle} states conventions this producer's rowwise "
+            f"kernel does not implement: {wrong} (expected {expected})"
+        )
 
 
 # -- planning ---------------------------------------------------------------
 
 
-def plan(reader: TensorReader, target: Contract, *, strict: bool = True) -> ConversionPlan:
+def plan(
+    reader: TensorReader,
+    target: ExpectedHeader,
+    *,
+    component: str | None = None,
+    strict: bool = True,
+) -> ConversionPlan:
     """Decide, from headers alone, what the conversion will do.
 
-    Reads no tensor data: every decision is a function of names, dtypes, ranks
-    and the target document, which is the same property that makes a contract
+    Reads no tensor data: every decision is a function of names, dtypes, shapes
+    and the computed layout, which is the same property that makes a layout
     falsifiable from the header. So a plan can be computed on the control plane
     and shown to a human before a GPU is rented.
+
+    ``component`` names which of the layout's finite maps these files are
+    measured against; it may be omitted only when the layout has exactly one.
     """
 
     recipe = recipe_for(target)
+    expected = target.tensors(component)
     files: list[FilePlan] = []
     for path in reader.files():
         views = [view for view in reader.values() if view.file == path]
         if not views:
             continue
-        files.append(FilePlan(path, tuple(_plan_file(recipe, views, target))))
+        files.append(FilePlan(path, tuple(_plan_file(recipe, views, expected))))
     plan_ = ConversionPlan(recipe, target.stamp, tuple(files))
     if strict:
         _refuse_silent_failures(plan_, target)
     return plan_
 
 
-def _plan_file(recipe: str, views: Sequence[TensorView], target: Contract) -> Iterable[Op]:
+def _plan_file(
+    recipe: str, views: Sequence[TensorView], expected: Mapping[str, LayoutTensor]
+) -> Iterable[Op]:
     present = {view.name for view in views}
     for view in sorted(views, key=lambda v: v.name):
-        decl = _declaration_for(target, view.name)
-        if decl is None:
-            yield Op("inherit", view.name, "not claimed by the target lane")
+        entry = expected.get(view.name)
+        if entry is None:
+            yield Op("inherit", view.name, "not a key of the target layout")
             continue
-        wanted = _cast_target(decl)
-        if not wanted:
-            yield Op("inherit", view.name, "the lane accepts any dtype here")
+        if tuple(view.shape) != entry.shape:
+            # v1 could only compare dtypes, so a checkpoint of the right family
+            # and the wrong size converted cleanly and failed at load. The
+            # computed layout carries the shape, so this is answerable now.
+            raise ConversionRefused(
+                f"{view.name}: the layout says {list(entry.shape)}, the "
+                f"checkpoint says {list(view.shape)}; this is not that model"
+            )
+        if entry.accepts(view.dtype):
+            yield Op("inherit", view.name, f"already {view.dtype}")
             continue
-        if view.dtype == wanted:
-            yield Op("inherit", view.name, f"already {wanted}")
-            continue
+        wanted = entry.dtypes[0]
         if recipe == FP8_ROWWISE and wanted == FP8_E4M3:
             scale = view.name[: -len(".weight")] + SCALE_SUFFIX
+            if scale not in expected:
+                raise ConversionRefused(
+                    f"{view.name}: the layout wants it {FP8_E4M3} and declares "
+                    f"no {scale}; fp8 bytes with no dequant multiplier are not "
+                    "a layout, they are a half-quantized artifact"
+                )
             if scale in present:
                 yield Op(
                     "inherit",
@@ -302,12 +292,6 @@ def _plan_file(recipe: str, views: Sequence[TensorView], target: Contract) -> It
                     f"already quantized — {scale} is present",
                 )
                 continue
-            if len(view.shape) != 2:
-                raise ConversionRefused(
-                    f"{view.name}: the lane declares it {FP8_E4M3} but it is "
-                    f"rank {len(view.shape)}; a per-row scale needs an output "
-                    "axis to be per-row over"
-                )
             yield Op(
                 "quantize-rowwise",
                 view.name,
@@ -319,23 +303,25 @@ def _plan_file(recipe: str, views: Sequence[TensorView], target: Contract) -> It
         yield Op("cast", view.name, f"{view.dtype} -> {wanted}", to_dtype=wanted)
 
 
-def _refuse_silent_failures(plan_: ConversionPlan, target: Contract) -> None:
-    """The two refusals that exist because the failure does not raise.
+def _refuse_silent_failures(plan_: ConversionPlan, target: ExpectedHeader) -> None:
+    """The refusal that exists because the failure does not raise.
 
-    Both are tcg#53's, and both are about a conversion that RUNS and produces a
-    file — one that is bit-identical to its source, one that is missing the
-    scales that make its bytes mean anything. A conversion that stamps such a
-    file with a lane it does not implement is worse than a crash, because the
-    pod then serves it.
+    tcg#53's: a conversion that RUNS and produces a file which is bit-identical
+    to its source and stamped with a layout it does not implement. A crash
+    would be better, because the pod serves this one.
+
+    ``quant.transformed`` is the computed layout's own count of the keys the
+    rule transformed — the number Go arrived at, not a second count taken from
+    the declarations here.
     """
 
-    if plan_.recipe != FP8_ROWWISE:
+    if target.quant.transformed == 0:
         return
     quantized = [op for f in plan_.files for op in f.ops if op.kind == "quantize-rowwise"]
     # ALREADY-fp8 bytes are the other legitimate zero-conversion outcome, and
     # they arrive under two different reasons: the tensor's own dtype already
-    # equals the declaration's, or its scale twin is already present. Counting
-    # only one of them turns a correct re-run into a refusal.
+    # equals the layout's, or its scale twin is already present. Counting only
+    # one of them turns a correct re-run into a refusal.
     resident = [
         op
         for f in plan_.files
@@ -345,12 +331,12 @@ def _refuse_silent_failures(plan_: ConversionPlan, target: Contract) -> None:
     ]
     if quantized or resident:
         return
-    declared = sum(1 for decl in target.tensors if FP8_E4M3 in (decl.dtypes or ()))
     raise ConversionRefused(
-        f"{target.stamp} declares {declared} {FP8_E4M3} tensor(s) and the plan "
-        "converts none of them: the module shape moved under the recipe, or "
-        "this checkpoint is not this lane's model. Refusing to write a file "
-        "that would be bit-identical to its source and stamped as fp8"
+        f"{target.stamp} transforms {target.quant.transformed} tensor(s) and "
+        "the plan converts none of them: the module shape moved under the rule, "
+        "or this checkpoint is not that topology's model. Refusing to write a "
+        "file that would be bit-identical to its source and stamped as "
+        f"{target.quant.handle}"
     )
 
 
@@ -583,37 +569,57 @@ class ConversionResult:
     rewritten: tuple[str, ...]
 
 
+def component_of(target: ExpectedHeader, path: str) -> str | None:
+    """Which component of the layout a member belongs to, or ``None``.
+
+    The multifolder packaging names its own components: `unet/...` is `unet`.
+    This is v2's answer to the collision v1 could not resolve — SDXL's
+    `text_encoder` and `text_encoder_2` both carry
+    `text_model.encoder.layers.0.self_attn.q_proj.weight` at DIFFERENT shapes,
+    and a single flat pattern set could not tell CLIP-L from CLIP-G. A finite
+    map per component can.
+
+    ``None`` is not a failure: a member the layout says nothing about (an
+    unlisted folder, a scheduler config) is carried by reference untouched.
+    """
+
+    if len(target.components) == 1:
+        return next(iter(target.components))
+    head = path.split("/", 1)[0]
+    return head if head in target.components else None
+
+
 def convert(
     cas: LocalCAS,
     manifest: RepositoryManifest,
-    target: Contract,
+    target: ExpectedHeader,
     *,
     kernels: Mapping[str, Kernel] | None = None,
 ) -> ConversionResult:
     """The whole producer: a checkpoint tree in, a checkpoint tree out.
 
     **One reader per MEMBER, deliberately.** A diffusers multifolder tree
-    legitimately repeats key spellings across component files — SDXL's
-    `text_encoder` and `text_encoder_2` both carry
-    `text_model.encoder.layers.{i}.self_attn.q_proj.weight`, which is the same
-    reason the lane contract cannot tell CLIP-L from CLIP-G — and
+    legitimately repeats key spellings across component files, and
     :class:`~tensorfs.tensors.TensorReader` refuses a name that appears in two
-    files, because a single flat index cannot answer for it. Matching is per
-    component file anyway, so conversion is too, and the collision never arises.
-    Do not "fix" this by flattening the tree into one reader.
+    files because a single flat index cannot answer for it. The layout is per
+    component anyway, so conversion is too, and the collision never arises. Do
+    not "fix" this by flattening the tree into one reader.
     """
 
     plans: list[FilePlan] = []
     entries: dict[str, FileEntry] = {}
-    recipe = ""
+    recipe = recipe_for(target)
     for entry in manifest.files:
+        component = component_of(target, entry.path)
+        if component is None:
+            plans.append(FilePlan(entry.path, ()))
+            continue
         with open_tensors(cas, RepositoryManifest((entry,))) as reader:
-            # strict=False: "the recipe converted nothing" is a property of
-            # the CHECKPOINT, not of a member. An fp8 lane legitimately touches
-            # only the denoiser, so refusing per member would refuse every
+            # strict=False: "the rule transformed nothing" is a property of the
+            # CHECKPOINT, not of a member. An fp8 rule legitimately scopes
+            # itself to the denoiser, so refusing per member would refuse every
             # correct conversion on its vae.
-            member = plan(reader, target, strict=False)
-            recipe = member.recipe
+            member = plan(reader, target, component=component, strict=False)
             plans.extend(member.files)
             entries.update(apply(member, reader, cas, kernels=kernels))
     whole = ConversionPlan(recipe, target.stamp, tuple(plans))
