@@ -263,6 +263,14 @@ class TensorStreamReader:
         destination_offset: int = 0,
         layout: str = "torch.contiguous@1",
     ) -> FillStats: ...
+    def fill_host_address(
+        self,
+        name: str,
+        destination_ptr: int,
+        destination_bytes: int,
+        destination_offset: int = 0,
+        layout: str = "torch.contiguous@1",
+    ) -> FillStats: ...
 
 class RecordsReader:
     def __init__(self, store: ObjectStore, records: Sequence[FileRecord]) -> None: ...

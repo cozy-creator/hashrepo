@@ -12,7 +12,8 @@
 //!    records read as a bounded random-access byte source, plus the canonical
 //!    planner over that same source. Together they are exactly "give me the
 //!    bytes of one tensor without materializing the file".
-//! 4. **The fill path** (`TensorStreamReader.fill_host_into`,
+//! 4. **The fill path** (`TensorStreamReader.fill_host_into` /
+//!    `fill_host_address`,
 //!    `CudaFillClient`): source records plus plain destination address data
 //!    drive tensorfs's one layout plan/transform. No torch type crosses it.
 //!
@@ -1328,7 +1329,7 @@ impl FillSink for BufferSink {
                 want: end,
             });
         }
-        // SAFETY: the Py_buffer retained by fill_host_into keeps this writable
+        // SAFETY: both entry points require the caller to keep this writable
         // contiguous allocation alive for the whole call, and the bounds were
         // checked against its reported capacity above.
         Ok(unsafe { std::slice::from_raw_parts_mut((self.address + at) as *mut u8, bytes) })
@@ -1606,6 +1607,36 @@ impl PyTensorStreamReader {
         let mut sink = BufferSink {
             address,
             capacity: buffer.len_bytes(),
+        };
+        fill_tensor(self, name, destination_offset, layout, &mut sink)
+    }
+
+    /// Fill one tensor into a raw caller-owned host allocation. This is the
+    /// primitive-only counterpart of `fill_host_into` for runtimes whose
+    /// destination allocator does not export Python's buffer protocol.
+    ///
+    /// The caller owns the pointer contract: `destination_ptr` must remain a
+    /// writable allocation of `destination_bytes` for this synchronous call.
+    #[pyo3(signature = (name, destination_ptr, destination_bytes, destination_offset = 0, layout = "torch.contiguous@1"))]
+    fn fill_host_address(
+        &self,
+        name: &str,
+        destination_ptr: u64,
+        destination_bytes: usize,
+        destination_offset: u64,
+        layout: &str,
+    ) -> PyResult<PyFillStats> {
+        if destination_ptr == 0 {
+            return Err(LayoutError::new_err(
+                "host fill destination pointer is null",
+            ));
+        }
+        let address = usize::try_from(destination_ptr).map_err(|_| {
+            LayoutError::new_err("host fill destination pointer does not fit usize")
+        })?;
+        let mut sink = BufferSink {
+            address,
+            capacity: destination_bytes,
         };
         fill_tensor(self, name, destination_offset, layout, &mut sink)
     }

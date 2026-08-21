@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import struct
+import ctypes
 from pathlib import Path
 
 import pytest
@@ -52,6 +53,19 @@ def test_identity_fill_writes_caller_memory_and_reports_the_walk(tmp_path: Path)
     assert stats.chunks >= 1
 
 
+def test_host_address_fill_uses_only_primitive_destination_data(tmp_path: Path) -> None:
+    reader, payload = _reader(tmp_path, (2, 3, 4, 5))
+    allocation = (ctypes.c_ubyte * (9 + len(payload)))()
+
+    stats = reader.fill_host_address(
+        "weight", ctypes.addressof(allocation), len(allocation), destination_offset=9
+    )
+
+    assert bytes(allocation[:9]) == b"\0" * 9
+    assert bytes(allocation[9:]) == payload
+    assert stats.destination_bytes == len(payload)
+
+
 def test_morphism_is_applied_by_the_same_bound_fill(tmp_path: Path) -> None:
     shape = (2, 3, 4, 5)
     reader, payload = _reader(tmp_path, shape)
@@ -77,6 +91,13 @@ def test_fill_refusals_cross_the_binding_typed(tmp_path: Path) -> None:
 
     with pytest.raises(LayoutError, match="buffer holds"):
         reader.fill_host_into("weight", bytearray(len(payload) - 1))
+    with pytest.raises(LayoutError, match="pointer is null"):
+        reader.fill_host_address("weight", 0, len(payload))
+    allocation = (ctypes.c_ubyte * len(payload))()
+    with pytest.raises(LayoutError, match="buffer holds"):
+        reader.fill_host_address(
+            "weight", ctypes.addressof(allocation), len(payload) - 1
+        )
     with pytest.raises(LayoutError, match="rank-5"):
         reader.fill_host_into(
             "weight", bytearray(len(payload)), layout="torch.channels_last-3d@1"
@@ -93,6 +114,13 @@ def test_no_torch_type_or_import_exists_at_the_fill_seam() -> None:
     import inspect
     import tensorfs.native as native
 
-    signature = inspect.signature(native.TensorStreamReader.fill_host_into)
-    assert "torch" not in str(signature).lower()
+    signatures = (
+        inspect.signature(native.TensorStreamReader.fill_host_into),
+        inspect.signature(native.TensorStreamReader.fill_host_address),
+        inspect.signature(native.CudaFillClient.fill),
+    )
+    for signature in signatures:
+        assert all(parameter.annotation is inspect.Parameter.empty for parameter in signature.parameters.values())
+        assert signature.return_annotation is inspect.Signature.empty
+        assert "tensor" not in set(signature.parameters)
     assert "torch" not in Path(native.__file__).read_text(encoding="utf-8")
