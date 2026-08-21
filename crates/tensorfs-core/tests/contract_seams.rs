@@ -755,7 +755,7 @@ fn the_shipped_library_is_pinned_by_digest() {
         ),
         (
             "qwen3.6-27b-mtp.gguf-ud-q4-k-xl@1",
-            "e870540dc46209ffae0a881120f5152828e1236cddbb9fce73898e30a1a9e674",
+            "246696d9f7ad089f597744aa4b44b8281c2c2ea4934c7aaa4898534eca7430e7",
         ),
         (
             "qwen3.6-35b-a3b.vllm-fp8@1",
@@ -791,7 +791,7 @@ fn the_shipped_library_is_pinned_by_digest() {
         ),
         (
             "sdxl.diffusers-nvfp4-flat@1",
-            "7ec1ca7afd139e9b9a2cdc449913644f6b8db95528e65fffaae51b3ce02ad031",
+            "239f70ea2c3038812460bc98b83a0818ca042b7d06d27b333b1657aafaca0283",
         ),
         (
             "stable-audio.diffusers-fp16@1",
@@ -831,6 +831,72 @@ fn the_shipped_library_is_pinned_by_digest() {
         flat, expected,
         "a shipped contract changed without a version bump"
     );
+}
+
+/// A SERVE LANE must declare its quantization, and only a component FRAGMENT
+/// may not.
+///
+/// `lanes={contract: floor}` is required on every gen-worker Model subclass
+/// (pgw#1597) and the declaration reads this field, so a lane document with no
+/// top-level `dtype` is not a document with a small gap — it is a document no
+/// endpoint can declare. That failure surfaces at the FAR END of a vendor bump,
+/// in another repo, as a refusal with no remedy; this test moves it to the
+/// commit that introduces it.
+///
+/// gen-worker also derives the sm floor from this field ALONE, so the field is
+/// load-bearing twice over: absent, the class cannot be declared; wrong, the
+/// lane is placed on a card whose tensor cores cannot do the arithmetic.
+///
+/// The allow-list is exhaustive ON PURPOSE. A new fragment must be added here
+/// deliberately, because "it's a fragment" is exactly the excuse a lane
+/// document with a forgotten dtype would offer.
+#[test]
+fn every_serve_lane_declares_its_quantization() {
+    // Component fragments: parts of a tree, not lanes. Each is claimed as a
+    // lane nowhere, and none carries a `dtype` — see the `sdxl.clip-g-*` pair
+    // and `dit.blocks-fused-qkv`, whose own descriptions say so.
+    const FRAGMENTS: &[&str] = &[
+        "dit.blocks-fused-qkv@1",
+        "sdxl.clip-g-fused-qkv@1",
+        "sdxl.clip-g-split-qkv@1",
+    ];
+
+    let registry = Registry::builtin().expect("the shipped library parses");
+    let mut undeclarable = Vec::new();
+    let mut fragments_with_dtype = Vec::new();
+    for contract in registry.contracts() {
+        let stamp = contract.stamp().to_string();
+        let is_fragment = FRAGMENTS.contains(&stamp.as_str());
+        match (contract.dtype(), is_fragment) {
+            (None, false) => undeclarable.push(stamp),
+            (Some(dtype), true) => fragments_with_dtype.push(format!("{stamp} = {dtype}")),
+            _ => {}
+        }
+    }
+    assert!(
+        undeclarable.is_empty(),
+        "these serve lanes declare no top-level dtype, so no endpoint can declare them: \
+         {undeclarable:?}. Add the LANE'S QUANTIZATION (torch-precise, and a spelling \
+         gen-worker's DTYPE_MIN_SM knows), or add the document to FRAGMENTS if it really \
+         is a component fragment."
+    );
+    assert!(
+        fragments_with_dtype.is_empty(),
+        "these are listed as fragments but declare a lane dtype: {fragments_with_dtype:?}. \
+         Either it is a lane (drop it from FRAGMENTS) or the dtype does not belong."
+    );
+
+    // The list must not rot: a name that no longer ships is a stale exemption,
+    // and a stale exemption is how a real lane slips through later.
+    for name in FRAGMENTS {
+        assert!(
+            registry
+                .contracts()
+                .iter()
+                .any(|c| c.stamp().to_string() == *name),
+            "{name} is exempted here but no longer ships"
+        );
+    }
 }
 
 /// The floor decides chunk boundaries, so it is identity, not tuning

@@ -192,8 +192,26 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--name", help="library handle; omit for an anonymous custom")
     parser.add_argument("--version", type=int, default=1)
-    parser.add_argument("--dtype", help="override the derived top-level load dtype")
-    parser.add_argument("--no-dtype", action="store_true", help="declare no top-level dtype")
+    parser.add_argument(
+        "--dtype",
+        help="the LANE'S QUANTIZATION, torch-precise (float8_e4m3fn, float4_e2m1fn, "
+        "bfloat16). Required whenever the header does not settle it by itself - a "
+        "quantized lane's dtype is authored knowledge, not a vote over tensor counts.",
+    )
+    parser.add_argument(
+        "--fragment",
+        action="store_true",
+        help="this is a COMPONENT fragment (sdxl.clip-g-*, dit.blocks-fused-qkv), not a "
+        "serve lane, so it may legitimately carry no top-level dtype. Anything else "
+        "without one is undeclarable by pgw#1597's always-required lanes= and refuses.",
+    )
+    parser.add_argument(
+        "--dtype-unknown-to-gen-worker",
+        action="store_true",
+        help="acknowledge a --dtype spelling DTYPE_MIN_SM does not know. It derives a "
+        "floor of 0 SILENTLY, so only pass this after teaching that table the spelling "
+        "and its true floor.",
+    )
     parser.add_argument(
         "--source",
         action="append",
@@ -218,6 +236,16 @@ def main() -> int:
     )
     parser.add_argument("--summary", default="", help="one paragraph of human context")
     parser.add_argument("--ratify", action="append", default=[], help="extra ratification item")
+    parser.add_argument(
+        "--ratified",
+        action="append",
+        default=[],
+        metavar="EVIDENCE",
+        help="an ANSWER to one of the four standing owed items (roles, fusions, sets, "
+        "scope). Supplying any suppresses those four; with nothing left in --ratify the "
+        "GENERATED CANDIDATE marker comes off and the document reads as ratified. State "
+        "the evidence, not the conclusion.",
+    )
     parser.add_argument("--out", help="write here; default stdout")
     arguments = parser.parse_args()
 
@@ -237,7 +265,11 @@ def main() -> int:
 
     pins = list(arguments.literal)
     if arguments.pin_trivial:
-        _, first = candidate(sources, name=arguments.name, version=arguments.version)
+        # `fragment=True` only to keep this throwaway pass from tripping the
+        # lane-dtype refusal; the real pass below applies it for real.
+        _, first = candidate(
+            sources, name=arguments.name, version=arguments.version, fragment=True
+        )
         trivial: dict[str, list[int | None]] = {}
         for pattern, position, value in first.degenerate_holes:
             if value in (0, 1):
@@ -260,14 +292,14 @@ def main() -> int:
         sources,
         name=arguments.name,
         version=arguments.version,
-        dtype=None if arguments.no_dtype else arguments.dtype,
+        dtype=arguments.dtype,
+        fragment=arguments.fragment,
+        allow_unknown_dtype=arguments.dtype_unknown_to_gen_worker,
         literals=pins,
         summary=arguments.summary,
         ratification=arguments.ratify,
+        ratified=arguments.ratified,
     )
-    if arguments.no_dtype:
-        document.pop("dtype", None)
-
     for line in report.lines():
         print(f"  {line}", file=sys.stderr)
 

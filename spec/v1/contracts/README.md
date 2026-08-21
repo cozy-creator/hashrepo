@@ -55,10 +55,37 @@ quantization) has no adapter for a custom contract and refuses, typed.
 
 ## Fields
 
-- `dtype` (top-level, optional) — the serve-side LOAD dtype, torch spelling
-  (`"bfloat16"`, `"float8_e4m3fn"`, …): what `ctx.lane.dtype` /
-  `Contract.torch_dtype` read on a lane document. Nothing matches on it — the
-  per-tensor `dtypes` constraints below remain the matcher's business.
+- `dtype` (top-level) — **the LANE'S QUANTIZATION**, not a summary of the
+  per-tensor dtypes and not a vote over them: `sdxl.diffusers-fp8-rowwise@1` is
+  `float8_e4m3fn` with 221 of its 257 declarations BF16, and
+  `sdxl.diffusers-nvfp4-flat@1` is `float4_e2m1fn` with no declaration
+  spelling fp4 at all (the resident weights are packed `U8` pairs). Nothing
+  matches on it — the per-tensor `dtypes` below remain the matcher's business.
+
+  **REQUIRED on a serve lane; optional only on a component FRAGMENT**
+  (`sdxl.clip-g-*`, `dit.blocks-fused-qkv`). `lanes={contract: floor}` is
+  required on every gen-worker Model subclass (pgw#1597) and the declaration
+  reads this field, so a lane without one is undeclarable — a refusal with no
+  remedy, discovered in another repo at the far end of a vendor bump.
+  `crates/tensorfs-core/tests/contract_seams.rs`
+  (`every_serve_lane_declares_its_quantization`) holds the line, with an
+  exhaustive fragment allow-list so a forgotten dtype cannot pass as one.
+
+  **Use the torch-precise spelling, and one gen-worker's `DTYPE_MIN_SM` knows.**
+  That table is the only producer of a lane's sm floor, and it answers `0` for
+  a spelling it does not recognize — correct for fp32, catastrophic for a
+  quantized lane, which would then be offered to every card in the fleet with
+  no floor at all. Prefer `float4_e2m1fn` over `float4_e2m1fn_x2` for exactly
+  this reason: the second is the packed type torch actually ships and reads
+  prettier, and it silently drops the sm100 floor.
+
+  Where a layout genuinely has no torch scalar type — a GGUF k-quant container
+  (`qwen3.6-27b-mtp.gguf-ud-q4-k-xl@1` declares `q4_k`) — the container's own
+  ggml name is the honest spelling, `Contract.torch_dtype` refuses it with a
+  typed `MissingDtype` rather than resolving to something wrong, and
+  `DTYPE_MIN_SM` must be taught the spelling and its true floor so that floor
+  is a decision instead of a default.
+
   Additive: absent from a document ⇒ absent from the canonical rendering ⇒
   pre-existing digests unchanged.
 - `tensors[].pattern` — the tensor's spelling in the file. Literal text with
@@ -145,6 +172,13 @@ a declaration is required only when EVERY source carries it, so
 guessing is worse than owing: `role` (mechanically the pattern), `fusion` (a
 header cannot see a fused axis; a wrong one is the ~90%-error split that never
 crashes) and `sets`.
+
+A LANE's `dtype` is derived only when the header settles it beyond argument
+(one element type, or one plus an F32 island); anything mixed REFUSES with
+`UndeclarableLane` and asks for `--dtype`, because a quantized lane's dtype is
+authored knowledge like roles and fusions — a majority vote reads every fp8
+lane in this library as bf16. A spelling `DTYPE_MIN_SM` cannot price refuses
+too. `--fragment` is the only way to emit a document with no dtype.
 
 Coverage is VERIFIED, not asserted: every pattern is expanded back over every
 source and must partition it exactly. The report also names its own weak

@@ -63,10 +63,21 @@ IT. That contract is HIGH-nibble with PRE-SWIZZLED scales; w4a4.py's \
 the two reads LPIPS 1.11, i.e. every name, dtype and shape correct and every \
 number wrong. A separate stamp is the only representation in which that \
 mistake is a refusal rather than a shipped disaster. \
-NO top-level dtype is declared: the resident weight element type is nvfp4, \
-which has no torch spelling, and the compute dtype (bfloat16) is a serve-time \
-choice of the W4A4Linear epilogue rather than a property of these bytes - \
-declaring bfloat16 here would describe the dequant fallback, not the lane. \
+TOP-LEVEL DTYPE IS float4_e2m1fn, and it names the LANE'S QUANTIZATION rather \
+than any tensor's container type - the same thing sdxl.diffusers-fp8-rowwise@1 \
+does when it declares float8_e4m3fn over 257 declarations of which only 36 are \
+fp8. It is AUTHORED, not derived: no per-tensor dtype here spells fp4 at all \
+(the resident weights are U8 pairs), so a document that waited for the header to \
+say 'nvfp4' would wait forever. It is also the load-bearing consumer - \
+gen-worker derives the sm floor from this field alone \
+(DTYPE_MIN_SM['float4_e2m1fn'] = 100, Blackwell), which is the whole reason the \
+spelling is not float4_e2m1fn_x2. DO NOT 'FIX' IT TO _x2: that is the packed-pair \
+type torch actually ships (torch.float4_e2m1fn_x2 exists; torch.float4_e2m1fn \
+does not) and it would read prettier, but DTYPE_MIN_SM does not know it, so the \
+lane would silently lose its sm100 floor and be placed on Ampere. A dtype that \
+resolves through torch and drops the floor is worse than one that refuses through \
+torch and keeps it - and nothing on this path calls ctx.lane.dtype anyway, because \
+the w4a4 loader reads the U8 weights and their scales directly. \
 RATIFICATION OWED: (1) THE QUANTIZED SET IS PROVISIONAL. modelopt decides it \
 during calibration, and w4a4.py states plainly that no real artifact has ever \
 passed the publish gate, so there is no header to measure it from; it is \
@@ -139,6 +150,10 @@ def main() -> int:
         "format": "tensorfs-contract-v1",
         "name": "sdxl.diffusers-nvfp4-flat",
         "version": 1,
+        # The LANE's quantization. Authored, because no tensor here spells fp4:
+        # the resident weights are packed U8 pairs. gen-worker derives the sm100
+        # floor from this field alone, which is why it is not `_x2`.
+        "dtype": "float4_e2m1fn",
         "description": DESCRIPTION,
         "tensors": tensors,
     }
