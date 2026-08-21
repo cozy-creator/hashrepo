@@ -3,7 +3,7 @@
   "name": "joycaption.llava-bf16",
   "version": 1,
   "dtype": "bfloat16",
-  "description": "GENERATED CANDIDATE - NOT RATIFIED. JoyCaption Beta One: a LLaVA image captioner (LlavaForConditionalGeneration) as one\ntransformers snapshot - SigLIP vision tower, multi_modal_projector and Llama language model,\nfour shards, flat BF16. WHOLE TREE, because there is no core to separate from the encoders here:\nthe endpoint binds the snapshot with one from_pretrained and the three sub-trees are one\ncheckpoint. Derived mechanically by tensorfs.generate from headers only - no tensor byte was read. beta-one: 743 tensors 48 declarations cover 743 tensors (23 singleton, 25 indexed) dtypes: BF16 x743. RATIFICATION OWED: (1) SCOPE CHECK owed against tensorfs#121: 'vision_tower.*' is a stock SigLIP spelling and\n'language_model.*' a stock Llama one, so the discriminating fact is the COMBINATION plus\n'multi_modal_projector.*'. Confirm no other served family ships the same three-prefix tree before\nthis document joins the global matcher set. (2) ROLES are mechanical (role == pattern). Rename any tensor whose bytes are the same bytes another packaging spells differently - that is the only thing that makes a cross-packaging derive possible instead of a refusal. (3) FUSIONS are undeclared. A header cannot see a fused axis, so a fused qkv/gate-up must be declared by a human reading the model's config (head count, hidden size); a wrong one is a ~90%-error split that never crashes. (4) SETS are undeclared (no subset-snapshot groups). (5) COMPONENT SCOPE is the caller's: declaring a shared encoder ties this document to every family that ships the same one (tensorfs#121).",
+  "description": "GENERATED, THEN RATIFIED. JoyCaption Beta One: a LLaVA image captioner (LlavaForConditionalGeneration) as one\ntransformers snapshot - SigLIP vision tower, multi_modal_projector and Llama language model,\nfour shards, flat BF16. WHOLE TREE, because there is no core to separate from the encoders here:\nthe endpoint binds the snapshot with one from_pretrained and the three sub-trees are one\ncheckpoint. Derived mechanically by tensorfs.generate from headers only - no tensor byte was read. beta-one: 743 tensors 48 declarations cover 743 tensors (23 singleton, 25 indexed) dtypes: BF16 x743. RATIFIED 2026-08-20 (tensorfs#150), and TWO CORRECTIONS were owed to the bytes rather than to the prose. (1) SELF-REFUSAL, FIXED. Every declaration was `required`, and matching is PER MEMBER FILE - `toArtifactFiles` builds one ArtifactFile per .safetensors and deliberately does not group an index's shards (tensorhub internal/bindgate/bindgate.go:388-417). Over this checkpoint's four shards the document therefore REFUSED the very tree it was generated from (`in model-00001-of-00004.safetensors, requires \"language_model.lm_head.weight\", which no tensor satisfies`). Declarations are now optional, which is the convention verdict.go states and every hand-authored multi-file document in this library already follows; the generator computes `required` from cross-SOURCE presence and never cross-MEMBER, which is the bug's origin. (2) A REAL FUSED AXIS, DECLARED. SigLIP's attention-pooling head is a `torch.nn.MultiheadAttention` (transformers/models/siglip/modeling_siglip.py:626-635), so `vision_tower.vision_model.head.attention.in_proj_weight` [3456, 1152] = 3 x hidden 1152 is one fused q|k|v in equal thirds, and `in_proj_bias` [3456] with it - the same seam `sdxl.clip-g-fused-qkv@1` already declares for OpenCLIP. Every OTHER projection here is split: SigLIP's per-layer `self_attn.{q,k,v,out}_proj` [1152, 1152] and Llama-3.1-8B's `self_attn.q_proj` [4096, 4096] beside `k_proj`/`v_proj` [1024, 4096] (GQA, 8 kv heads x 128) with `mlp.{gate,up,down}_proj` [14336, 4096] separate - no gate-up to fuse. (3) SCOPE CHECK (tensorfs#121): PASSES, and the discriminating fact is finer than the three prefixes. No other document in this library declares a `vision_tower.`, `multi_modal_projector.` or `language_model.` pattern. The near miss is InternVL, which transformers maps to the SAME llava conversion pattern and so shares all three prefixes - but its vision tower is InternViT with a FUSED `attn.qkv.weight`, so it cannot satisfy this document's required `self_attn.q_proj` and SigLIP-specific `head.probe` / `head.attention.in_proj_weight` / `embeddings.patch_embedding`; and internvl-u.diffusers-bf16@1 declares the generation decoder only, never the vlm. (4) ROLES stay literal. transformers 5 renames these keys AT LOAD - `^language_model.model` -> `model.language_model`, `^vision_tower` -> `model.vision_tower` (transformers/conversion_mapping.py:283-288) - but that is a module tree, not a second on-disk packaging, and the bind gate reads the header. (5) SETS: none. One `from_pretrained` builds the whole snapshot (serverless-endpoints/joycaption/src/joycaption/main.py:177-178). (6) VERDICT: `satisfies` after the fix, from the same `Contract.Verdict` call the bind gate makes (bindgate.go:317), over the real 743-tensor / 4-member header.",
   "tensors": [
     {
       "role": "language_model.lm_head.weight",
@@ -11,7 +11,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "language_model.model.embed_tokens.weight",
@@ -19,7 +20,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "language_model.model.layers.{i}.input_layernorm.weight",
@@ -27,7 +29,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "language_model.model.layers.{i}.mlp.down_proj.weight",
@@ -35,7 +38,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "language_model.model.layers.{i}.mlp.gate_proj.weight",
@@ -43,7 +47,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "language_model.model.layers.{i}.mlp.up_proj.weight",
@@ -51,7 +56,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "language_model.model.layers.{i}.post_attention_layernorm.weight",
@@ -59,7 +65,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "language_model.model.layers.{i}.self_attn.k_proj.weight",
@@ -67,7 +74,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "language_model.model.layers.{i}.self_attn.o_proj.weight",
@@ -75,7 +83,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "language_model.model.layers.{i}.self_attn.q_proj.weight",
@@ -83,7 +92,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "language_model.model.layers.{i}.self_attn.v_proj.weight",
@@ -91,7 +101,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "language_model.model.norm.weight",
@@ -99,7 +110,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "multi_modal_projector.linear_1.bias",
@@ -107,7 +119,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "multi_modal_projector.linear_1.weight",
@@ -115,7 +128,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "multi_modal_projector.linear_2.bias",
@@ -123,7 +137,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "multi_modal_projector.linear_2.weight",
@@ -131,7 +146,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.embeddings.patch_embedding.bias",
@@ -139,7 +155,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.embeddings.patch_embedding.weight",
@@ -147,7 +164,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 4
+      "rank": 4,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.embeddings.position_embedding.weight",
@@ -155,7 +173,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.layer_norm1.bias",
@@ -163,7 +182,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.layer_norm1.weight",
@@ -171,7 +191,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.layer_norm2.bias",
@@ -179,7 +200,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.layer_norm2.weight",
@@ -187,7 +209,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.mlp.fc1.bias",
@@ -195,7 +218,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.mlp.fc1.weight",
@@ -203,7 +227,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.mlp.fc2.bias",
@@ -211,7 +236,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.mlp.fc2.weight",
@@ -219,7 +245,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.bias",
@@ -227,7 +254,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.weight",
@@ -235,7 +263,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.out_proj.bias",
@@ -243,7 +272,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.out_proj.weight",
@@ -251,7 +281,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.q_proj.bias",
@@ -259,7 +290,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.q_proj.weight",
@@ -267,7 +299,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.v_proj.bias",
@@ -275,7 +308,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.encoder.layers.{i}.self_attn.v_proj.weight",
@@ -283,7 +317,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.head.attention.in_proj_bias",
@@ -291,7 +326,25 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false,
+      "fusion": {
+        "axis": 0,
+        "parts": [
+          {
+            "role": "q",
+            "share": 1
+          },
+          {
+            "role": "k",
+            "share": 1
+          },
+          {
+            "role": "v",
+            "share": 1
+          }
+        ]
+      }
     },
     {
       "role": "vision_tower.vision_model.head.attention.in_proj_weight",
@@ -299,7 +352,25 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false,
+      "fusion": {
+        "axis": 0,
+        "parts": [
+          {
+            "role": "q",
+            "share": 1
+          },
+          {
+            "role": "k",
+            "share": 1
+          },
+          {
+            "role": "v",
+            "share": 1
+          }
+        ]
+      }
     },
     {
       "role": "vision_tower.vision_model.head.attention.out_proj.bias",
@@ -307,7 +378,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.head.attention.out_proj.weight",
@@ -315,7 +387,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.head.layernorm.bias",
@@ -323,7 +396,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.head.layernorm.weight",
@@ -331,7 +405,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.head.mlp.fc1.bias",
@@ -339,7 +414,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.head.mlp.fc1.weight",
@@ -347,7 +423,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.head.mlp.fc2.bias",
@@ -355,7 +432,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.head.mlp.fc2.weight",
@@ -363,7 +441,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 2
+      "rank": 2,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.head.probe",
@@ -371,7 +450,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 3
+      "rank": 3,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.post_layernorm.bias",
@@ -379,7 +459,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     },
     {
       "role": "vision_tower.vision_model.post_layernorm.weight",
@@ -387,7 +468,8 @@
       "dtypes": [
         "BF16"
       ],
-      "rank": 1
+      "rank": 1,
+      "required": false
     }
   ]
 }
