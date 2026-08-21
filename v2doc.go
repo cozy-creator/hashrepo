@@ -84,38 +84,91 @@ func ParseHandle(text string) (Handle, error) {
 	return Handle{Name: name, Version: uint32(version)}, nil
 }
 
-// LayoutID is a stamp: the (topology, quant) PAIR that identifies a
-// checkpoint's bytes. th#1809 settled the wire rendering as `<topology>+<quant>`
-// and it is shared with the SDK's render() — a spelling drift here is a
-// CAS-address fork, so the join character is not negotiable.
+// LayoutID is a stamp: the TRIPLE that identifies a checkpoint's bytes —
+// which tensors (topology), what element type (quant), and in what
+// arrangement (the layout morphism).
+//
+// th#1809 settled the wire rendering as `<topology>+<quant>` and it is shared
+// with the SDK's render() — a spelling drift here is a CAS-address fork, so
+// the join character is not negotiable. The layout coordinate joins WITHOUT
+// touching a single existing rendering: `contiguous@1` is what every stamp
+// written before layouts existed already meant, so it renders implicitly, and
+// a two-part spelling parses back to it. Only a tree that is actually
+// rearranged spells three parts. A stamp's TEXT therefore never changed, which
+// is the difference between adding an axis and forking every CAS address on
+// the fleet.
 type LayoutID struct {
 	Topology Handle
 	Quant    Handle
+	// Bytes is the layout morphism the stored elements are arranged by. The
+	// zero value is not a layout; use DefaultLayout, which Normalized supplies.
+	Bytes Handle
 }
 
-func (l LayoutID) String() string { return l.Topology.String() + "+" + l.Quant.String() }
+func (l LayoutID) String() string {
+	rendered := l.Topology.String() + "+" + l.Quant.String()
+	if l.Bytes == DefaultLayout || l.Bytes == (Handle{}) {
+		return rendered
+	}
+	return rendered + "+" + l.Bytes.String()
+}
 
-// ParseLayoutID reads the wire rendering back.
+// Normalized fills an unset layout coordinate with the default. A stamp built
+// by a caller that predates layouts means `contiguous@1` and must not compare
+// unequal to one that says so.
+func (l LayoutID) Normalized() LayoutID {
+	if l.Bytes == (Handle{}) {
+		l.Bytes = DefaultLayout
+	}
+	return l
+}
+
+// ParseLayoutID reads the wire rendering back, in two parts or three.
 func ParseLayoutID(text string) (LayoutID, error) {
-	left, right, found := strings.Cut(text, "+")
-	if !found {
-		return LayoutID{}, refuse("layout-id", "%q is not <topology>+<quant>", text)
+	parts := strings.Split(text, "+")
+	if len(parts) != 2 && len(parts) != 3 {
+		return LayoutID{}, refuse("layout-id",
+			"%q is not <topology>+<quant> or <topology>+<quant>+<layout>", text)
 	}
-	topology, err := ParseHandle(left)
+	topology, err := ParseHandle(parts[0])
 	if err != nil {
 		return LayoutID{}, err
 	}
-	quant, err := ParseHandle(right)
+	quant, err := ParseHandle(parts[1])
 	if err != nil {
 		return LayoutID{}, err
 	}
-	return LayoutID{Topology: topology, Quant: quant}, nil
+	arrangement := DefaultLayout
+	if len(parts) == 3 {
+		if arrangement, err = ParseHandle(parts[2]); err != nil {
+			return LayoutID{}, err
+		}
+		if arrangement == DefaultLayout {
+			// One arrangement, one spelling. The default renders implicitly, so
+			// accepting the explicit form would give one stamp two texts and
+			// two CAS addresses for one tree.
+			return LayoutID{}, refuse("layout-id",
+				"%q spells the default layout explicitly; %s renders implicitly, "+
+					"and one arrangement has one spelling", text, DefaultLayout)
+		}
+	}
+	return LayoutID{Topology: topology, Quant: quant, Bytes: arrangement}, nil
 }
 
 // Equal is FIELD-WISE, never string-wise. Two halves that happen to render the
 // same are the same stamp; a renderer bug must not be able to invent a match.
 func (l LayoutID) Equal(other LayoutID) bool {
-	return l.Topology == other.Topology && l.Quant == other.Quant
+	left, right := l.Normalized(), other.Normalized()
+	return left.Topology == right.Topology && left.Quant == right.Quant &&
+		left.Bytes == right.Bytes
+}
+
+// pair is the (topology, quant) half — the part that decides what HEADER a
+// checkpoint has. The arrangement moves bytes inside a tensor and changes no
+// name, shape or dtype, so everything keyed on the computed header keys on
+// this and a layout coordinate can never split that memo.
+func (l LayoutID) pair() LayoutID {
+	return LayoutID{Topology: l.Topology, Quant: l.Quant, Bytes: DefaultLayout}
 }
 
 // digestOf is every v2 document's identity: SHA-256 over a canonical rendering

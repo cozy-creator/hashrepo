@@ -1,0 +1,33 @@
+{
+ "class": "inductor",
+ "description": "A rank-2 weight whose innermost dimension is rounded UP to a multiple of 16 elements, so every row starts on an aligned boundary. Row-major otherwise; the fill elements are zero and mean nothing.",
+ "digest": "066bbc41f8a81ef05ddcf5f4b04ebb0e1555b3ad24816689d45896a5df2cb3b2",
+ "format": "tensorfs-layout-morphism-v2",
+ "name": "torch.stride-padding-16",
+ "permutation": [
+  0,
+  1,
+  2
+ ],
+ "provenance": [
+  "THE ALIGNMENT IS IN THE NAME BECAUSE IT IS IN THE MAP. `stride-padding` is a family, not a layout: padding to 16 and padding to 8 are two different arrangements of the same tensor, and one name for two maps is exactly the collision the digest exists to prevent. A different alignment is a different record (`stride-padding-8@1`), and its provenance owes the kernel that asked for it.",
+  "16 is the alignment `cozy.nvfp4-flat@1` already records as the kernel's own: torch's fp4 `scaled_mm` needs packed K/2 % 16, which is `_K_ALIGN`/`_N_ALIGN` in python-gen-worker `src/gen_worker/models/w4a4.py`. This record is the arrangement that satisfies it for a tensor whose logical inner dim does not.",
+  "THE FIRST PADDED RECORD IN THE CLASS, and it is why the auto-ratification verifier checks INJECTIVITY and round-trip-on-the-image rather than bijection: the destination is larger than the source, so applying the map and then its inverse must return the source bytes exactly while the fill bytes stay zero and unread."
+ ],
+ "rank": 2,
+ "sub_axes": [
+  {
+   "axis": 0,
+   "extent": "d0"
+  },
+  {
+   "axis": 1,
+   "extent": "ceil(d1/16)"
+  },
+  {
+   "axis": 1,
+   "extent": "16"
+  }
+ ],
+ "version": 1
+}

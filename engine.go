@@ -50,6 +50,11 @@ const (
 	RefusalUnrelated RefusalReason = "unrelated"
 	// RefusalNoLane — the endpoint declared no lane at all.
 	RefusalNoLane RefusalReason = "no-lanes"
+	// RefusalNoBridge — the tensors and the element type line up and the
+	// ARRANGEMENT does not: the lane wants its bytes laid out by a layout
+	// morphism no ratified record bridges to. Named separately because the
+	// operator's next move is a catalog entry, not a different checkpoint.
+	RefusalNoBridge RefusalReason = "no-bridge"
 )
 
 // Refusal NAMES the disagreement. A verdict an operator cannot act on is not a
@@ -95,6 +100,10 @@ func (r *Refusal) String() string {
 			r.Lane, r.Tensor, componentLabel(r.Component))
 	case RefusalUnrelated:
 		return fmt.Sprintf("refused: %s is not %s and no morphism relates them", r.Note, r.Lane)
+	case RefusalNoBridge:
+		return fmt.Sprintf("refused by %s: the checkpoint's tensors and element type "+
+			"reach this lane, and its BYTE ARRANGEMENT does not — stored as %s, the "+
+			"lane declares %s, and %s", r.Lane, r.Observed, r.Declared, r.Note)
 	default:
 		return fmt.Sprintf("refused by %s: in %s, %q has %s %s, not %s%s",
 			r.Lane, memberLabel(r.Member), r.Tensor, r.Reason, r.Observed, r.Declared,
@@ -450,6 +459,7 @@ type StepKind string
 const (
 	StepRekey      StepKind = "rekey"
 	StepSeam       StepKind = "seam"
+	StepRelayout   StepKind = "relayout"
 	StepCast       StepKind = "cast"
 	StepQuantize   StepKind = "quantize"
 	StepDequantize StepKind = "dequantize"
@@ -554,6 +564,14 @@ func (c *Catalog) Admit(files []ArtifactFile, lanes []LayoutID) Decision {
 	if best != nil {
 		return *best
 	}
+	// Before falling back to "these are different models", check whether the
+	// ONLY thing in the way was the arrangement. That refusal has a different
+	// remedy — a catalog entry, or a ratification — and saying "sdxl.diffusers
+	// is not sdxl.diffusers" because a layout coordinate differs would send an
+	// operator looking for a checkpoint problem that is not there.
+	if refusal := c.bridgeRefusal(stamp, lanes); refusal != nil {
+		return Decision{Kind: DecisionRefuse, Stamp: stamp, Lane: refusal.Lane, Refusal: refusal}
+	}
 	// A stamped candidate that no lane relates to still gets a NAMED tensor.
 	// "sd15.diffusers@1 is not sd2.diffusers@1" tells an operator which two
 	// things disagree; "conv_in.weight is [320, 9, 3, 3], not [320, 4, 3, 3]"
@@ -563,6 +581,29 @@ func (c *Catalog) Admit(files []ArtifactFile, lanes []LayoutID) Decision {
 	})
 	refusal.Note = stamp.String()
 	return Decision{Kind: DecisionRefuse, Stamp: stamp, Lane: refusal.Lane, Refusal: refusal}
+}
+
+// bridgeRefusal names the arrangement gap, for the first declared lane whose
+// tensors and element type this stamp DOES reach.
+func (c *Catalog) bridgeRefusal(stamp LayoutID, lanes []LayoutID) *Refusal {
+	for _, lane := range lanes {
+		if _, ok := c.repack(stamp.Topology, lane.Topology); !ok {
+			continue
+		}
+		if _, ok := c.requant(stamp.Quant, lane.Quant); !ok {
+			continue
+		}
+		_, why, ok := c.relayout(stamp.Bytes, lane.Bytes)
+		if ok {
+			continue
+		}
+		stored, declared := stamp.Normalized().Bytes, lane.Normalized().Bytes
+		return &Refusal{
+			Reason: RefusalNoBridge, Lane: lane, Note: why,
+			Observed: stored.String(), Declared: declared.String(),
+		}
+	}
+	return nil
 }
 
 func (c *Catalog) closestLaneRefusal(files []ArtifactFile, lanes []LayoutID, fallback *Refusal) *Refusal {
@@ -619,7 +660,66 @@ func (c *Catalog) derive(stamp, lane LayoutID) ([]DerivationStep, bool) {
 	if quantStep != nil {
 		steps = append(steps, *quantStep)
 	}
+	// The arrangement leg runs LAST, and it has to: a quant conversion produces
+	// new tensors, and it is those tensors' bytes the lane wants arranged its
+	// way. Relayouting first would arrange bytes the conversion then replaces.
+	layoutStep, _, ok := c.relayout(stamp.Bytes, lane.Bytes)
+	if !ok {
+		return nil, false
+	}
+	if layoutStep != nil {
+		steps = append(steps, *layoutStep)
+	}
 	return steps, true
+}
+
+// relayout plans the byte-arrangement leg, or says WHY there is none.
+//
+// There is nothing to search. Every layout record is already the map from
+// plain row-major, so the bridge from one to another is one record's inverse
+// followed by the other's — computed, cheap, and impossible to write down
+// inconsistently. What can fail is a coordinate the corpus does not carry, a
+// candidate wish nothing has ratified, or two records whose ranks mean they
+// can never describe one tensor.
+func (c *Catalog) relayout(from, to Handle) (*DerivationStep, string, bool) {
+	if from == (Handle{}) {
+		from = DefaultLayout
+	}
+	if to == (Handle{}) {
+		to = DefaultLayout
+	}
+	if from == to {
+		return nil, "", true
+	}
+	source, target := c.arrangements[from], c.arrangements[to]
+	// Checked in a fixed order — stored side first — so one bad pairing has one
+	// refusal text, not whichever of two a map walk reached first.
+	for _, side := range []struct {
+		handle Handle
+		record *LayoutMorphism
+	}{{from, source}, {to, target}} {
+		if side.record == nil {
+			return nil, fmt.Sprintf("the corpus carries no %s record", side.handle), false
+		}
+		if side.record.Candidate() {
+			return nil, fmt.Sprintf(
+				"%s is an UNRATIFIED candidate — a wish a compiler emitted, which "+
+					"nothing has ratified. Machines derive along ratified morphisms; "+
+					"they do not invent them", side.handle), false
+		}
+	}
+	if source.rank != 0 && target.rank != 0 && source.rank != target.rank {
+		return nil, fmt.Sprintf(
+			"%s arranges rank-%d tensors and %s arranges rank-%d ones, so no tensor "+
+				"is described by both", from, source.rank, to, target.rank), false
+	}
+	// T3: the arrangement is either applied in flight on the load copy or
+	// materialized once. Either way it is priced as work over the same
+	// elements, never as new information.
+	return &DerivationStep{
+		Kind: StepRelayout, Tier: TierInterleaved, From: from, To: to,
+		Detail: Bridge(from, to),
+	}, "", true
 }
 
 // repack is a breadth-first search over the morphism catalog. Composition is

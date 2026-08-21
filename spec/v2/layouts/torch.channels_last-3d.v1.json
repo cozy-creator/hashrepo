@@ -1,0 +1,42 @@
+{
+ "class": "inductor",
+ "description": "torch's `channels_last_3d` for 5-D tensors: NCDHW logical, NDHWC in storage. The video path's conv3d weights — the same lever as `channels_last-2d@1`, one axis wider.",
+ "digest": "5b722f45cc82520765a0ef78e9776e0dd43d18e2e098d7148fe79b4d37f9c547",
+ "format": "tensorfs-layout-morphism-v2",
+ "name": "torch.channels_last-3d",
+ "permutation": [
+  0,
+  2,
+  3,
+  4,
+  1
+ ],
+ "provenance": [
+  "torch's own `memory_format=torch.channels_last_3d`: storage order (N, D, H, W, C) over logical axes (N, C, D, H, W) is axes [0, 2, 3, 4, 1]. Transcribed, not derived.",
+  "SIZED SEPARATELY FROM THE 2-D ENTRY AND NOT YET MEASURED ON THIS FLEET: the SDXL arithmetic in `channels_last-2d@1` is a conv2d measurement and does not transfer. This record is here because the vocabulary is closed and a 5-D conv weight has nowhere else to go; the video-lane ratio is owed by whoever first turns it on."
+ ],
+ "rank": 5,
+ "sub_axes": [
+  {
+   "axis": 0,
+   "extent": "d0"
+  },
+  {
+   "axis": 1,
+   "extent": "d1"
+  },
+  {
+   "axis": 2,
+   "extent": "d2"
+  },
+  {
+   "axis": 3,
+   "extent": "d3"
+  },
+  {
+   "axis": 4,
+   "extent": "d4"
+  }
+ ],
+ "version": 1
+}

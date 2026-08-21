@@ -1,0 +1,12 @@
+{
+ "class": "inductor",
+ "description": "Plain row-major storage: element (i0, ..., in-1) sits at the offset the logical shape says it does, at every rank. The IDENTITY morphism, and the layout coordinate every stamp written before layouts joined the stamp means — a v2 stamp of `<topology>+<quant>` is `<topology>+<quant>+contiguous@1` and always was.",
+ "digest": "662bb2ccdbffb3a58ff6b16d0f13ff73e444b58c0d88a0222e661e8e059b2fcc",
+ "format": "tensorfs-layout-morphism-v2",
+ "name": "torch.contiguous",
+ "provenance": [
+  "This record exists so the DEFAULT is a document rather than a hole. Every other layout in the catalog is defined as an arrangement of these bytes, and the bridge between any two of them is one record's inverse followed by the other's; without a record for the identity, half of every bridge would be an unwritten assumption.",
+  "It is the only rankless record in the class, and it has to be: the identity is the identity at rank 1 and at rank 5, so pinning it to a rank would refuse tensors it arranges correctly."
+ ],
+ "version": 1
+}

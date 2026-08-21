@@ -25,6 +25,7 @@ import (
 )
 
 //go:embed spec/v2/topologies/*.json spec/v2/rules/*.json spec/v2/morphisms/*.json
+//go:embed spec/v2/layouts/*.json
 //go:embed spec/v2/display-names.json
 var v2corpus embed.FS
 
@@ -33,6 +34,11 @@ type Catalog struct {
 	topologies map[Handle]*Topology
 	rules      map[Handle]*QuantRule
 	morphisms  map[Handle]*Morphism
+	// arrangements are the layout morphisms: where the elements SIT. They are
+	// a third hand-authored kind, and the only one whose ratification is
+	// mechanical — the Rust applier's verifier proves each one by applying it
+	// and its inverse, so nothing here signs a permutation.
+	arrangements map[Handle]*LayoutMorphism
 	// outgoing maps a topology handle to the morphisms that leave it — the
 	// adjacency the derivability search walks.
 	outgoing map[Handle][]*Morphism
@@ -76,7 +82,8 @@ func LoadCatalog(files fs.FS, root string) (*Catalog, error) {
 	catalog := &Catalog{
 		topologies: map[Handle]*Topology{}, rules: map[Handle]*QuantRule{},
 		morphisms: map[Handle]*Morphism{}, outgoing: map[Handle][]*Morphism{},
-		display: map[LayoutID]string{}, layouts: map[LayoutID]*Layout{},
+		arrangements: map[Handle]*LayoutMorphism{},
+		display:      map[LayoutID]string{}, layouts: map[LayoutID]*Layout{},
 	}
 	read := func(directory string, each func(name string, document []byte) error) error {
 		entries, err := fs.ReadDir(files, path.Join(root, directory))
@@ -142,6 +149,19 @@ func LoadCatalog(files fs.FS, root string) (*Catalog, error) {
 	}); err != nil {
 		return nil, err
 	}
+	if err := read("layouts", func(name string, document []byte) error {
+		arrangement, err := ParseLayoutMorphism(document)
+		if err != nil {
+			return refuse("catalog", "layouts/%s: %v", name, err)
+		}
+		if _, duplicate := catalog.arrangements[arrangement.handle]; duplicate {
+			return refuse("catalog", "%s is declared twice", arrangement.handle)
+		}
+		catalog.arrangements[arrangement.handle] = arrangement
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 	if document, err := fs.ReadFile(files, path.Join(root, "display-names.json")); err == nil {
 		var raw struct {
 			Names map[string]string `json:"names"`
@@ -159,6 +179,18 @@ func LoadCatalog(files fs.FS, root string) (*Catalog, error) {
 	}
 	if len(catalog.topologies) == 0 || len(catalog.rules) == 0 {
 		return nil, refuse("catalog", "a corpus with no topology or no rule decides nothing")
+	}
+	// The default coordinate has to BE a document. Every stamp carries a layout
+	// and most of them carry this one; if it were absent, the stamp every
+	// existing tree already has would name a record the corpus cannot produce.
+	if identity := catalog.arrangements[DefaultLayout]; identity == nil {
+		return nil, refuse("catalog",
+			"the corpus carries no %s record, and it is the layout coordinate of "+
+				"every stamp that does not say otherwise", DefaultLayout)
+	} else if !identity.Identity() {
+		return nil, refuse("catalog",
+			"%s rearranges bytes. It is the coordinate a tree gets when nothing "+
+				"transformed it, so it can only be the identity", DefaultLayout)
 	}
 	if err := catalog.validate(); err != nil {
 		return nil, err
@@ -246,7 +278,8 @@ func sameTopology(computed, declared *Topology) error {
 func (c *Catalog) index() {
 	for _, topology := range sortedHandles(c.topologies) {
 		for _, rule := range sortedHandles(c.rules) {
-			c.order = append(c.order, LayoutID{Topology: topology, Quant: rule})
+			c.order = append(c.order,
+				LayoutID{Topology: topology, Quant: rule, Bytes: DefaultLayout})
 		}
 	}
 }
@@ -272,15 +305,24 @@ func (c *Catalog) Topology(handle Handle) *Topology { return c.topologies[handle
 func (c *Catalog) Rule(handle Handle) *QuantRule    { return c.rules[handle] }
 func (c *Catalog) Morphism(handle Handle) *Morphism { return c.morphisms[handle] }
 
-// Topologies, Rules, Morphisms enumerate the corpus in canonical order.
-func (c *Catalog) Topologies() []Handle { return sortedHandles(c.topologies) }
-func (c *Catalog) Rules() []Handle      { return sortedHandles(c.rules) }
-func (c *Catalog) Morphisms() []Handle  { return sortedHandles(c.morphisms) }
+// Arrangement looks up one layout morphism by handle.
+func (c *Catalog) Arrangement(handle Handle) *LayoutMorphism { return c.arrangements[handle] }
+
+// Topologies, Rules, Morphisms, Arrangements enumerate the corpus in canonical
+// order.
+func (c *Catalog) Topologies() []Handle   { return sortedHandles(c.topologies) }
+func (c *Catalog) Rules() []Handle        { return sortedHandles(c.rules) }
+func (c *Catalog) Morphisms() []Handle    { return sortedHandles(c.morphisms) }
+func (c *Catalog) Arrangements() []Handle { return sortedHandles(c.arrangements) }
 
 // Layout computes quant(topology), memoized. The memo is the only cache in the
 // engine and it holds a pure function of two documents, so it can never be
 // stale in a way a restart would fix.
 func (c *Catalog) Layout(id LayoutID) (*Layout, error) {
+	// Keyed on the (topology, quant) half: a layout morphism rearranges bytes
+	// inside a tensor and changes no name, shape or dtype, so it cannot change
+	// the computed header and must not split this memo.
+	id = id.pair()
 	c.layoutsOnce.Lock()
 	defer c.layoutsOnce.Unlock()
 	if cached, found := c.layouts[id]; found {

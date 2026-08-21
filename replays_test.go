@@ -244,7 +244,7 @@ func headerOf(layout *tensorfs.Layout) []tensorfs.ArtifactFile {
 func catalogWithout(t *testing.T, morphism string) *tensorfs.Catalog {
 	t.Helper()
 	root := t.TempDir()
-	for _, directory := range []string{"topologies", "rules", "morphisms"} {
+	for _, directory := range []string{"topologies", "rules", "morphisms", "layouts"} {
 		target := filepath.Join(root, "spec", "v2", directory)
 		if err := os.MkdirAll(target, 0o755); err != nil {
 			t.Fatal(err)

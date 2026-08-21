@@ -1,0 +1,53 @@
+{
+ "class": "endpoint-declared",
+ "description": "nunchaku's `pack_micro_scale` warp-lane interleave for svdq `wscales`: a logical [out, in/16] e4m3 grid written as a seven-sub-axis permutation so each mma warp reads its own scales without a shuffle. The reason a reader that takes these bytes verbatim renders noise.",
+ "digest": "326e39d2d3761160ae56cc1c20e8cc8891b5d288f21f3587ffa3f73564d2b76d",
+ "format": "tensorfs-layout-morphism-v2",
+ "name": "nunchaku.micro-scale",
+ "permutation": [
+  0,
+  5,
+  1,
+  4,
+  3,
+  2,
+  6
+ ],
+ "provenance": [
+  "TRANSCRIBED FROM THE CODE THAT READS THESE BYTES: python-gen-worker `src/gen_worker/models/svdq_layout.py` — `_micro_logical(out_f, ng) = (out_f // 128, 1, 4, 4, 8, ng // 4, 4)` (line 111, with `_WARP_N = 128`, `_MICRO_ROW_DIMS = (1, 4, 4, 8)`, `_INSN_K // BLOCK = 64 // 16 = 4`) and `_MICRO_FWD_PERM = (0, 5, 1, 4, 3, 2, 6)` (line 19). This record is those two constants and nothing else.",
+  "THE SILENT-ERROR CLASS THIS ENTRY EXISTS FOR, quoted from that module's own docstring: the (4, 4, 8) row split is NOT (4, 8, 4) — the wrong one reshapes without error and silently permutes channels. A permutation written as reviewed code is ratified by somebody noticing; written as data it is ratified by applying it and its inverse and comparing bytes.",
+  "EXACT, NOT PADDED: the factors multiply to the logical dims exactly, so out % 128 == 0 and (in/16) % 4 == 0 are enforced by the exact division in the extents themselves. Those are the same two conditions `unpack_wscales` raises SvdqLayoutError on (line 118) — the guard is now the arithmetic rather than a hand-written check beside it."
+ ],
+ "rank": 2,
+ "sub_axes": [
+  {
+   "axis": 0,
+   "extent": "d0/128"
+  },
+  {
+   "axis": 0,
+   "extent": "1"
+  },
+  {
+   "axis": 0,
+   "extent": "4"
+  },
+  {
+   "axis": 0,
+   "extent": "4"
+  },
+  {
+   "axis": 0,
+   "extent": "8"
+  },
+  {
+   "axis": 1,
+   "extent": "d1/4"
+  },
+  {
+   "axis": 1,
+   "extent": "4"
+  }
+ ],
+ "version": 1
+}

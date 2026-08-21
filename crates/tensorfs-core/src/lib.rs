@@ -16,6 +16,11 @@ pub mod contract;
 /// a projection is a pure function of a manifest and the store root.
 #[cfg(all(feature = "store", any(unix, windows)))]
 pub mod layout;
+/// Layout morphisms: the ONE implementation that applies a catalogued byte
+/// arrangement, in both directions, with the auto-ratification verifier that
+/// makes "machine-verifiable data" mean something. Pure bytes and pure
+/// arithmetic — no filesystem, no store, no card.
+pub mod layout_morphism;
 pub mod object;
 pub mod planner;
 pub mod source;

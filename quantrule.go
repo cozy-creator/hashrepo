@@ -417,7 +417,7 @@ func hasRepeatedBlockSegment(key string) bool {
 // function.
 func (r *QuantRule) Apply(topology *Topology) (*Layout, error) {
 	layout := &Layout{
-		ID:     LayoutID{Topology: topology.handle, Quant: r.handle},
+		ID:     LayoutID{Topology: topology.handle, Quant: r.handle, Bytes: DefaultLayout},
 		byName: map[string]*LayoutComponent{},
 	}
 	for at := range topology.components {

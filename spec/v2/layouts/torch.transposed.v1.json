@@ -1,0 +1,27 @@
+{
+ "class": "inductor",
+ "description": "A rank-2 weight stored column-major: logical [out, in], storage [in, out]. What a GEMM lowering asks for when it wants the B operand un-transposed at the call site.",
+ "digest": "8bc65cd95cf34436456a0c467d046c9a75691529f939ea5539929a1f6c7c49df",
+ "format": "tensorfs-layout-morphism-v2",
+ "name": "torch.transposed",
+ "permutation": [
+  1,
+  0
+ ],
+ "provenance": [
+  "RANK 2 ON PURPOSE, and this is the one place the closed vocabulary is narrower than the idea. `transposed` in inductor means 'the last two axes are swapped', which is defined at any rank; a record has to name ONE map, and a rank-3 swap and a rank-2 swap are two maps. The rank-2 entry is the one every Linear weight needs and the only one anything on this fleet has asked for. A wider one is a NEW record (`transposed-3d@1`), never a widened `rank` on this one — that would silently change what an existing stamp means.",
+  "MEASURED CONTEXT (tcg#80 phase 1, banked in research/layout-morphisms/0-DESIGN.md §10): the compiled SDXL UNet issues 883 GEMMs as extern calls. The B-operand arrangement is an input to every one of them."
+ ],
+ "rank": 2,
+ "sub_axes": [
+  {
+   "axis": 0,
+   "extent": "d0"
+  },
+  {
+   "axis": 1,
+   "extent": "d1"
+  }
+ ],
+ "version": 1
+}
