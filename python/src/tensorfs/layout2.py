@@ -35,9 +35,13 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "Arrangement",
     "ExpectedHeader",
     "LayoutTensor",
     "Quant",
+    "SubAxis",
+    "identity_arrangement",
+    "layouts",
     "rules",
     "topologies",
 ]
@@ -92,6 +96,74 @@ class Quant:
         on, since a rule's kernel is a property of the family."""
 
         return self.handle.split("@", 1)[0]
+
+
+@dataclass(frozen=True, slots=True)
+class SubAxis:
+    """One factor a layout splits a logical axis into, outermost first.
+
+    ``extent`` is the shape FORMULA as the record writes it (``d0``, ``4``,
+    ``ceil(d1/16)``), deliberately not evaluated here. Evaluating it is the
+    planner's job and there are already two planners — Go's ``v2doc.go`` and
+    Rust's ``Plan`` — held together by a banked vector corpus. A third
+    evaluator in Python is the thing this module's own docstring forbids.
+    """
+
+    axis: int
+    extent: str
+
+
+@dataclass(frozen=True, slots=True)
+class Arrangement:
+    """One ratified layout morphism's IDENTITY, read from its record.
+
+    A layout morphism is a named, versioned byte-layout map over a tensor's
+    storage: a factorization of the logical axes into ``sub_axes`` and a
+    ``permutation`` of those factors giving storage order, outermost first.
+    That is the whole of it as data. **The transform is not here** — it lives
+    once, in ``tensorfs-core``, with a CPU backend and a device backend behind
+    one ``FillSink`` trait. This class exists so a Python consumer can name a
+    layout, check that it is ratified, and compare it against whatever the
+    consumer itself believes about the arrangement — never so it can apply one.
+    """
+
+    handle: str
+    """``torch.channels_last-2d@1``. The version is part of it."""
+    cls: str
+    """``inductor`` or ``endpoint-declared``. The first class is what a
+    compiler's own layout pass asks for; the second is quant-rule identity —
+    the kernel-library layouts where reading one packaging as another produces
+    plausible numbers rather than an error."""
+    rank: int | None
+    """The tensor rank this arrangement is defined for. ``None`` means every
+    rank, which is true only of the identity: row-major is row-major at rank 1
+    and at rank 5, so pinning it to a rank would refuse tensors it arranges
+    correctly."""
+    permutation: tuple[int, ...]
+    """Storage order over ``sub_axes``, outermost first. Empty for the identity,
+    which permutes nothing."""
+    sub_axes: tuple[SubAxis, ...]
+    digest: str = ""
+    """The record's canonical digest, carried in the document and never
+    recomputed here — same rule as :class:`Quant`."""
+
+    @property
+    def family(self) -> str:
+        return self.handle.split("@", 1)[0]
+
+    @property
+    def is_identity(self) -> bool:
+        return not self.permutation
+
+    def applies_to(self, rank: int) -> bool:
+        """Whether this arrangement is defined at one tensor rank.
+
+        An arrangement that does not apply leaves the tensor row-major — a 1-D
+        bias under a ``channels_last`` declaration is contiguous, not an error,
+        because the permutation is the identity there.
+        """
+
+        return self.rank is None or self.rank == rank
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +292,73 @@ def rules(root: Path | None = None) -> dict[str, Quant]:
             digest=str(raw.get("digest", "")),
         )
     return corpus
+
+
+def layouts(root: Path | None = None) -> dict[str, Arrangement]:
+    """handle -> :class:`Arrangement`, read from ``spec/v2/layouts/*.json``.
+
+    The THIRD reader of one document set: Rust vendors these records at build
+    time (``build.rs`` -> ``include_str!``) and Go embeds them (``go:embed``).
+    Both of those APPLY the arrangement; this one only names it. There is one
+    producer of the vocabulary — the records — and adding a fourth author of a
+    handle, a rank or a permutation anywhere is what this function exists to
+    make unnecessary.
+
+    Identity facts only, in the shape of its two siblings. No plan, no
+    evaluator, no ``apply``.
+    """
+
+    directory = _root(root) / "layouts"
+    if not directory.is_dir():
+        # An absent class must refuse rather than answer "nothing is ratified":
+        # an empty result reads as a valid, tiny catalog at every call site, and
+        # the call site's next move is to fall back to row-major -- silently
+        # undoing a delivery instead of naming a missing corpus.
+        raise FileNotFoundError(
+            f"{directory}: no layout-morphism records. A corpus without "
+            f"spec/v2/layouts is not a corpus with no ratified layouts"
+        )
+    corpus: dict[str, Arrangement] = {}
+    for path in sorted(directory.glob("*.json")):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        rank = raw.get("rank")
+        corpus[_handle(raw)] = Arrangement(
+            handle=_handle(raw),
+            cls=str(raw["class"]),
+            rank=None if rank is None else int(rank),
+            permutation=tuple(int(v) for v in raw.get("permutation") or ()),
+            sub_axes=tuple(
+                SubAxis(axis=int(entry["axis"]), extent=str(entry["extent"]))
+                for entry in raw.get("sub_axes") or ()
+            ),
+            digest=str(raw.get("digest", "")),
+        )
+    return corpus
+
+
+def identity_arrangement(root: Path | None = None) -> Arrangement:
+    """The row-major record — the default every stamp written before layouts
+    joined the stamp means, and the permanent fallback a compiler declares when
+    its wish is outside the catalog.
+
+    DERIVED, never spelled: it is the unique rankless record. A consumer that
+    hard-codes ``"torch.contiguous@1"`` becomes a second author of the one
+    handle every existing artifact carries, which is the whole failure this
+    reader exists to remove. Two rankless records, or none, is a refusal — an
+    ambiguous default is worse than an absent one, because it picks silently.
+    """
+
+    rankless = sorted(
+        (a for a in layouts(root).values() if a.rank is None),
+        key=lambda a: a.handle,
+    )
+    if len(rankless) != 1:
+        raise ValueError(
+            f"the layout corpus must hold exactly ONE rankless record (the "
+            f"identity); it holds {len(rankless)}: "
+            f"{[a.handle for a in rankless]!r}"
+        )
+    return rankless[0]
 
 
 def topologies(root: Path | None = None) -> dict[str, dict[str, dict[str, tuple[int, ...]]]]:

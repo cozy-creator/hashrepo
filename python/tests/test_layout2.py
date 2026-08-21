@@ -21,7 +21,14 @@ import json
 from pathlib import Path
 
 import pytest
-from tensorfs.layout2 import ExpectedHeader, LayoutTensor, rules, topologies
+from tensorfs.layout2 import (
+    ExpectedHeader,
+    LayoutTensor,
+    identity_arrangement,
+    layouts,
+    rules,
+    topologies,
+)
 
 _DATA = Path(__file__).resolve().parent / "data"
 _SPEC = Path(__file__).resolve().parents[2] / "spec" / "v2"
@@ -191,3 +198,100 @@ def test_a_topology_is_shapes_and_no_dtype(plain: ExpectedHeader) -> None:
 def test_a_corpus_root_that_is_not_there_refuses(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         rules(tmp_path / "nowhere")
+
+
+# -- the layout-morphism vocabulary (tensorfs#158) ---------------------------
+#
+# One producer of a layout handle: these records. Rust vendors them at build
+# time and Go embeds them, and both APPLY the arrangement; this reader only
+# names it. The tests below are about the READING, not about the arrangements
+# -- their correctness is `ratify()`'s job in Rust, which applies the map and
+# its inverse and compares bytes.
+
+
+def test_the_layout_corpus_reads_and_is_not_summarised() -> None:
+    corpus = layouts(_SPEC)
+    on_disk = sorted(p.name for p in (_SPEC / "layouts").glob("*.json"))
+    assert len(corpus) == len(on_disk), "a record was dropped or merged"
+
+    channels_last = corpus["torch.channels_last-2d@1"]
+    assert channels_last.cls == "inductor"
+    assert channels_last.rank == 4
+    assert channels_last.permutation == (0, 2, 3, 1)
+    assert [axis.extent for axis in channels_last.sub_axes] == ["d0", "d1", "d2", "d3"]
+    assert not channels_last.is_identity
+    assert channels_last.applies_to(4)
+    # A rank the arrangement is not defined for is NOT an error: a 1-D bias
+    # under a channels_last declaration is row-major, because the permutation
+    # is the identity there.
+    assert not channels_last.applies_to(1)
+
+    # The endpoint-declared class is the one the real wins live in, and its
+    # extents are FORMULAS -- read verbatim, never evaluated here.
+    blocked = corpus["cublas.blockscale-128x4@1"]
+    assert blocked.cls == "endpoint-declared"
+    assert blocked.permutation == (0, 3, 2, 1, 4)
+    assert [axis.extent for axis in blocked.sub_axes] == [
+        "ceil(d0/128)", "4", "32", "ceil(d1/4)", "4",
+    ]
+
+
+def test_the_identity_is_derived_from_the_corpus_and_never_spelled() -> None:
+    """A consumer that hard-codes `torch.contiguous@1` becomes a second author
+    of the one handle every existing artifact carries. It is derivable: the
+    identity is the unique RANKLESS record, because row-major is row-major at
+    every rank."""
+
+    identity = identity_arrangement(_SPEC)
+    assert identity.rank is None
+    assert identity.is_identity
+    assert identity.permutation == ()
+    assert identity.applies_to(1) and identity.applies_to(5)
+    assert identity.handle == "torch.contiguous@1"  # what the corpus says today
+
+
+def test_the_reader_READS_rather_than_restates(tmp_path: Path) -> None:
+    """The red arm of the whole one-producer claim: perturb a record and the
+    reader must report the perturbed value. A reader that restated the
+    permutation as a literal would pass every other test in this file."""
+
+    corpus_root = tmp_path / "v2"
+    (corpus_root / "layouts").mkdir(parents=True)
+    for path in (_SPEC / "layouts").glob("*.json"):
+        (corpus_root / "layouts" / path.name).write_text(
+            path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    record = corpus_root / "layouts" / "torch.channels_last-2d.v1.json"
+    document = json.loads(record.read_text(encoding="utf-8"))
+    assert document["permutation"] == [0, 2, 3, 1]
+    document["permutation"] = [0, 3, 2, 1]
+    record.write_text(json.dumps(document), encoding="utf-8")
+
+    assert layouts(corpus_root)["torch.channels_last-2d@1"].permutation == (0, 3, 2, 1)
+
+
+def test_an_absent_layout_class_refuses_instead_of_reading_as_empty(tmp_path: Path) -> None:
+    """`{}` reads as a valid, tiny catalog at every call site, and the call
+    site's next move is to fall back to row-major -- silently undoing a
+    delivery instead of naming a missing corpus."""
+
+    corpus_root = tmp_path / "v2"
+    (corpus_root / "rules").mkdir(parents=True)
+    with pytest.raises(FileNotFoundError):
+        layouts(corpus_root)
+
+
+def test_two_rankless_records_are_an_ambiguous_default_and_refuse(tmp_path: Path) -> None:
+    corpus_root = tmp_path / "v2"
+    (corpus_root / "layouts").mkdir(parents=True)
+    source = (_SPEC / "layouts" / "torch.contiguous.v1.json").read_text(encoding="utf-8")
+    (corpus_root / "layouts" / "torch.contiguous.v1.json").write_text(
+        source, encoding="utf-8"
+    )
+    twin = json.loads(source)
+    twin["name"] = "torch.also-contiguous"
+    (corpus_root / "layouts" / "torch.also-contiguous.v1.json").write_text(
+        json.dumps(twin), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="exactly ONE rankless record"):
+        identity_arrangement(corpus_root)
