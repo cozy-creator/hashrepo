@@ -1,0 +1,788 @@
+{
+ "components": [
+  {
+   "name": "flownet",
+   "role": "other",
+   "tensors": {
+    "net.block0.conv0.0.0.bias": [
+     96
+    ],
+    "net.block0.conv0.0.0.weight": [
+     96,
+     15,
+     3,
+     3
+    ],
+    "net.block0.conv0.1.0.bias": [
+     192
+    ],
+    "net.block0.conv0.1.0.weight": [
+     192,
+     96,
+     3,
+     3
+    ],
+    "net.block0.convblock.0.beta": [
+     1,
+     192,
+     1,
+     1
+    ],
+    "net.block0.convblock.0.conv.bias": [
+     192
+    ],
+    "net.block0.convblock.0.conv.weight": [
+     192,
+     192,
+     3,
+     3
+    ],
+    "net.block0.convblock.1.beta": [
+     1,
+     192,
+     1,
+     1
+    ],
+    "net.block0.convblock.1.conv.bias": [
+     192
+    ],
+    "net.block0.convblock.1.conv.weight": [
+     192,
+     192,
+     3,
+     3
+    ],
+    "net.block0.convblock.2.beta": [
+     1,
+     192,
+     1,
+     1
+    ],
+    "net.block0.convblock.2.conv.bias": [
+     192
+    ],
+    "net.block0.convblock.2.conv.weight": [
+     192,
+     192,
+     3,
+     3
+    ],
+    "net.block0.convblock.3.beta": [
+     1,
+     192,
+     1,
+     1
+    ],
+    "net.block0.convblock.3.conv.bias": [
+     192
+    ],
+    "net.block0.convblock.3.conv.weight": [
+     192,
+     192,
+     3,
+     3
+    ],
+    "net.block0.convblock.4.beta": [
+     1,
+     192,
+     1,
+     1
+    ],
+    "net.block0.convblock.4.conv.bias": [
+     192
+    ],
+    "net.block0.convblock.4.conv.weight": [
+     192,
+     192,
+     3,
+     3
+    ],
+    "net.block0.convblock.5.beta": [
+     1,
+     192,
+     1,
+     1
+    ],
+    "net.block0.convblock.5.conv.bias": [
+     192
+    ],
+    "net.block0.convblock.5.conv.weight": [
+     192,
+     192,
+     3,
+     3
+    ],
+    "net.block0.convblock.6.beta": [
+     1,
+     192,
+     1,
+     1
+    ],
+    "net.block0.convblock.6.conv.bias": [
+     192
+    ],
+    "net.block0.convblock.6.conv.weight": [
+     192,
+     192,
+     3,
+     3
+    ],
+    "net.block0.convblock.7.beta": [
+     1,
+     192,
+     1,
+     1
+    ],
+    "net.block0.convblock.7.conv.bias": [
+     192
+    ],
+    "net.block0.convblock.7.conv.weight": [
+     192,
+     192,
+     3,
+     3
+    ],
+    "net.block0.lastconv.0.bias": [
+     52
+    ],
+    "net.block0.lastconv.0.weight": [
+     192,
+     52,
+     4,
+     4
+    ],
+    "net.block1.conv0.0.0.bias": [
+     64
+    ],
+    "net.block1.conv0.0.0.weight": [
+     64,
+     28,
+     3,
+     3
+    ],
+    "net.block1.conv0.1.0.bias": [
+     128
+    ],
+    "net.block1.conv0.1.0.weight": [
+     128,
+     64,
+     3,
+     3
+    ],
+    "net.block1.convblock.0.beta": [
+     1,
+     128,
+     1,
+     1
+    ],
+    "net.block1.convblock.0.conv.bias": [
+     128
+    ],
+    "net.block1.convblock.0.conv.weight": [
+     128,
+     128,
+     3,
+     3
+    ],
+    "net.block1.convblock.1.beta": [
+     1,
+     128,
+     1,
+     1
+    ],
+    "net.block1.convblock.1.conv.bias": [
+     128
+    ],
+    "net.block1.convblock.1.conv.weight": [
+     128,
+     128,
+     3,
+     3
+    ],
+    "net.block1.convblock.2.beta": [
+     1,
+     128,
+     1,
+     1
+    ],
+    "net.block1.convblock.2.conv.bias": [
+     128
+    ],
+    "net.block1.convblock.2.conv.weight": [
+     128,
+     128,
+     3,
+     3
+    ],
+    "net.block1.convblock.3.beta": [
+     1,
+     128,
+     1,
+     1
+    ],
+    "net.block1.convblock.3.conv.bias": [
+     128
+    ],
+    "net.block1.convblock.3.conv.weight": [
+     128,
+     128,
+     3,
+     3
+    ],
+    "net.block1.convblock.4.beta": [
+     1,
+     128,
+     1,
+     1
+    ],
+    "net.block1.convblock.4.conv.bias": [
+     128
+    ],
+    "net.block1.convblock.4.conv.weight": [
+     128,
+     128,
+     3,
+     3
+    ],
+    "net.block1.convblock.5.beta": [
+     1,
+     128,
+     1,
+     1
+    ],
+    "net.block1.convblock.5.conv.bias": [
+     128
+    ],
+    "net.block1.convblock.5.conv.weight": [
+     128,
+     128,
+     3,
+     3
+    ],
+    "net.block1.convblock.6.beta": [
+     1,
+     128,
+     1,
+     1
+    ],
+    "net.block1.convblock.6.conv.bias": [
+     128
+    ],
+    "net.block1.convblock.6.conv.weight": [
+     128,
+     128,
+     3,
+     3
+    ],
+    "net.block1.convblock.7.beta": [
+     1,
+     128,
+     1,
+     1
+    ],
+    "net.block1.convblock.7.conv.bias": [
+     128
+    ],
+    "net.block1.convblock.7.conv.weight": [
+     128,
+     128,
+     3,
+     3
+    ],
+    "net.block1.lastconv.0.bias": [
+     52
+    ],
+    "net.block1.lastconv.0.weight": [
+     128,
+     52,
+     4,
+     4
+    ],
+    "net.block2.conv0.0.0.bias": [
+     48
+    ],
+    "net.block2.conv0.0.0.weight": [
+     48,
+     28,
+     3,
+     3
+    ],
+    "net.block2.conv0.1.0.bias": [
+     96
+    ],
+    "net.block2.conv0.1.0.weight": [
+     96,
+     48,
+     3,
+     3
+    ],
+    "net.block2.convblock.0.beta": [
+     1,
+     96,
+     1,
+     1
+    ],
+    "net.block2.convblock.0.conv.bias": [
+     96
+    ],
+    "net.block2.convblock.0.conv.weight": [
+     96,
+     96,
+     3,
+     3
+    ],
+    "net.block2.convblock.1.beta": [
+     1,
+     96,
+     1,
+     1
+    ],
+    "net.block2.convblock.1.conv.bias": [
+     96
+    ],
+    "net.block2.convblock.1.conv.weight": [
+     96,
+     96,
+     3,
+     3
+    ],
+    "net.block2.convblock.2.beta": [
+     1,
+     96,
+     1,
+     1
+    ],
+    "net.block2.convblock.2.conv.bias": [
+     96
+    ],
+    "net.block2.convblock.2.conv.weight": [
+     96,
+     96,
+     3,
+     3
+    ],
+    "net.block2.convblock.3.beta": [
+     1,
+     96,
+     1,
+     1
+    ],
+    "net.block2.convblock.3.conv.bias": [
+     96
+    ],
+    "net.block2.convblock.3.conv.weight": [
+     96,
+     96,
+     3,
+     3
+    ],
+    "net.block2.convblock.4.beta": [
+     1,
+     96,
+     1,
+     1
+    ],
+    "net.block2.convblock.4.conv.bias": [
+     96
+    ],
+    "net.block2.convblock.4.conv.weight": [
+     96,
+     96,
+     3,
+     3
+    ],
+    "net.block2.convblock.5.beta": [
+     1,
+     96,
+     1,
+     1
+    ],
+    "net.block2.convblock.5.conv.bias": [
+     96
+    ],
+    "net.block2.convblock.5.conv.weight": [
+     96,
+     96,
+     3,
+     3
+    ],
+    "net.block2.convblock.6.beta": [
+     1,
+     96,
+     1,
+     1
+    ],
+    "net.block2.convblock.6.conv.bias": [
+     96
+    ],
+    "net.block2.convblock.6.conv.weight": [
+     96,
+     96,
+     3,
+     3
+    ],
+    "net.block2.convblock.7.beta": [
+     1,
+     96,
+     1,
+     1
+    ],
+    "net.block2.convblock.7.conv.bias": [
+     96
+    ],
+    "net.block2.convblock.7.conv.weight": [
+     96,
+     96,
+     3,
+     3
+    ],
+    "net.block2.lastconv.0.bias": [
+     52
+    ],
+    "net.block2.lastconv.0.weight": [
+     96,
+     52,
+     4,
+     4
+    ],
+    "net.block3.conv0.0.0.bias": [
+     32
+    ],
+    "net.block3.conv0.0.0.weight": [
+     32,
+     28,
+     3,
+     3
+    ],
+    "net.block3.conv0.1.0.bias": [
+     64
+    ],
+    "net.block3.conv0.1.0.weight": [
+     64,
+     32,
+     3,
+     3
+    ],
+    "net.block3.convblock.0.beta": [
+     1,
+     64,
+     1,
+     1
+    ],
+    "net.block3.convblock.0.conv.bias": [
+     64
+    ],
+    "net.block3.convblock.0.conv.weight": [
+     64,
+     64,
+     3,
+     3
+    ],
+    "net.block3.convblock.1.beta": [
+     1,
+     64,
+     1,
+     1
+    ],
+    "net.block3.convblock.1.conv.bias": [
+     64
+    ],
+    "net.block3.convblock.1.conv.weight": [
+     64,
+     64,
+     3,
+     3
+    ],
+    "net.block3.convblock.2.beta": [
+     1,
+     64,
+     1,
+     1
+    ],
+    "net.block3.convblock.2.conv.bias": [
+     64
+    ],
+    "net.block3.convblock.2.conv.weight": [
+     64,
+     64,
+     3,
+     3
+    ],
+    "net.block3.convblock.3.beta": [
+     1,
+     64,
+     1,
+     1
+    ],
+    "net.block3.convblock.3.conv.bias": [
+     64
+    ],
+    "net.block3.convblock.3.conv.weight": [
+     64,
+     64,
+     3,
+     3
+    ],
+    "net.block3.convblock.4.beta": [
+     1,
+     64,
+     1,
+     1
+    ],
+    "net.block3.convblock.4.conv.bias": [
+     64
+    ],
+    "net.block3.convblock.4.conv.weight": [
+     64,
+     64,
+     3,
+     3
+    ],
+    "net.block3.convblock.5.beta": [
+     1,
+     64,
+     1,
+     1
+    ],
+    "net.block3.convblock.5.conv.bias": [
+     64
+    ],
+    "net.block3.convblock.5.conv.weight": [
+     64,
+     64,
+     3,
+     3
+    ],
+    "net.block3.convblock.6.beta": [
+     1,
+     64,
+     1,
+     1
+    ],
+    "net.block3.convblock.6.conv.bias": [
+     64
+    ],
+    "net.block3.convblock.6.conv.weight": [
+     64,
+     64,
+     3,
+     3
+    ],
+    "net.block3.convblock.7.beta": [
+     1,
+     64,
+     1,
+     1
+    ],
+    "net.block3.convblock.7.conv.bias": [
+     64
+    ],
+    "net.block3.convblock.7.conv.weight": [
+     64,
+     64,
+     3,
+     3
+    ],
+    "net.block3.lastconv.0.bias": [
+     52
+    ],
+    "net.block3.lastconv.0.weight": [
+     64,
+     52,
+     4,
+     4
+    ],
+    "net.block4.conv0.0.0.bias": [
+     16
+    ],
+    "net.block4.conv0.0.0.weight": [
+     16,
+     28,
+     3,
+     3
+    ],
+    "net.block4.conv0.1.0.bias": [
+     32
+    ],
+    "net.block4.conv0.1.0.weight": [
+     32,
+     16,
+     3,
+     3
+    ],
+    "net.block4.convblock.0.beta": [
+     1,
+     32,
+     1,
+     1
+    ],
+    "net.block4.convblock.0.conv.bias": [
+     32
+    ],
+    "net.block4.convblock.0.conv.weight": [
+     32,
+     32,
+     3,
+     3
+    ],
+    "net.block4.convblock.1.beta": [
+     1,
+     32,
+     1,
+     1
+    ],
+    "net.block4.convblock.1.conv.bias": [
+     32
+    ],
+    "net.block4.convblock.1.conv.weight": [
+     32,
+     32,
+     3,
+     3
+    ],
+    "net.block4.convblock.2.beta": [
+     1,
+     32,
+     1,
+     1
+    ],
+    "net.block4.convblock.2.conv.bias": [
+     32
+    ],
+    "net.block4.convblock.2.conv.weight": [
+     32,
+     32,
+     3,
+     3
+    ],
+    "net.block4.convblock.3.beta": [
+     1,
+     32,
+     1,
+     1
+    ],
+    "net.block4.convblock.3.conv.bias": [
+     32
+    ],
+    "net.block4.convblock.3.conv.weight": [
+     32,
+     32,
+     3,
+     3
+    ],
+    "net.block4.convblock.4.beta": [
+     1,
+     32,
+     1,
+     1
+    ],
+    "net.block4.convblock.4.conv.bias": [
+     32
+    ],
+    "net.block4.convblock.4.conv.weight": [
+     32,
+     32,
+     3,
+     3
+    ],
+    "net.block4.convblock.5.beta": [
+     1,
+     32,
+     1,
+     1
+    ],
+    "net.block4.convblock.5.conv.bias": [
+     32
+    ],
+    "net.block4.convblock.5.conv.weight": [
+     32,
+     32,
+     3,
+     3
+    ],
+    "net.block4.convblock.6.beta": [
+     1,
+     32,
+     1,
+     1
+    ],
+    "net.block4.convblock.6.conv.bias": [
+     32
+    ],
+    "net.block4.convblock.6.conv.weight": [
+     32,
+     32,
+     3,
+     3
+    ],
+    "net.block4.convblock.7.beta": [
+     1,
+     32,
+     1,
+     1
+    ],
+    "net.block4.convblock.7.conv.bias": [
+     32
+    ],
+    "net.block4.convblock.7.conv.weight": [
+     32,
+     32,
+     3,
+     3
+    ],
+    "net.block4.lastconv.0.bias": [
+     52
+    ],
+    "net.block4.lastconv.0.weight": [
+     32,
+     52,
+     4,
+     4
+    ],
+    "net.encode.cnn0.bias": [
+     16
+    ],
+    "net.encode.cnn0.weight": [
+     16,
+     3,
+     3,
+     3
+    ],
+    "net.encode.cnn1.bias": [
+     16
+    ],
+    "net.encode.cnn1.weight": [
+     16,
+     16,
+     3,
+     3
+    ],
+    "net.encode.cnn2.bias": [
+     16
+    ],
+    "net.encode.cnn2.weight": [
+     16,
+     16,
+     3,
+     3
+    ],
+    "net.encode.cnn3.bias": [
+     4
+    ],
+    "net.encode.cnn3.weight": [
+     16,
+     4,
+     4,
+     4
+    ]
+   }
+  }
+ ],
+ "derived_from": "rife (hub:tensorhub/rife-4.25@prod)",
+ "description": "RIFE v4.25's flownet, the auxiliary interpolator wan-2.2, ltx-video-2.3 and minimax-h3 all bind beside their denoiser. Extracted from the checkpoint TENSORHUB SERVES, because tensorhub is the one that produced it — and the v1 document could not be the source here even in principle: it is rank-only where a topology needs shapes.",
+ "digest": "712d0b92816408daf2237fbd232d517d36975cc6ddf73aee094874239bbfbfdb",
+ "dtype": "F32",
+ "format": "tensorfs-topology-v2",
+ "name": "rife.flownet",
+ "version": 1
+}

@@ -1,5 +1,6 @@
 {
  "_": "THE v1 -> v2 SUCCESSOR MAP. Every v1 document either names the (topology, quant) lane that replaces it, or is listed with the reason it has none. Silence is not allowed: the regression fails on a document that is in neither list.",
+ "_closed": "tensorfs#152 moved SEVEN documents out of no_successor, and the reasons they carried are worth keeping because each was a different way of being wrong. flux1, stable-audio and krea-2 read 'HTTP 401 / GATED' — the repos are gated and the bank had simply been run WITHOUT HF_TOKEN; with the fleet's own token all three answer, and flux1 and stable-audio had SOURCES.tsv lines the whole time that nothing ever ran (which is the defect this issue's gate now catches). trellis2 read 'assembled from several upstream repos' — it is not: all nine members are in microsoft/TRELLIS.2-4B's ckpts/, and what actually blocked it was that three DIFFERENT DiTs share that one folder, which the extractor could not express. internvl-u and qwen-image read 'not yet extracted', which was true. rife read 'NO UPSTREAM HEADER TO EXTRACT FROM ... re-derive it from the producing module's state_dict' — the right answer was simpler and better: tensorhub SERVES the produced checkpoint, so its bytes are the reference, and bank-headers.py now reads a hub source directly.",
  "lanes": {
   "sdxl.diffusers-bf16@1": "sdxl.diffusers@1+plain.bf16@1",
   "sdxl.diffusers-fp8-rowwise@1": "sdxl.diffusers@1+cozy.fp8-rowwise@1",
@@ -18,21 +19,21 @@
   "flux2-klein.diffusers-bf16@1": "flux2-klein.diffusers@1+plain.bf16@1",
   "hidream-o1.diffusers-bf16@1": "hidream-o1.diffusers@1+plain.bf16@1",
   "wan22.diffusers-bf16@1": "wan22.diffusers@1+plain.bf16@1",
-  "z-image.diffusers-bf16@1": "z-image.diffusers@1+plain.bf16@1"
+  "z-image.diffusers-bf16@1": "z-image.diffusers@1+plain.bf16@1",
+  "flux1.diffusers-bf16@1": "flux1.diffusers@1+plain.bf16@1",
+  "krea-2.diffusers-bf16@1": "krea-2.diffusers@1+plain.bf16@1",
+  "stable-audio.diffusers-fp16@1": "stable-audio.diffusers@1+plain.f16@1",
+  "internvl-u.diffusers-bf16@1": "internvl-u.diffusers@1+plain.bf16@1",
+  "qwen-image.diffusers-bf16@1": "qwen-image.diffusers@1+plain.bf16@1",
+  "trellis2.dit-bf16@1": "trellis2.dit@1+plain.bf16@1",
+  "rife.flownet-fp32@1": "rife.flownet@1+plain.f32@1"
  },
  "no_successor": {
-  "dit.blocks-fused-qkv@1": "NOT A LANE, BY DESIGN \u2014 it was a FRAGMENT, and tensorfs#127 exists because v1 could not say so. In v2 a fragment is a morphism seam file, and only topologies can be named by a lanes= declaration.",
-  "sdxl.clip-g-fused-qkv@1": "NOT A LANE \u2014 the fused half of a packaging pair. Its content is now spec/v2/morphisms/sdxl.clip-g-split-to-fused.v1.json, ratified evidence and all.",
-  "sdxl.clip-g-split-qkv@1": "NOT A LANE \u2014 the split half of the same pair, same seam file.",
-  "flux1.diffusers-bf16@1": "REFERENCE UNREACHABLE: black-forest-labs/FLUX.1-dev answers HTTP 401 to an anonymous header range. A topology is extracted from a reference tree, so an ungated read is the prerequisite; add the SOURCES.tsv line and rebuild.",
-  "krea-2.diffusers-bf16@1": "REFERENCE GATED: krea/Krea-2-Raw needs HF_TOKEN. Same prerequisite as flux1.",
-  "stable-audio.diffusers-fp16@1": "REFERENCE UNREACHABLE: stabilityai/stable-audio-open-1.0 answers HTTP 401.",
-  "internvl-u.diffusers-bf16@1": "NOT YET EXTRACTED: reachable, but not banked in this change. One SOURCES.tsv line plus a rebuild.",
-  "qwen-image.diffusers-bf16@1": "NOT YET EXTRACTED: same.",
-  "trellis2.dit-bf16@1": "NOT YET EXTRACTED: the reference is assembled from several upstream repos, so it needs a composed SOURCES entry rather than one line.",
-  "rife.flownet-fp32@1": "NO UPSTREAM HEADER TO EXTRACT FROM. tensorhub/rife-4.25 is PRODUCED pod-side from an upstream pickle; the banked inventory (scripts/rife-4.25-inventory.json) carries name/dtype/rank and no SHAPES, which is exactly what a v2 topology is. Re-derive it from the producing module's state_dict with shapes, then extract.",
+  "dit.blocks-fused-qkv@1": "NOT A LANE, BY DESIGN — it was a FRAGMENT, and tensorfs#127 exists because v1 could not say so. In v2 a fragment is a morphism seam file, and only topologies can be named by a lanes= declaration.",
+  "sdxl.clip-g-fused-qkv@1": "NOT A LANE — the fused half of a packaging pair. Its content is now spec/v2/morphisms/sdxl.clip-g-split-to-fused.v1.json, ratified evidence and all.",
+  "sdxl.clip-g-split-qkv@1": "NOT A LANE — the split half of the same pair, same seam file.",
   "qwen3.6-27b-mtp.gguf-ud-q4-k-xl@1": "GGUF: needs a gguf quant rule, which this change did not write. The topology extractor already reads GGUF headers (bank-headers.py does), so the missing half is the rule.",
-  "qwen3.6-35b-a3b.vllm-fp8@1": "MEASURED MISMATCH, not an oversight: the fp8 release carries 64196 tensors across 42 members and the bf16 release 1045 across 26 \u2014 the fp8 packaging also splits the MoE experts, so it is a DIFFERENT topology, needing its own extraction and a vllm rule. See spec/v2/baselines/stamps.json."
+  "qwen3.6-35b-a3b.vllm-fp8@1": "MEASURED MISMATCH, not an oversight: the fp8 release carries 64196 tensors across 42 members and the bf16 release 1045 across 26 — the fp8 packaging also splits the MoE experts, so it is a DIFFERENT topology, needing its own extraction and a vllm rule. See spec/v2/baselines/stamps.json."
  },
  "intentional_diffs": [
   {
@@ -47,105 +48,154 @@
    "checkpoint": "sd-turbo",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `ernie.diffusers-bf16@1` \u2014 `sd-turbo` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd-turbo` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `ernie.diffusers-bf16@1` — `sd-turbo` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd-turbo` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "ernie.diffusers-bf16@1",
    "checkpoint": "sd15",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `ernie.diffusers-bf16@1` \u2014 `sd15` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd15` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `ernie.diffusers-bf16@1` — `sd15` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd15` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "ernie.diffusers-bf16@1",
    "checkpoint": "sdxl-base",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `ernie.diffusers-bf16@1` \u2014 `sdxl-base` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `ernie.diffusers-bf16@1` — `sdxl-base` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "ernie.diffusers-bf16@1",
    "checkpoint": "sdxl-base-fp16",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `ernie.diffusers-bf16@1` \u2014 `sdxl-base-fp16` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base-fp16` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `ernie.diffusers-bf16@1` — `sdxl-base-fp16` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base-fp16` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "ernie.diffusers-bf16@1",
    "checkpoint": "sdxl-base-sharded",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `ernie.diffusers-bf16@1` explained part of `sdxl-base-sharded` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `ernie.diffusers-bf16@1` explained part of `sdxl-base-sharded` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "ernie.diffusers-bf16@1",
    "checkpoint": "sdxl-inpainting",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `ernie.diffusers-bf16@1` \u2014 `sdxl-inpainting` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-inpainting` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `ernie.diffusers-bf16@1` — `sdxl-inpainting` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-inpainting` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "ernie.diffusers-bf16@1",
    "checkpoint": "sdxl-inpainting-bf16",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `ernie.diffusers-bf16@1` explained part of `sdxl-inpainting-bf16` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `ernie.diffusers-bf16@1` explained part of `sdxl-inpainting-bf16` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+  },
+  {
+   "contract": "flux1.diffusers-bf16@1",
+   "checkpoint": "flux2-klein",
+   "v1": "satisfies",
+   "v2": "refuse",
+   "why": "v1 FALSE ADMIT. flux1.diffusers-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 SATISFIED it against `flux2-klein`, which is a different model, because a required:false-everywhere document admits on whatever overlap it finds and v1 compared no shapes. v2 stamps `flux2-klein` as what it actually is and refuses."
+  },
+  {
+   "contract": "flux1.diffusers-bf16@1",
+   "checkpoint": "ltx-2",
+   "v1": "satisfies",
+   "v2": "refuse",
+   "why": "v1 FALSE ADMIT. flux1.diffusers-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 SATISFIED it against `ltx-2`, which is a different model, because a required:false-everywhere document admits on whatever overlap it finds and v1 compared no shapes. v2 stamps `ltx-2` as what it actually is and refuses."
+  },
+  {
+   "contract": "flux1.diffusers-bf16@1",
+   "checkpoint": "minimax-h3-diffusers",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "v1 FALSE CONVERSION OFFER. flux1.diffusers-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 reached a DTYPE disagreement against `minimax-h3-diffusers` before any structural one and offered a cast job that would have been paid for and still could not serve the lane — `minimax-h3-diffusers` is a different model. v2 stamps it first and refuses before anything is downloaded or billed."
+  },
+  {
+   "contract": "flux1.diffusers-bf16@1",
+   "checkpoint": "wan22",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "v1 FALSE CONVERSION OFFER. flux1.diffusers-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 reached a DTYPE disagreement against `wan22` before any structural one and offered a cast job that would have been paid for and still could not serve the lane — `wan22` is a different model. v2 stamps it first and refuses before anything is downloaded or billed."
   },
   {
    "contract": "flux2-klein.diffusers-bf16@1",
    "checkpoint": "ltx-2",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `flux2-klein.diffusers-bf16@1` explained part of `ltx-2` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `flux2-klein.diffusers-bf16@1` explained part of `ltx-2` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "flux2-klein.diffusers-bf16@1",
    "checkpoint": "minimax-h3-diffusers",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `flux2-klein.diffusers-bf16@1` \u2014 `minimax-h3-diffusers` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `minimax-h3-diffusers` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `flux2-klein.diffusers-bf16@1` — `minimax-h3-diffusers` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `minimax-h3-diffusers` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "flux2-klein.diffusers-bf16@1",
    "checkpoint": "wan22",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `flux2-klein.diffusers-bf16@1` \u2014 `wan22` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `wan22` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `flux2-klein.diffusers-bf16@1` — `wan22` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `wan22` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "hidream-o1.diffusers-bf16@1",
    "checkpoint": "qwen3.6-35b-a3b",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `hidream-o1.diffusers-bf16@1` explained part of `qwen3.6-35b-a3b` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `hidream-o1.diffusers-bf16@1` explained part of `qwen3.6-35b-a3b` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "hidream-o1.diffusers-bf16@1",
    "checkpoint": "qwen3.6-35b-a3b-fp8",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `hidream-o1.diffusers-bf16@1` \u2014 `qwen3.6-35b-a3b-fp8` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `qwen3.6-35b-a3b-fp8` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `hidream-o1.diffusers-bf16@1` — `qwen3.6-35b-a3b-fp8` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `qwen3.6-35b-a3b-fp8` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "joycaption.llava-bf16@1",
    "checkpoint": "ltx-2",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `joycaption.llava-bf16@1` \u2014 `ltx-2` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `ltx-2` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `joycaption.llava-bf16@1` — `ltx-2` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `ltx-2` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+  },
+  {
+   "contract": "krea-2.diffusers-bf16@1",
+   "checkpoint": "flux2-klein",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "v1 FALSE CONVERSION OFFER. krea-2.diffusers-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 reached a DTYPE disagreement against `flux2-klein` before any structural one and offered a cast job that would have been paid for and still could not serve the lane — `flux2-klein` is a different model. v2 stamps it first and refuses before anything is downloaded or billed."
+  },
+  {
+   "contract": "krea-2.diffusers-bf16@1",
+   "checkpoint": "ltx-2",
+   "v1": "satisfies",
+   "v2": "refuse",
+   "why": "v1 FALSE ADMIT. krea-2.diffusers-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 SATISFIED it against `ltx-2`, which is a different model, because a required:false-everywhere document admits on whatever overlap it finds and v1 compared no shapes. v2 stamps `ltx-2` as what it actually is and refuses."
+  },
+  {
+   "contract": "krea-2.diffusers-bf16@1",
+   "checkpoint": "minimax-h3-diffusers",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "v1 FALSE CONVERSION OFFER. krea-2.diffusers-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 reached a DTYPE disagreement against `minimax-h3-diffusers` before any structural one and offered a cast job that would have been paid for and still could not serve the lane — `minimax-h3-diffusers` is a different model. v2 stamps it first and refuses before anything is downloaded or billed."
   },
   {
    "contract": "ltx-2.diffusers-bf16@1",
    "checkpoint": "flux2-klein",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `ltx-2.diffusers-bf16@1` explained part of `flux2-klein` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `ltx-2.diffusers-bf16@1` explained part of `flux2-klein` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "ltx-2.diffusers-bf16@1",
    "checkpoint": "minimax-h3-diffusers",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `ltx-2.diffusers-bf16@1` \u2014 `minimax-h3-diffusers` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `minimax-h3-diffusers` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `ltx-2.diffusers-bf16@1` — `minimax-h3-diffusers` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `minimax-h3-diffusers` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "minimax.h3-dit-native@1",
@@ -155,81 +205,109 @@
    "why": "v2 GAINED A CAPABILITY v1 DID NOT HAVE. v1 could only compare a checkpoint to one document and had no way to say that two packagings are the same network, so it refused. v2 relates them through a ratified morphism and answers with the job that closes the gap. This is the direction the design calls for: over-constraint is the failure tensorfs#122's matching-set ruling forbids."
   },
   {
+   "contract": "qwen-image.diffusers-bf16@1",
+   "checkpoint": "flux2-klein",
+   "v1": "satisfies",
+   "v2": "refuse",
+   "why": "v1 FALSE ADMIT. qwen-image.diffusers-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 SATISFIED it against `flux2-klein`, which is a different model, because a required:false-everywhere document admits on whatever overlap it finds and v1 compared no shapes. v2 stamps `flux2-klein` as what it actually is and refuses."
+  },
+  {
+   "contract": "qwen-image.diffusers-bf16@1",
+   "checkpoint": "ltx-2",
+   "v1": "satisfies",
+   "v2": "refuse",
+   "why": "v1 FALSE ADMIT. qwen-image.diffusers-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 SATISFIED it against `ltx-2`, which is a different model, because a required:false-everywhere document admits on whatever overlap it finds and v1 compared no shapes. v2 stamps `ltx-2` as what it actually is and refuses."
+  },
+  {
+   "contract": "qwen-image.diffusers-bf16@1",
+   "checkpoint": "minimax-h3-diffusers",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "v1 FALSE CONVERSION OFFER. qwen-image.diffusers-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 reached a DTYPE disagreement against `minimax-h3-diffusers` before any structural one and offered a cast job that would have been paid for and still could not serve the lane — `minimax-h3-diffusers` is a different model. v2 stamps it first and refuses before anything is downloaded or billed."
+  },
+  {
+   "contract": "qwen-image.diffusers-bf16@1",
+   "checkpoint": "wan22",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "v1 FALSE CONVERSION OFFER. qwen-image.diffusers-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 reached a DTYPE disagreement against `wan22` before any structural one and offered a cast job that would have been paid for and still could not serve the lane — `wan22` is a different model. v2 stamps it first and refuses before anything is downloaded or billed."
+  },
+  {
    "contract": "sd15.diffusers-bf16@1",
    "checkpoint": "ernie",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `sd15.diffusers-bf16@1` explained part of `ernie` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `sd15.diffusers-bf16@1` explained part of `ernie` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "sd15.diffusers-bf16@1",
    "checkpoint": "sd-turbo",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd15.diffusers-bf16@1` \u2014 `sd-turbo` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd-turbo` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd15.diffusers-bf16@1` — `sd-turbo` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd-turbo` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sd15.diffusers-bf16@1",
    "checkpoint": "sdxl-base",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd15.diffusers-bf16@1` \u2014 `sdxl-base` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd15.diffusers-bf16@1` — `sdxl-base` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sd15.diffusers-bf16@1",
    "checkpoint": "sdxl-base-fp16",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd15.diffusers-bf16@1` \u2014 `sdxl-base-fp16` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base-fp16` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd15.diffusers-bf16@1` — `sdxl-base-fp16` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base-fp16` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sd15.diffusers-bf16@1",
    "checkpoint": "sdxl-inpainting",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd15.diffusers-bf16@1` \u2014 `sdxl-inpainting` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-inpainting` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd15.diffusers-bf16@1` — `sdxl-inpainting` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-inpainting` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sd2.diffusers-bf16@1",
    "checkpoint": "ernie",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `sd2.diffusers-bf16@1` explained part of `ernie` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `sd2.diffusers-bf16@1` explained part of `ernie` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "sd2.diffusers-bf16@1",
    "checkpoint": "sd15",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd2.diffusers-bf16@1` \u2014 `sd15` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd15` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd2.diffusers-bf16@1` — `sd15` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd15` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sd2.diffusers-bf16@1",
    "checkpoint": "sdxl-base",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd2.diffusers-bf16@1` \u2014 `sdxl-base` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd2.diffusers-bf16@1` — `sdxl-base` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sd2.diffusers-bf16@1",
    "checkpoint": "sdxl-base-fp16",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd2.diffusers-bf16@1` \u2014 `sdxl-base-fp16` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base-fp16` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd2.diffusers-bf16@1` — `sdxl-base-fp16` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base-fp16` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sd2.diffusers-bf16@1",
    "checkpoint": "sdxl-base-sharded",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `sd2.diffusers-bf16@1` explained part of `sdxl-base-sharded` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `sd2.diffusers-bf16@1` explained part of `sdxl-base-sharded` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "sd2.diffusers-bf16@1",
    "checkpoint": "sdxl-inpainting",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd2.diffusers-bf16@1` \u2014 `sdxl-inpainting` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-inpainting` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sd2.diffusers-bf16@1` — `sdxl-inpainting` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-inpainting` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sd2.diffusers-bf16@1",
@@ -243,91 +321,91 @@
    "checkpoint": "ernie",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `sdxl.diffusers-bf16@1` explained part of `ernie` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `sdxl.diffusers-bf16@1` explained part of `ernie` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "sdxl.diffusers-bf16@1",
    "checkpoint": "flux2-klein",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `sdxl.diffusers-bf16@1` explained part of `flux2-klein` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `sdxl.diffusers-bf16@1` explained part of `flux2-klein` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "sdxl.diffusers-bf16@1",
    "checkpoint": "sd-turbo",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-bf16@1` \u2014 `sd-turbo` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd-turbo` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-bf16@1` — `sd-turbo` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd-turbo` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sdxl.diffusers-bf16@1",
    "checkpoint": "sd15",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-bf16@1` \u2014 `sd15` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd15` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-bf16@1` — `sd15` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd15` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sdxl.diffusers-bf16@1",
    "checkpoint": "sdxl-inpainting",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-bf16@1` \u2014 `sdxl-inpainting` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-inpainting` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-bf16@1` — `sdxl-inpainting` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-inpainting` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sdxl.diffusers-bf16@1",
    "checkpoint": "sdxl-inpainting-bf16",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "THE HOLE, and this row is the whole reason the baseline was banked. v1 does not merely tolerate SDXL-inpainting \u2014 it SATISFIES it on all 1680 tensors, because a v1 contract is deliberately shapeless and `conv_in.weight` being [320, 9, 3, 3] instead of [320, 4, 3, 3] is invisible to it. verdict.go says so in its own header: 'SDXL-inpainting's 9-channel conv_in is unclaimed by the SDXL contract, so it Satisfies, binds, runs to completion, and serves garbage. That is a LEGAL admit.' v2 refuses and names the tensor and both shapes."
+   "why": "THE HOLE, and this row is the whole reason the baseline was banked. v1 does not merely tolerate SDXL-inpainting — it SATISFIES it on all 1680 tensors, because a v1 contract is deliberately shapeless and `conv_in.weight` being [320, 9, 3, 3] instead of [320, 4, 3, 3] is invisible to it. verdict.go says so in its own header: 'SDXL-inpainting's 9-channel conv_in is unclaimed by the SDXL contract, so it Satisfies, binds, runs to completion, and serves garbage. That is a LEGAL admit.' v2 refuses and names the tensor and both shapes."
   },
   {
    "contract": "sdxl.diffusers-bf16@1",
    "checkpoint": "wan22",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-bf16@1` \u2014 `wan22` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `wan22` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-bf16@1` — `wan22` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `wan22` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sdxl.diffusers-bf16@1",
    "checkpoint": "z-image",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `sdxl.diffusers-bf16@1` explained part of `z-image` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `sdxl.diffusers-bf16@1` explained part of `z-image` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "sdxl.diffusers-fp8-rowwise@1",
    "checkpoint": "ernie",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `sdxl.diffusers-fp8-rowwise@1` explained part of `ernie` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `sdxl.diffusers-fp8-rowwise@1` explained part of `ernie` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "sdxl.diffusers-fp8-rowwise@1",
    "checkpoint": "flux2-klein",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `sdxl.diffusers-fp8-rowwise@1` explained part of `flux2-klein` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `sdxl.diffusers-fp8-rowwise@1` explained part of `flux2-klein` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "sdxl.diffusers-fp8-rowwise@1",
    "checkpoint": "sd-turbo",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-fp8-rowwise@1` \u2014 `sd-turbo` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd-turbo` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-fp8-rowwise@1` — `sd-turbo` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd-turbo` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sdxl.diffusers-fp8-rowwise@1",
    "checkpoint": "sd15",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-fp8-rowwise@1` \u2014 `sd15` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd15` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-fp8-rowwise@1` — `sd15` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd15` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sdxl.diffusers-fp8-rowwise@1",
    "checkpoint": "sdxl-inpainting",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-fp8-rowwise@1` \u2014 `sdxl-inpainting` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-inpainting` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-fp8-rowwise@1` — `sdxl-inpainting` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-inpainting` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sdxl.diffusers-fp8-rowwise@1",
@@ -341,49 +419,49 @@
    "checkpoint": "wan22",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-fp8-rowwise@1` \u2014 `wan22` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `wan22` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-fp8-rowwise@1` — `wan22` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `wan22` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sdxl.diffusers-fp8-rowwise@1",
    "checkpoint": "z-image",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `sdxl.diffusers-fp8-rowwise@1` explained part of `z-image` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `sdxl.diffusers-fp8-rowwise@1` explained part of `z-image` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "sdxl.diffusers-nvfp4-flat@1",
    "checkpoint": "ernie",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `sdxl.diffusers-nvfp4-flat@1` explained part of `ernie` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `sdxl.diffusers-nvfp4-flat@1` explained part of `ernie` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "sdxl.diffusers-nvfp4-flat@1",
    "checkpoint": "flux2-klein",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `sdxl.diffusers-nvfp4-flat@1` explained part of `flux2-klein` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `sdxl.diffusers-nvfp4-flat@1` explained part of `flux2-klein` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
   },
   {
    "contract": "sdxl.diffusers-nvfp4-flat@1",
    "checkpoint": "sd-turbo",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-nvfp4-flat@1` \u2014 `sd-turbo` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd-turbo` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-nvfp4-flat@1` — `sd-turbo` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd-turbo` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sdxl.diffusers-nvfp4-flat@1",
    "checkpoint": "sd15",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-nvfp4-flat@1` \u2014 `sd15` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd15` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-nvfp4-flat@1` — `sd15` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sd15` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sdxl.diffusers-nvfp4-flat@1",
    "checkpoint": "sdxl-inpainting",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-nvfp4-flat@1` \u2014 `sdxl-inpainting` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-inpainting` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-nvfp4-flat@1` — `sdxl-inpainting` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-inpainting` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sdxl.diffusers-nvfp4-flat@1",
@@ -397,55 +475,104 @@
    "checkpoint": "wan22",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-nvfp4-flat@1` \u2014 `wan22` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `wan22` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `sdxl.diffusers-nvfp4-flat@1` — `wan22` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `wan22` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "sdxl.diffusers-nvfp4-flat@1",
    "checkpoint": "z-image",
    "v1": "satisfies",
    "v2": "refuse",
-   "why": "v1 FALSE ADMIT. `sdxl.diffusers-nvfp4-flat@1` explained part of `z-image` and nothing contradicted it, so v1's `Verdict` admitted \u2014 its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+   "why": "v1 FALSE ADMIT. `sdxl.diffusers-nvfp4-flat@1` explained part of `z-image` and nothing contradicted it, so v1's `Verdict` admitted — its rule is \"at least one member explained and no claimed tensor disagrees\", and a document that claims few tensors disagrees with few. v2 requires the candidate to BE the layout: every non-optional key, at its shape, with nothing left over. This admit was the bind gate saying yes to a checkpoint of a different model."
+  },
+  {
+   "contract": "stable-audio.diffusers-fp16@1",
+   "checkpoint": "flux2-klein",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "v1 FALSE CONVERSION OFFER. stable-audio.diffusers-fp16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 reached a DTYPE disagreement against `flux2-klein` before any structural one and offered a cast job that would have been paid for and still could not serve the lane — `flux2-klein` is a different model. v2 stamps it first and refuses before anything is downloaded or billed."
+  },
+  {
+   "contract": "stable-audio.diffusers-fp16@1",
+   "checkpoint": "ltx-2",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "v1 FALSE CONVERSION OFFER. stable-audio.diffusers-fp16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 reached a DTYPE disagreement against `ltx-2` before any structural one and offered a cast job that would have been paid for and still could not serve the lane — `ltx-2` is a different model. v2 stamps it first and refuses before anything is downloaded or billed."
+  },
+  {
+   "contract": "stable-audio.diffusers-fp16@1",
+   "checkpoint": "minimax-h3-diffusers",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "v1 FALSE CONVERSION OFFER. stable-audio.diffusers-fp16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 reached a DTYPE disagreement against `minimax-h3-diffusers` before any structural one and offered a cast job that would have been paid for and still could not serve the lane — `minimax-h3-diffusers` is a different model. v2 stamps it first and refuses before anything is downloaded or billed."
+  },
+  {
+   "contract": "stable-audio.diffusers-fp16@1",
+   "checkpoint": "wan22",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "v1 FALSE CONVERSION OFFER. stable-audio.diffusers-fp16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 reached a DTYPE disagreement against `wan22` before any structural one and offered a cast job that would have been paid for and still could not serve the lane — `wan22` is a different model. v2 stamps it first and refuses before anything is downloaded or billed."
+  },
+  {
+   "contract": "trellis2.dit-bf16@1",
+   "checkpoint": "ernie",
+   "v1": "satisfies",
+   "v2": "refuse",
+   "why": "v1 FALSE ADMIT. trellis2.dit-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 SATISFIED it against `ernie`, which is a different model, because a required:false-everywhere document admits on whatever overlap it finds and v1 compared no shapes. v2 stamps `ernie` as what it actually is and refuses."
+  },
+  {
+   "contract": "trellis2.dit-bf16@1",
+   "checkpoint": "wan22",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "v1 FALSE CONVERSION OFFER. trellis2.dit-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 reached a DTYPE disagreement against `wan22` before any structural one and offered a cast job that would have been paid for and still could not serve the lane — `wan22` is a different model. v2 stamps it first and refuses before anything is downloaded or billed."
+  },
+  {
+   "contract": "trellis2.dit-bf16@1",
+   "checkpoint": "z-image",
+   "v1": "derivable",
+   "v2": "refuse",
+   "why": "v1 FALSE CONVERSION OFFER. trellis2.dit-bf16@1 was one of the seven documents tensorfs#151 left without a v2 lane, so this row's divergence could not surface until tensorfs#152 extracted the topology. v1 reached a DTYPE disagreement against `z-image` before any structural one and offered a cast job that would have been paid for and still could not serve the lane — `z-image` is a different model. v2 stamps it first and refuses before anything is downloaded or billed."
   },
   {
    "contract": "wan22.diffusers-bf16@1",
    "checkpoint": "ltx-2",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `wan22.diffusers-bf16@1` \u2014 `ltx-2` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `ltx-2` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `wan22.diffusers-bf16@1` — `ltx-2` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `ltx-2` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "wan22.diffusers-bf16@1",
    "checkpoint": "minimax-h3-diffusers",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `wan22.diffusers-bf16@1` \u2014 `minimax-h3-diffusers` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `minimax-h3-diffusers` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `wan22.diffusers-bf16@1` — `minimax-h3-diffusers` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `minimax-h3-diffusers` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "wan22.diffusers-bf16@1",
    "checkpoint": "sdxl-base",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `wan22.diffusers-bf16@1` \u2014 `sdxl-base` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `wan22.diffusers-bf16@1` — `sdxl-base` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "wan22.diffusers-bf16@1",
    "checkpoint": "sdxl-base-fp16",
    "v1": "derivable",
    "v2": "refuse",
-   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `wan22.diffusers-bf16@1` \u2014 `sdxl-base-fp16` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base-fp16` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
+   "why": "v1 FALSE CONVERSION OFFER. v1 reached a dtype disagreement before any structural one and reported `derivable`, so the gate would have enqueued and PAID FOR a cast job whose output still could not serve `wan22.diffusers-bf16@1` — `sdxl-base-fp16` is a different model. The order of v1's checks decided this, not the bytes. v2 stamps `sdxl-base-fp16` first and finds no relation to the lane, so it refuses before anything is downloaded or billed."
   },
   {
    "contract": "z-image.diffusers-bf16@1",
    "checkpoint": "z-image",
    "v1": "derivable",
    "v2": "admit",
-   "why": "v1 REFUSED ITS OWN REFERENCE. `z-image.diffusers-bf16@1` declared BF16 for keys the shipped `z-image` tree carries at F32, so v1 offered a cast for the very checkpoint the document was derived from. v2's plain rules are reference-tolerant on islands \u2014 a key the reference itself ships at a wider compute type is accepted at either \u2014 so the reference admits, and no pointless conversion is billed."
+   "why": "v1 REFUSED ITS OWN REFERENCE. `z-image.diffusers-bf16@1` declared BF16 for keys the shipped `z-image` tree carries at F32, so v1 offered a cast for the very checkpoint the document was derived from. v2's plain rules are reference-tolerant on islands — a key the reference itself ships at a wider compute type is accepted at either — so the reference admits, and no pointless conversion is billed."
   }
  ],
  "_diff_summary": {
-  "satisfies -> refuse": 19,
-  "derivable -> refuse": 36,
   "incompatible -> derivable": 2,
+  "derivable -> refuse": 48,
+  "satisfies -> refuse": 25,
   "derivable -> admit": 1,
   "note": "Every divergence from the v1 baseline is v1 being wrong in a direction the design named: false admits, conversion jobs offered for checkpoints no conversion could make servable, refusals v2 turns into ratified derivations, and one reference checkpoint v1 refused for carrying an F32 island. The four sdxl-inpainting-bf16 rows are THE HOLE: v1's own engine SATISFIES a 9-channel conv_in against the 4-channel SDXL lane, on all 1680 tensors."
  }

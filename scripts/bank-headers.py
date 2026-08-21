@@ -21,6 +21,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -40,13 +41,19 @@ class SourceError(RuntimeError):
     """A source could not be read. Never downgraded to a warning."""
 
 
-def _auth() -> dict[str, str]:
+def _auth(url: str) -> dict[str, str]:
+    """The HF bearer, and ONLY to HF. A hub source hands out a PRESIGNED R2 URL
+    whose signature is in the query string; sending a bearer alongside it is a
+    second auth mechanism and S3 rejects the request outright."""
+
     token = os.environ.get("HF_TOKEN", "")
-    return {"Authorization": f"Bearer {token}"} if token else {}
+    if not token or not url.startswith(_HF + "/"):
+        return {}
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _get(url: str, headers: dict[str, str]) -> bytes:
-    request = urllib.request.Request(url, headers={**_UA, **_auth(), **headers})
+    request = urllib.request.Request(url, headers={**_UA, **_auth(url), **headers})
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             return response.read()
@@ -68,8 +75,32 @@ def _ranged(url: str) -> Callable[[int, int], bytes]:
     return read
 
 
+def _chunked(urls: list[str], chunk_bytes: int) -> Callable[[int, int], bytes]:
+    """A hub blob above the chunk threshold is stored as N objects, so the
+    header can straddle a boundary. Reading only chunk 0 would work for every
+    checkpoint measured so far and would be a silent time bomb on the first one
+    whose header does not fit; this walks the boundaries instead."""
+
+    def read(offset: int, length: int) -> bytes:
+        out = b""
+        while length > 0:
+            index, within = divmod(offset, chunk_bytes)
+            if index >= len(urls):
+                raise SourceError(f"chunk {index} is past the end of a {len(urls)}-chunk blob")
+            take = min(length, chunk_bytes - within)
+            data = _get(urls[index], {"Range": f"bytes={within}-{within + take - 1}"})
+            if len(data) < take:
+                raise SourceError(f"{urls[index]}: short range read ({len(data)} < {take})")
+            out += data[:take]
+            offset += take
+            length -= take
+        return out
+
+    return read
+
+
 def _size(url: str) -> int:
-    request = urllib.request.Request(url, method="HEAD", headers={**_UA, **_auth()})
+    request = urllib.request.Request(url, method="HEAD", headers={**_UA, **_auth(url)})
     with urllib.request.urlopen(request, timeout=120) as response:
         length = response.headers.get("Content-Length")
         if length is None:
@@ -116,16 +147,23 @@ def _gguf_tensors(read: Callable[[int, int], bytes], size: int) -> Iterator[dict
         }
 
 
-def _inventory(url_or_path: str) -> list[dict]:
-    if url_or_path.startswith(("http://", "https://")):
-        read, size = _ranged(url_or_path), None
+def _inventory(source: object, label: str) -> list[dict]:
+    """`source` is a URL, a local path, or a hub blob's chunk list."""
+
+    if isinstance(source, tuple):
+        urls, chunk_bytes, total = source
+        read, size = _chunked(urls, chunk_bytes), total
+    elif isinstance(source, str) and source.startswith(("http://", "https://")):
+        read, size = _ranged(source), None
+    elif isinstance(source, str):
+        read, size = _local(Path(source))
     else:
-        read, size = _local(Path(url_or_path))
-    if url_or_path.endswith(".gguf"):
+        raise SourceError(f"{label}: unreadable source {source!r}")
+    if label.endswith(".gguf"):
         if size is None:
-            size = _size(url_or_path)
+            size = _size(str(source))
         return list(_gguf_tensors(read, size))
-    return list(_safetensors(read, url_or_path))
+    return list(_safetensors(read, label))
 
 
 def _hf_tree(repo: str, rev: str, path: str) -> list[dict]:
@@ -154,7 +192,61 @@ def _read_banked(path: Path) -> str:
         return handle.read()
 
 
-def _resolve(ref: str) -> list[tuple[str, str]]:
+def _hub_resolve(ref: str) -> list[tuple[str, object]]:
+    """`hub:<org>/<repo>@<release>` — a checkpoint TENSORHUB PRODUCED.
+
+    Not every reference checkpoint has an upstream. `tensorhub/rife-4.25` is
+    written pod-side by `cozy_rife.save_artifact` out of Practical-RIFE's
+    `flownet.pkl`; the pickle is upstream, the safetensors TREE is ours and
+    exists nowhere else. Deriving its topology from the producing module's
+    state_dict would make the corpus's one hand-typed record — the exact thing
+    v2 exists to stop — so the bytes the hub serves are the source, read the
+    same way every other source is: a signed URL and a ranged header read.
+
+    `COZY_HUB` (default the standing stack) and `COZY_HUB_TOKEN`; mint one with
+    scripts/live-hub.sh's login call.
+    """
+
+    body, _, selector = ref[len("hub:"):].partition("@")
+    org, _, name = body.partition("/")
+    if not org or not name or not selector:
+        raise SourceError(f"{ref}: expected hub:<org>/<repo>@<release-or-sha256:digest>")
+    hub = os.environ.get("COZY_HUB", "http://127.0.0.1:31550").rstrip("/")
+    token = os.environ.get("COZY_HUB_TOKEN", "")
+    if not token:
+        raise SourceError(f"{ref}: COZY_HUB_TOKEN is unset — a hub source is not public")
+    # A release NAME moves; a checkpoint DIGEST does not. Pin the digest when a
+    # specific packaging is the point — the reference for a topology must not
+    # change under it the next time somebody cuts a release.
+    key = "digest" if selector.startswith("sha256:") else "release"
+    url = f"{hub}/api/v1/repos/{org}/{name}/resolve?{key}={urllib.parse.quote(selector)}"
+    request = urllib.request.Request(
+        url, headers={**_UA, "Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            resolved = json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        raise SourceError(f"{url}: HTTP {error.code}") from None
+    except OSError as error:
+        raise SourceError(f"{url}: {error}") from None
+    members: list[tuple[str, object]] = []
+    for entry in resolved.get("files", []):
+        path = str(entry.get("path", ""))
+        if not path.endswith((".safetensors", ".gguf")):
+            continue
+        if "url" in entry:
+            members.append((path, str(entry["url"])))
+            continue
+        if "chunk_urls" not in entry:
+            raise SourceError(f"{ref}: {path} resolves to neither a url nor chunks")
+        members.append((path, ([str(one) for one in entry["chunk_urls"]],
+                               int(entry["chunk_size_bytes"]), int(entry["size_bytes"]))))
+    if not members:
+        raise SourceError(f"{ref}: no .safetensors/.gguf in the resolved checkpoint")
+    return sorted(members, key=lambda member: member[0])
+
+
+def _resolve(ref: str) -> list[tuple[str, object]]:
     """A ref to [(member path, readable url-or-path)]."""
 
     if ref.startswith("local:"):
@@ -167,6 +259,8 @@ def _resolve(ref: str) -> list[tuple[str, str]]:
         return [(str(member.relative_to(root)), str(member)) for member in members]
     if ref.startswith(("http://", "https://")):
         return [(ref.rsplit("/", 1)[-1], ref)]
+    if ref.startswith("hub:"):
+        return _hub_resolve(ref)
     if not ref.startswith("hf:"):
         raise SourceError(f"unrecognised ref {ref!r}")
     repo_rev, _, path = ref[3:].partition(":")
@@ -224,8 +318,8 @@ def main() -> int:
                 if not members:
                     raise SourceError(f"filter {member_filter!r} kept no member")
                 files = []
-                for path, url in members:
-                    files.append({"path": path, "tensors": _inventory(url)})
+                for path, source in members:
+                    files.append({"path": path, "tensors": _inventory(source, path)})
             total = sum(len(entry["tensors"]) for entry in files)
         except SourceError as error:
             print(f"[{identifier}] UNREACHABLE: {error}", file=sys.stderr)

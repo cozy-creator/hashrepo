@@ -288,10 +288,20 @@ func uint32Ptr(value uint32) *uint32 { return &value }
 // members' own directories, shards flatten because they share one, the
 // dominant dtype is a count and the islands are what disagrees with it.
 //
-// A key that appears twice in one component with two different shapes is a
-// REFUSAL, not a last-writer-wins: it means the member grouping is wrong, and
-// silently keeping one of the two shapes is how a topology comes to describe a
-// checkpoint that does not exist.
+// A DIRECTORY IS NOT ALWAYS A COMPONENT. Shards flatten because their key sets
+// are DISJOINT — that, and not the shared folder, is what makes them one
+// network. A flat directory holding several networks side by side is the other
+// case and it is real: TRELLIS.2's `ckpts/` ships three different DiTs (and two
+// exact duplicates of two of them) with one identical 640-key name set and
+// `input_layer.weight` at [1536, 8] / [1536, 32] / [1536, 64]. Merging those
+// into one map would either refuse the reference checkpoint or, for the exact
+// duplicates, silently describe five members as one — and the engine would then
+// refuse the tree as RefusalDuplicate, because two members may never be
+// assigned to one component. So members are partitioned by DISJOINTNESS: a
+// member joins a component only when it adds keys nobody in that component
+// already covers, which is exactly the rule matchLayout enforces at the other
+// end. Directories that yield one component keep the directory's name; a split
+// one names each component after its first member's file stem.
 func TopologyFromHeaders(name string, version uint32, derivedFrom string, files []ArtifactFile) (*Topology, error) {
 	handle, err := ParseHandle(fmt.Sprintf("%s@%d", name, version))
 	if err != nil {
@@ -318,29 +328,29 @@ func TopologyFromHeaders(name string, version uint32, derivedFrom string, files 
 	topology := &Topology{handle: handle, derivedFrom: derivedFrom,
 		dtype: dominantDtype(dtypes), byName: map[string]*TopologyComponent{}}
 	for _, directory := range sortedMapKeys(grouped) {
-		component := TopologyComponent{
-			Name: componentName(directory), Role: roleOfDirectory(directory),
-			tensors: map[string]Shape{}, Islands: map[string]string{},
-		}
-		for _, file := range grouped[directory] {
-			for _, tensor := range file.Tensors {
-				if existing, seen := component.tensors[tensor.Name]; seen &&
-					!existing.Equal(Shape(tensor.Shape)) {
-					return nil, refuse("shard-conflict",
-						"%s: %q is %s in one member of %q and %s in another",
-						handle, tensor.Name, existing, directory, Shape(tensor.Shape))
-				}
-				component.tensors[tensor.Name] = Shape(tensor.Shape).clone()
-				if tensor.Dtype != topology.dtype {
-					component.Islands[tensor.Name] = tensor.Dtype
+		parts := partitionMembers(grouped[directory])
+		for _, part := range parts {
+			component := TopologyComponent{
+				Name: componentName(directory), Role: roleOfDirectory(directory),
+				tensors: map[string]Shape{}, Islands: map[string]string{},
+			}
+			if len(parts) > 1 {
+				component.Name = memberStem(part[0].Path)
+			}
+			for _, file := range part {
+				for _, tensor := range file.Tensors {
+					component.tensors[tensor.Name] = Shape(tensor.Shape).clone()
+					if tensor.Dtype != topology.dtype {
+						component.Islands[tensor.Name] = tensor.Dtype
+					}
 				}
 			}
+			if len(component.Islands) == 0 {
+				component.Islands = nil
+			}
+			component.keys = sortedMapKeys(component.tensors)
+			topology.components = append(topology.components, component)
 		}
-		if len(component.Islands) == 0 {
-			component.Islands = nil
-		}
-		component.keys = sortedMapKeys(component.tensors)
-		topology.components = append(topology.components, component)
 	}
 	sort.Slice(topology.components, func(i, j int) bool {
 		return topology.components[i].Name < topology.components[j].Name
@@ -348,11 +358,109 @@ func TopologyFromHeaders(name string, version uint32, derivedFrom string, files 
 	for at := range topology.components {
 		name := topology.components[at].Name
 		if _, duplicate := topology.byName[name]; duplicate {
-			return nil, refuse("component", "%s: two directories both name %q", handle, name)
+			return nil, refuse("component", "%s: two components both name %q", handle, name)
 		}
 		topology.byName[name] = &topology.components[at]
 	}
 	return topology, nil
+}
+
+// partitionMembers splits one directory's members into components.
+//
+// TWO FACTS DECIDE IT, and neither alone is enough.
+//
+// The FILE NAME says which members were shipped as one sharded artifact:
+// `model-00003-of-00026`, `layers-7`, `diffusion_pytorch_model`. Digit runs are
+// the shard index, so a stem with every run replaced by `#` is the artifact's
+// name — which is what separates TRELLIS.2's `shape_enc_next_dc_f16c32_fp16`
+// from its `shape_dec_...` twin, two disjoint networks a keys-only rule would
+// happily have fused into one component.
+//
+// DISJOINTNESS says which of those actually fit in one map. Shards never repeat
+// a key, so a whole family collapses to one component; two copies of one
+// network shipped side by side at different resolutions do repeat every key, so
+// they open separate components — which is required, because the engine may
+// never assign two members to one component (RefusalDuplicate).
+//
+// Path order makes it deterministic; the caller's file order does not.
+func partitionMembers(members []ArtifactFile) [][]ArtifactFile {
+	ordered := append([]ArtifactFile(nil), members...)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Path < ordered[j].Path })
+	var families []string
+	byFamily := map[string][]ArtifactFile{}
+	for _, member := range ordered {
+		family := shardFamily(member.Path)
+		if _, seen := byFamily[family]; !seen {
+			families = append(families, family)
+		}
+		byFamily[family] = append(byFamily[family], member)
+	}
+	var parts [][]ArtifactFile
+	for _, family := range families {
+		var covered []map[string]bool
+		first := len(parts)
+		for _, member := range byFamily[family] {
+			placed := false
+			for at := first; at < len(parts); at++ {
+				if overlaps(covered[at-first], member) {
+					continue
+				}
+				for _, tensor := range member.Tensors {
+					covered[at-first][tensor.Name] = true
+				}
+				parts[at] = append(parts[at], member)
+				placed = true
+				break
+			}
+			if placed {
+				continue
+			}
+			keys := map[string]bool{}
+			for _, tensor := range member.Tensors {
+				keys[tensor.Name] = true
+			}
+			parts = append(parts, []ArtifactFile{member})
+			covered = append(covered, keys)
+		}
+	}
+	return parts
+}
+
+func overlaps(covered map[string]bool, member ArtifactFile) bool {
+	for _, tensor := range member.Tensors {
+		if covered[tensor.Name] {
+			return true
+		}
+	}
+	return false
+}
+
+// shardFamily is a member's artifact name: its stem with every run of digits
+// replaced, so `model-00001-of-00026`, `model-00026-of-00026` and `layers-7`
+// all name the artifact they are a shard of.
+func shardFamily(memberPath string) string {
+	var out strings.Builder
+	digits := false
+	for _, character := range memberStem(memberPath) {
+		if character >= '0' && character <= '9' {
+			if !digits {
+				out.WriteByte('#')
+			}
+			digits = true
+			continue
+		}
+		digits = false
+		out.WriteRune(character)
+	}
+	return out.String()
+}
+
+// memberStem is a split component's name: the member's file name without its
+// container extension. `ckpts/ss_flow_img_dit_1_3B_64_bf16.safetensors` names
+// the component `ss_flow_img_dit_1_3B_64_bf16`.
+func memberStem(memberPath string) string {
+	base := path.Base(memberPath)
+	return strings.TrimSuffix(base, path.Ext(base))
 }
 
 func componentName(directory string) string {
