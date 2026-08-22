@@ -27,6 +27,7 @@
   "qwen-image-hub": "qwen-image.diffusers@1+plain.bf16@1",
   "qwen3.6-35b-a3b": "qwen3-6-35b-a3b.transformers@1+plain.bf16@1",
   "rife": "rife.flownet@1+plain.f32@1",
+  "sensenova-u1": "sensenova-u1.mot@1+plain.f32@1",
   "sd-turbo-hub": "sd2.diffusers@2+plain.bf16@1",
   "sd15-hub": "sd15.diffusers@2+plain.bf16@1",
   "sdxl-base": "sdxl.diffusers@2+plain.f32@1",
