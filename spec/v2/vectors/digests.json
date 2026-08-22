@@ -46,6 +46,7 @@
   "sdxl-inpainting.diffusers@2": "bca5c21401f943e88dee2c37a2bb5682904ebb8d853ab72aeb475d45d87065b8",
   "sdxl.clip-g-fused@2": "fa0132b3695e674fa449167c23df3a0eeb9740659a06f65da2363f40a7d7b182",
   "sdxl.diffusers@2": "6e315dd2f89d005a7063c5a1d90c06b93e589af8ac60c3feb9043e2be209a678",
+  "sensenova-u1.mot@1": "fa5afaa86a6ed5f406a6cc1440a3439f8008a4344befe91253277ae7d3daaa72",
   "stable-audio.diffusers@1": "35b3e4e3386acdd5c61bc1feee9f1ea8795bf3372946a19c42047f310ccc81d8",
   "trellis2.dit@1": "b2b7c5777c2f8ffa764c23a6e16da821051ded9df53af7b24984dfcc4e965f19",
   "wan22.diffusers@2": "f77117c2e5737292f0f29c096a75c0d5a9b58b8a8268d361f44074d3b1d79857",
